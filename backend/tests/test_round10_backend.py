@@ -12,6 +12,8 @@ R10-P2-2 engine._trial_quota_state 匿名配额改北京时间月界
 R10-P2-3 lifecycle._pruned_today/_mark_pruned 改北京时间口径
 R10-P2-6 auth._claim_device_tasks 认领后冲突检测：超档位上限时收敛暂停
 R10-P2-7 tasks.renew_task 并发双击去重：短窗口内重复点击不叠加 +30 天
+R10-I5 admin GET /users 加 offset 真分页（limit/max 200 配合，响应仍为裸 list）
+R10-I6 admin overview 返回 effective_tier 会员分布 + 有效付费会员数
 """
 
 import asyncio
@@ -344,6 +346,51 @@ def test_claim_device_tasks_within_limit_no_pause(db):
         select(MonitorTask).where(MonitorTask.user_id == u.id)
     ).scalars().all()
     assert all(not t.paused for t in tasks)
+
+
+# ============ R10-I5：users 真分页 ============
+def test_list_users_offset_pagination(db):
+    admin = _admin(db)
+    for i in range(5):
+        _user(db, email=f"r10page{i}@example.com")
+    # 直接调用时 Query 参数按既有测试约定显式传（q/tier 不传会拿到 Query 对象）
+    kw = dict(q=None, tier=None, admin=admin, db=db)
+    page1 = admin_router.list_users(limit=2, offset=0, **kw)
+    page2 = admin_router.list_users(limit=2, offset=2, **kw)
+    page3 = admin_router.list_users(limit=2, offset=4, **kw)
+    assert len(page1) == 2 and len(page2) == 2 and len(page3) == 2
+    ids = [r["id"] for r in page1] + [r["id"] for r in page2] + [r["id"] for r in page3]
+    assert len(set(ids)) == 6  # admin + 5 用户，不重不漏
+    # 默认 offset=0 时行为不变（向后兼容）
+    default_page = admin_router.list_users(limit=2, **kw)
+    assert [r["id"] for r in default_page] == [r["id"] for r in page1]
+
+
+# ============ R10-I6：effective_tier 统计 ============
+def test_overview_effective_tier_matches_python(db):
+    """overview 的 effective_tier_distribution 与逐用户调
+    tiers.effective_tier 的结果一致（SQL CASE 口径对齐 Python 实现）。"""
+    from app.core.tiers import effective_tier
+
+    admin = _admin(db)  # pro，无到期时间 → 有效 pro
+    _user(db, tier="pro", days_left=-1)  # 已到期 → 有效 free
+    _user(db, tier="pro", days_left=10)  # 有效 pro
+    _user(db, tier="standard", days_left=-2)  # 已到期 → 有效 free
+    _user(db, tier="standard", days_left=None)  # 无到期时间 → 保持 standard
+    _user(db, tier="free")
+    _user(db, tier="trial")
+    out = admin_router.overview(admin, db)
+    users = db.execute(select(User)).scalars().all()
+    expected: dict = {}
+    for u in users:
+        t = effective_tier(u)
+        expected[t] = expected.get(t, 0) + 1
+    assert out["effective_tier_distribution"] == expected
+    assert expected == {"pro": 2, "free": 3, "standard": 1, "trial": 1}
+    assert out["paid_members"] == 3  # 有效 standard(1) + pro(2)
+    # 原始分布保留（向后兼容）：已到期的 2 个仍在 raw 的 standard/pro 里
+    assert out["tier_distribution"]["pro"] == 3
+    assert out["tier_distribution"]["standard"] == 2
 
 
 # ============ R10-P2-7：续期双击去重 ============

@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import desc, func, or_, select, text, update
+from sqlalchemy import and_, case, desc, func, or_, select, text, update
 from sqlalchemy.orm import Session
 
 from app.api.deps import _client_ip, get_current_admin
@@ -83,6 +83,27 @@ def audit(
 def overview(admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
     total_users = db.execute(select(func.count()).select_from(User)).scalar()
     tier_rows = db.execute(select(User.tier, func.count()).group_by(User.tier)).all()
+    # R10-I6：按有效档位（effective_tier）统计会员分布——DB 原始 tier 会把
+    # "已到期但 membership_sweep 还没扫到" 的用户算进付费档，前端 KPI 会虚高。
+    # 有效口径在 SQL 里复刻 tiers.effective_tier 的判定（付费档 + 到期时间已过
+    # → 按 free 算；未知档位/NULL → free），与 Python 实现逐用户对齐
+    #（见 test_round10_backend.test_overview_effective_tier_matches_python）。
+    # 入库时间为 naive UTC，直接与 datetime.utcnow() 比较。
+    now_eff = datetime.utcnow()
+    eff_tier = case(
+        (
+            and_(
+                User.tier.in_(("standard", "pro")),
+                User.tier_expires_at.is_not(None),
+                User.tier_expires_at <= now_eff,
+            ),
+            "free",
+        ),
+        (User.tier.in_(("trial", "free", "standard", "pro")), User.tier),
+        else_="free",
+    )
+    eff_rows = db.execute(select(eff_tier, func.count()).group_by(eff_tier)).all()
+    effective_tier_distribution = {t: c for t, c in eff_rows}
     # R4-P2：today_pushes 按北京时间口径统计（此前按 UTC，用户看到的"今日"少 8 小时）。
     beijing_today = (datetime.utcnow() + timedelta(hours=8)).date()
     today_pushes = db.execute(
@@ -126,6 +147,11 @@ def overview(admin: User = Depends(get_current_admin), db: Session = Depends(get
     return {
         "total_users": total_users,
         "tier_distribution": {t: c for t, c in tier_rows},
+        # R10-I6：有效档位分布 + 有效付费会员数（standard/pro 且未到期）。
+        # tier_distribution（原始值）保留，向后兼容。
+        "effective_tier_distribution": effective_tier_distribution,
+        "paid_members": effective_tier_distribution.get("standard", 0)
+        + effective_tier_distribution.get("pro", 0),
         "today_pushes": today_pushes,
         "revenue_cny": float(revenue),
         "active_tasks": active_tasks,
@@ -161,8 +187,16 @@ def list_users(
     limit: int = Query(default=50, ge=1, le=200),
     admin: User = Depends(get_current_admin),
     db: Session = Depends(get_db),
+    # R10-I5：真分页——offset 与 limit 配合（?limit=50&offset=100）。
+    # 放最后，保证旧的位置参数调用 (q, tier, limit, admin, db) 不受影响；
+    # 响应仍是裸 list（向后兼容），前端以"返回条数 < limit"判定到末页。
+    offset: int = Query(default=0, ge=0),
 ):
-    query = select(User).order_by(desc(User.created_at)).limit(limit)
+    # 直接调用函数时（测试/内部复用），未传的 Query 参数默认值是 Query 对象
+    # 而非真实值；归一化兜底（经 FastAPI 进入时已是校验过的 int）。
+    limit_v = limit if isinstance(limit, int) else 50
+    offset_v = offset if isinstance(offset, int) else 0
+    query = select(User).order_by(desc(User.created_at)).limit(limit_v).offset(offset_v)
     if q:
         # R8-I-8：转义 LIKE 通配符 % / _（及转义符自身），防用户输入改写匹配
         # 语义（如搜 % 会匹配全部用户）；照抄 history.py R6-P2-20 口径
