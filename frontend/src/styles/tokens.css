@@ -1,0 +1,161 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ------------------------------------------------------------------
+ * 设计语言 A·零售式明亮克制
+ * Apple 官网式：大量留白 / 大圆角卡片 / 细腻层级阴影 / Apple 蓝主色
+ * ------------------------------------------------------------------ */
+
+/* Paper Mono —— 本地引入（https://paper.design/mono 下载），不走 CDN */
+@font-face {
+  font-family: 'Paper Mono';
+  src: url('../assets/fonts/PaperMonoVF.ttf') format('truetype');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  /* 颜色 */
+  --bg: #f5f5f7;
+  --card: #ffffff;
+  --ink: #1d1d1f;
+  --ink-2: #6e6e73;
+  --ink-3: #aeaeb2;
+  --line: #e5e5ea;
+  --accent: #0071e3;
+  --accent-dark: #0060c9;
+  --ok: #34c759;
+  --warn: #ff9500;
+  --bad: #ff3b30;
+  --island: #000000;
+
+  /* 圆角 */
+  --r-card: 20px;
+  --r-card-sm: 16px;
+  --r-pill: 999px;
+
+  /* 阴影（细腻层级） */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.06);
+  --shadow-card-lg: 0 2px 4px rgba(0, 0, 0, 0.05), 0 16px 40px rgba(0, 0, 0, 0.1);
+  --shadow-island: 0 4px 16px rgba(0, 0, 0, 0.35);
+
+  /* 字体栈 */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'Paper Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+}
+
+html {
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* 数字 / 价格 / 库存状态 / 倒计时 —— 统一用 Paper Mono */
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+/* 产品名不断行 */
+.product-name {
+  white-space: nowrap;
+}
+
+/* 标题居中时视觉校正（避免孤行） */
+.title-balanced {
+  text-wrap: balance;
+}
+
+/* ------------------------------------------------------------------
+ * 灵动岛胶囊动效（Dynamic Island morph）
+ * ------------------------------------------------------------------ */
+@keyframes island-breathe {
+  0%,
+  100% {
+    transform: translateX(-50%) scale(1);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  }
+  50% {
+    transform: translateX(-50%) scale(1.045);
+    box-shadow: 0 6px 28px rgba(52, 199, 89, 0.45);
+  }
+}
+
+@keyframes island-pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(0.8);
+  }
+}
+
+.island {
+  transition:
+    width 0.38s cubic-bezier(0.32, 0.72, 0, 1),
+    max-width 0.38s cubic-bezier(0.32, 0.72, 0, 1),
+    border-radius 0.38s cubic-bezier(0.32, 0.72, 0, 1);
+  will-change: width;
+}
+
+.island-hot {
+  animation: island-breathe 1.6s ease-in-out infinite;
+}
+
+.island-dot {
+  animation: island-pulse-dot 2s ease-in-out infinite;
+}
+
+.island-content {
+  transition: opacity 0.25s ease;
+}
+
+/* 内容淡入（列表卡片） */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.rise-in {
+  animation: rise-in 0.35s ease both;
+}
+
+/* 骨架屏 shimmer */
+@keyframes shimmer {
+  0% {
+    background-position: -400px 0;
+  }
+  100% {
+    background-position: 400px 0;
+  }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, #ececee 25%, #f7f7f8 37%, #ececee 63%);
+  background-size: 800px 100%;
+  animation: shimmer 1.4s ease infinite;
+}
+
+/* 底部安全区（iPhone Home Indicator） */
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
