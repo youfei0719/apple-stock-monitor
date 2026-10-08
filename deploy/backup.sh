@@ -126,7 +126,14 @@ find "$DST_DIR" -name 'app-*.db' -mtime +14 -delete
 find "$DST_DIR" -name 'env-*' -mtime +14 -delete
 echo "[$DAY] backup ok: $DST_DIR/app-$DAY.db + $DST_DIR/env-$DAY"
 # 恢复（⚠️ 先 systemctl stop 再 restore：WAL 模式下运行中 restore 有损坏风险）：
+#   DB=/opt/stockmon/backend/data/app.db   # 默认路径；改过 DATABASE_URL 时以本脚本
+#                                          # P0-26 的解析结果为准（相对路径以 /opt/stockmon/backend 为基准）
 #   systemctl stop stockmon-api stockmon-engine
-#   sqlite3 <上一步解析出的 SRC> ".restore '/opt/stockmon/backups/app-YYYY-MM-DD.db'"
+#   # R10-P1-D2：WAL 残留先收拢——崩溃后残留的 -wal 与 restore 进去的新主库帧不匹配，
+#   # 下次打开有损坏风险。checkpoint 把帧并入主库后删掉空的 -wal/-shm，确认无残留再 restore。
+#   sqlite3 "$DB" "PRAGMA wal_checkpoint(TRUNCATE);"
+#   rm -f "$DB-wal" "$DB-shm"
+#   [ -e "$DB-wal" ] || [ -e "$DB-shm" ] && { echo "ERROR: -wal/-shm 仍存在，排查后再 restore"; exit 1; }
+#   sqlite3 "$DB" ".restore '/opt/stockmon/backups/app-YYYY-MM-DD.db'"
 #   cp /opt/stockmon/backups/env-YYYY-MM-DD /opt/stockmon/.env && chmod 600 /opt/stockmon/.env
 #   systemctl restart stockmon-api stockmon-engine

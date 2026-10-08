@@ -67,7 +67,10 @@ _need_cmd() {  # _need_cmd <说明名> <命令...>
   MISSING_SW="$MISSING_SW $label"
 }
 _need_cmd git git
-python3 -c 'import venv' >/dev/null 2>&1 || MISSING_SW="$MISSING_SW python3-venv"
+# R10-P2-2：`python3 -c 'import venv'` 挡不住缺 python3-venv——Debian 系把
+# ensurepip 拆到 python3-venv 包里，venv 模块本体在基础包里就有；
+# `python3 -m venv` 实际失败在 ensurepip。所以改查 ensurepip。
+python3 -c 'import ensurepip' >/dev/null 2>&1 || MISSING_SW="$MISSING_SW python3-venv"
 _need_cmd node node
 _need_cmd npm npm
 _need_cmd nginx nginx
@@ -98,6 +101,16 @@ echo "[deploy] 前置软件检查通过（node $(node --version)）"
   echo "请先创建并填入真实值（可对照仓库 .env.example），然后重新运行本脚本。"
   exit 1
 }
+# ===== R10-P2-3：CRLF（Windows 行尾）清洗（source 之前） =====
+# env_val 会剥 \r，但 bash `set -a; source .env` 不剥：
+# `APP_ENV=prod\r` → APP_ENV="prod\r" → is_prod 为 False（systemd 侧同理污染）。
+# .env 必须保持 LF；这里检测到 CRLF 就原地清洗并告警（原文件会被改写）。
+if grep -qU $'\r' "$ENV_FILE" 2>/dev/null; then
+  echo "WARNING: $ENV_FILE 含 CRLF（Windows 行尾）：bash source 不剥 \\r，"
+  echo "  值会带上 \\r（如 APP_ENV 读成 \"prod\\r\"，is_prod 误判）。"
+  echo "  已自动清洗为 LF（原文件已原地改写）。后续请用 LF 行尾编辑 .env。"
+  sed -i 's/\r$//' "$ENV_FILE"
+fi
 # ===== R8-I-1：拦截 `export KEY=` 前缀行（fail-fast） =====
 # systemd EnvironmentFile 会静默丢弃带 export 前缀的整行（真机实测：服务里读不到）。
 # env_val 为了容错支持 export 前缀（R5-D-2），不拦截的话 deploy.sh 校验能通过、
@@ -106,6 +119,35 @@ if grep -nE '^[[:space:]]*export[[:space:]]' "$ENV_FILE" >/dev/null 2>&1; then
   echo "ERROR: $ENV_FILE 里有 export 前缀行（systemd EnvironmentFile 会静默丢弃整行，服务读不到这些变量）："
   grep -nE '^[[:space:]]*export[[:space:]]' "$ENV_FILE" | sed 's/^/  行 /'
   echo "请去掉 export 前缀（直接写 KEY=value）后重新运行。"
+  exit 1
+fi
+# ===== R10-P0-1：拦截行尾注释污染（fail-fast） =====
+# systemd EnvironmentFile 不剥行尾注释：`APP_ENV=prod  # 生产` → 服务读到
+# "prod  # 生产" → is_prod 为 False → **生产跑 dev 语义**
+# （lifespan prod 硬门槛永久失效、生产 HTTPS cookie 丢 Secure 标志）。
+# 而 env_val 会剥、bash source 会剥 → 不拦截的话 deploy.sh 校验全绿但服务
+# 实际跑的是污染值。模板曾自带行尾注释（.env.example:15/16，R10 已移到独立行），
+# 老机器的手工 .env 很可能还留着，直接拦死。
+# 精确值校验：取这两个 key 的原始行值（含 # 直接报错退出；真实值里
+# APP_SECRET_KEY 是 hex、APP_ENV 是 dev|prod，永远不会合法地含 #）。
+for _k in APP_ENV APP_SECRET_KEY; do
+  _raw=$(grep -E "^[[:space:]]*${_k}=" "$ENV_FILE" | tail -n1 | sed -E "s/^[[:space:]]*${_k}=//") || true
+  case "$_raw" in
+    *\#*)
+      echo "ERROR: $ENV_FILE 中 ${_k} 的值含 '#'（行尾注释或值里带 #），已拦截："
+      echo "  ${_k}=${_raw}"
+      echo "systemd EnvironmentFile 不剥行尾注释，值会被污染"
+      echo "（如 APP_ENV 会读成 \"prod  # ...\" → is_prod 为 False，生产跑 dev 语义）。"
+      echo "请把行尾注释移到独立行、值本身不要含 #，再重新运行。"
+      exit 1
+      ;;
+  esac
+done
+unset _k _raw
+# APP_ENV 精确值校验：模板只允许 dev|prod，其它值（手误如 production/staging）
+# 会静默跑 dev 语义，同样 fail-fast。
+if [ -n "$(env_val APP_ENV)" ] && [ "$(env_val APP_ENV)" != "dev" ] && [ "$(env_val APP_ENV)" != "prod" ]; then
+  echo "ERROR: $ENV_FILE 中 APP_ENV=\"$(env_val APP_ENV)\" 非法，只允许 dev | prod。"
   exit 1
 fi
 SECRET_VAL=$(env_val APP_SECRET_KEY)
@@ -163,6 +205,14 @@ fi
 git pull --ff-only
 
 # deploy/ 脚本目录软链接：cron 与用法里的 /opt/stockmon/deploy 始终指向仓库最新脚本
+# R10-P2-7：/opt/stockmon/deploy 若已是真实目录（非链接），`ln -sfn` 不会替换它，
+# 而是把新链接建到目录里面（/opt/stockmon/deploy/deploy），cron 仍跑旧脚本。
+# 先判断：是真实目录就直接删掉重建（该路径文档约定"始终指向仓库最新脚本"，
+# 里面只应是旧 deploy 脚本副本）。
+if [ -e /opt/stockmon/deploy ] && [ ! -L /opt/stockmon/deploy ]; then
+  echo "[deploy] /opt/stockmon/deploy 是真实目录（非软链接），清理后重建链接"
+  rm -rf /opt/stockmon/deploy
+fi
 ln -sfn "$REPO/deploy" /opt/stockmon/deploy
 
 # ===== N12(b)：sqlite3 CLI（备份/排查 sqlite 真库用；前置软件检查已覆盖） =====
@@ -230,6 +280,24 @@ if [ ! -d "/etc/letsencrypt/live/$DOMAIN" ]; then
   echo "[deploy] 证书申请完成"
 else
   echo "[deploy] 证书已存在，跳过 certbot"
+  # ===== R10-P2-1：已有证书的老机器，renewal conf 可能无 hooks =====
+  # 旧版 deploy.sh（或手工 certonly）建的证书，renewal 配置里没有 pre/post/
+  # deploy-hook：60-90 天后 certbot timer 自动续期时，standalone 拿证要独占
+  # :80，但 nginx 常驻监听 → bind 失败 → 续期失败 → 证书到期后 HTTPS 中断。
+  # 这里只做检查+提示，不自动改（certbot reconfigure 需要 certbot ≥ 2.0，
+  # 老版本不支持，报错会误伤部署流程；且这是运维手工可补的一步）。
+  RENEWAL_CONF="/etc/letsencrypt/renewal/${DOMAIN}.conf"
+  if [ -f "$RENEWAL_CONF" ] && ! grep -qiE 'pre_hook' "$RENEWAL_CONF"; then
+    echo "WARNING: $RENEWAL_CONF 里没有 pre_hook（旧版脚本/手工建的证书）。"
+    echo "  60-90 天后的自动续期会因 nginx 占住 80 端口而失败（standalone 拿证需独占 :80）。"
+    echo "  请手工回填 hooks（certbot ≥ 2.0）："
+    echo "    certbot reconfigure --cert-name $DOMAIN \\"
+    echo "      --pre-hook \"systemctl stop nginx\" \\"
+    echo "      --post-hook \"systemctl start nginx\" \\"
+    echo "      --deploy-hook \"systemctl reload-or-restart nginx\""
+    echo "  回填后可用 certbot renew --dry-run 验证续期链路。"
+  fi
+  unset RENEWAL_CONF
 fi
 systemctl enable --now nginx   # R5-D-4：保证 nginx 在跑，再 reload
 nginx -t && systemctl reload nginx
@@ -272,32 +340,46 @@ cd "$APP_DIR"
 .venv/bin/ruff check app
 echo "[deploy] 后端依赖安装 + ruff 检查通过"
 
-# ===== P0-22：加载生产 .env 再 migrate =====
-# 不加载的话 DATABASE_URL 会回退 config 默认值，migrate 会建野库
-# 安全注意（R5-D-N8）：`source .env` 会执行命令替换/变量展开，
-# .env 里不要写 $(...)、反引号；本脚本以 root 执行，恶意内容会被执行。
-[ -f "$ENV_FILE" ] || { echo "ERROR: $ENV_FILE 不存在，无法 migrate"; exit 1; }
-set -a; source "$ENV_FILE"; set +a
-.venv/bin/alembic upgrade head
-echo "[deploy] alembic migrate 完成"
-
 # --- 前台 ---
 cd "$REPO/frontend"
 npm ci --no-audit --no-fund
 npm run build
-rm -rf /opt/stockmon/frontend/dist && cp -r dist /opt/stockmon/frontend/dist
+# R10-P2-4：原子替换 —— 先 build 到 dist.new，再 rename 两步换入（亚毫秒级），
+# 避免 `rm -rf dist && cp -r` 秒级窗口期 nginx 404。
+rm -rf /opt/stockmon/frontend/dist.new
+cp -r dist /opt/stockmon/frontend/dist.new
+[ -d /opt/stockmon/frontend/dist ] && mv /opt/stockmon/frontend/dist /opt/stockmon/frontend/dist.old
+mv /opt/stockmon/frontend/dist.new /opt/stockmon/frontend/dist
+rm -rf /opt/stockmon/frontend/dist.old
 echo "[deploy] 前台构建部署完成"
 
 # --- 后台 ---
 cd "$REPO/admin"
 npm ci --no-audit --no-fund
 npm run build
-rm -rf /opt/stockmon/admin/dist && cp -r dist /opt/stockmon/admin/dist
+# R10-P2-4：同上，原子替换
+rm -rf /opt/stockmon/admin/dist.new
+cp -r dist /opt/stockmon/admin/dist.new
+[ -d /opt/stockmon/admin/dist ] && mv /opt/stockmon/admin/dist /opt/stockmon/admin/dist.old
+mv /opt/stockmon/admin/dist.new /opt/stockmon/admin/dist
+rm -rf /opt/stockmon/admin/dist.old
 echo "[deploy] 后台构建部署完成"
 
 # --- 静态文件权限（防 403 旧坑） ---
 chmod -R 755 /opt/stockmon/frontend/dist /opt/stockmon/admin/dist
 find /opt/stockmon/frontend/dist /opt/stockmon/admin/dist -type f -exec chmod 644 {} \;
+
+# ===== P0-22：加载生产 .env 再 migrate（R10-P1-D1 顺序：两次 npm 构建成功之后、systemctl restart 之前） =====
+# 旧顺序 migrate 在前端构建之前：npm 构建失败（npm ci 网络抖动常见）→ set -e 退出时
+# DB 已是新 schema、服务仍跑旧代码，migration 非向后兼容时旧服务崩溃循环。
+# 不加载的话 DATABASE_URL 会回退 config 默认值，migrate 会建野库。
+# 安全注意（R5-D-N8）：`source .env` 会执行命令替换/变量展开，
+# .env 里不要写 $(...)、反引号；本脚本以 root 执行，恶意内容会被执行。
+# R10-P2-3：CRLF 已在校验段清洗为 LF，这里 source 到的值是干净的。
+[ -f "$ENV_FILE" ] || { echo "ERROR: $ENV_FILE 不存在，无法 migrate"; exit 1; }
+set -a; source "$ENV_FILE"; set +a
+cd "$APP_DIR" && .venv/bin/alembic upgrade head
+echo "[deploy] alembic migrate 完成"
 
 # --- 重启服务 ---
 systemctl restart stockmon-api stockmon-engine

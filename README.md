@@ -13,7 +13,7 @@
 7. 六态库存状态（available/unavailable/unknown/verifying/cooling/paused）
 8. 合并请求/抖动/冷却（Apple 反限流）
 9. 查询统计
-10. 代理池/Clash 轮换
+10. 代理池轮换（只支持 `http(s)://`；Clash 本地 HTTP 代理地址填入 PROXY_POOL 即可）
 11. Bark 推送
 12. 企微/钉钉/飞书/邮件通知
 13. 可选即时/连续确认触发 + 可配重复间隔
@@ -39,8 +39,9 @@ docs/       API 契约、运维手册
 ## 本地开发
 
 ```bash
-cp .env.example .env            # 填入本地值
-cd backend && python -m venv .venv && source .venv/bin/activate
+cd backend                       # 先进 backend：config.py 按进程 CWD 读 backend/.env，
+cp ../.env.example .env          # 根目录那份不会被读到；.env 必须放在 backend/ 下
+python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 alembic upgrade head
 uvicorn app.main:app --reload   # http://localhost:8000 ，文档 /docs
