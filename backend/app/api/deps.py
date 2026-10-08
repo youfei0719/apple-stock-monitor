@@ -15,10 +15,21 @@ from app.models.models import User
 
 
 def _client_ip(request: Request) -> str:
+    """客户端真实 IP。
+
+    仅当直连来源是受信代理（TRUSTED_PROXIES）时才信任 X-Forwarded-For，
+    否则一律取直连 IP，防止客户端伪造 XFF 绕过 IP 限流。
+    默认 TRUSTED_PROXIES 为空，即默认不信任任何 XFF。
+    """
+    direct = request.client.host if request.client else "unknown"
     xff = request.headers.get("x-forwarded-for")
     if xff:
-        return xff.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+        trusted = get_settings().trusted_proxies
+        if trusted and direct in trusted:
+            first = xff.split(",")[0].strip()
+            if first:
+                return first
+    return direct
 
 
 def get_session(

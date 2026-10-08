@@ -289,7 +289,7 @@ class Engine:
     # ---- 配额 ----
     def _check_quota(self, db, task: MonitorTask) -> bool:
         if task.user_id is None:
-            return True  # 匿名体验不计配额（靠前端/设备指纹限制任务数）
+            return self._check_trial_quota(db, task)
         period = datetime.utcnow().strftime("%Y-%m")
         usage = db.execute(
             select(QuotaUsage).where(
@@ -306,6 +306,23 @@ class Engine:
             return False
         usage.push_count += 1
         db.add(usage)
+        return True
+
+    def _check_trial_quota(self, db, task: MonitorTask) -> bool:
+        """匿名体验配额：按 device_id 逐月计数，真正扣减（trial push_limit）。
+
+        匿名任务没有 user_id，无法使用 quota_usage 表，配额计数持久化在
+        system_config（key=trial_quota:<device_id>:<YYYY-MM>），随引擎走。
+        """
+        device_id = task.device_id or "unknown"
+        period = datetime.utcnow().strftime("%Y-%m")
+        key = f"trial_quota:{device_id}:{period}"
+        used = int(get_config(db, key, {}).get("used", 0))
+        limit = tier_of("trial")["push_limit"]
+        if used >= limit:
+            log.warning("trial_quota_exceeded", device_id=device_id, task_id=task.id)
+            return False
+        set_config(db, key, {"used": used + 1})
         return True
 
     # ---- 通知触发 ----
@@ -362,3 +379,19 @@ class Engine:
 
 
 engine = Engine()
+
+
+async def _amain() -> None:
+    """独立进程入口（deploy/stockmon-engine.service 的 ExecStart 目标）。
+
+    常驻运行监控引擎主循环，直到收到 SIGINT/SIGTERM 后优雅停止。
+    """
+    await engine.start()
+    try:
+        await asyncio.Event().wait()
+    finally:
+        await engine.stop()
+
+
+if __name__ == "__main__":
+    asyncio.run(_amain())

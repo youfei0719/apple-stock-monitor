@@ -7,7 +7,10 @@ Type=simple
 User=root
 WorkingDirectory=/opt/stockmon/backend
 EnvironmentFile=/opt/stockmon/.env
-ExecStart=/opt/stockmon/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8101 --workers 2
+# 注意：必须 --workers 1。lifespan 会启动监控引擎（engine.start），
+# 多 worker 会导致每个 worker 各跑一个引擎实例，造成重复轮询、重复通知和配额 double-count。
+# 如需横向扩展 API，并发能力应交给 stockmon-engine.service 独立进程，本 service 只保留单 worker。
+ExecStart=/opt/stockmon/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8101 --workers 1
 Restart=always
 RestartSec=5
 StandardOutput=append:/opt/stockmon/logs/api.out.log

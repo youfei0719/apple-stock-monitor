@@ -13,7 +13,7 @@ class RegisterIn(BaseModel):
 
 class LoginIn(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(min_length=1, max_length=128)
 
 
 class UserOut(BaseModel):
@@ -32,6 +32,7 @@ class MeOut(BaseModel):
 
 
 class PasswordChangeIn(BaseModel):
+    old_password: str = Field(min_length=1, max_length=128)
     password: str = Field(min_length=8, max_length=128)
 
 

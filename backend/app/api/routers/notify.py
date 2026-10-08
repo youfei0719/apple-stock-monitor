@@ -1,7 +1,9 @@
 """通知：链路测试、通知历史。"""
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -12,6 +14,9 @@ from app.schemas import NotifyTestIn
 from app.services.notifier import Notifier
 
 router = APIRouter(tags=["notify"])
+
+# 通知链路测试：每用户每天最多 5 次（防滥用刷外部渠道）
+NOTIFY_TEST_DAILY_LIMIT = 5
 
 
 @router.post("/notify/test")
@@ -24,6 +29,18 @@ def notify_test(
         raise APIError(400, "channel 非法", "bad_channel")
     if not data.target.strip():
         raise APIError(400, "target 不能为空", "bad_target")
+    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    used_today = db.execute(
+        select(func.count())
+        .select_from(Notification)
+        .where(
+            Notification.user_id == user.id,
+            Notification.kind == "test",
+            Notification.created_at >= today_start,
+        )
+    ).scalar()
+    if used_today >= NOTIFY_TEST_DAILY_LIMIT:
+        raise APIError(429, "通知链路测试每天最多 5 次", "test_limited")
     n = Notifier(db).test_channel(data.channel, data.target.strip(), user_id=user.id)
     return {
         "ok": n.status == "sent",

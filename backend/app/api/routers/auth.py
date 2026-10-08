@@ -11,7 +11,12 @@ from app.api.errors import APIError
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.logging import get_logger
-from app.core.ratelimit import login_locked, record_login_failure, record_login_success
+from app.core.ratelimit import (
+    check_rate_limit,
+    login_locked,
+    record_login_failure,
+    record_login_success,
+)
 from app.core.security import (
     hash_password,
     new_session_token,
@@ -50,8 +55,20 @@ def _set_session_cookie(response: Response, token: str) -> None:
     )
 
 
+def _queue_email_verification(user: User) -> None:
+    # TODO: 邮箱验证尚未实现。当前注册直接开通账号，未验证邮箱所有权，
+    # 不要静默无验证地上线：上线前必须实现验证邮件发送 → 用户点击链接 →
+    # 置 user.email_verified=True，并在 /auth/me 返回未验证状态提示。
+    # 当前为占位逻辑，仅记日志。
+    log.warning("email_verification_not_implemented", user_id=user.id, email=user.email)
+
+
 @router.post("/register", response_model=UserOut, status_code=201)
-def register(data: RegisterIn, db: Session = Depends(get_db)):
+def register(data: RegisterIn, request: Request, db: Session = Depends(get_db)):
+    ip = _client_ip(request)
+    # 注册接口独立限流：5 次/小时/IP，防批量刷号
+    if not check_rate_limit(f"register:{ip}", limit=5, window_sec=3600):
+        raise APIError(429, "注册过于频繁，请稍后再试", "rate_limited")
     exists = db.execute(select(User).where(User.email == data.email)).scalar_one_or_none()
     if exists:
         raise APIError(400, "邮箱已注册", "email_taken")
@@ -59,6 +76,7 @@ def register(data: RegisterIn, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     db.refresh(user)
+    _queue_email_verification(user)
     log.info("user_registered", user_id=user.id)
     return UserOut(id=user.id, email=user.email, tier=user.tier, totp_enabled=user.totp_enabled)
 
@@ -149,9 +167,19 @@ def patch_me(
     data: PasswordChangeIn,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
+    session_token: str | None = Cookie(default=None),
 ):
+    if not verify_password(data.old_password, user.password_hash):
+        raise APIError(400, "旧密码不正确", "bad_old_password")
     user.password_hash = hash_password(data.password)
     db.add(user)
+    # 改密后删除该用户其他 session（当前会话保留），防旧会话继续有效
+    if session_token:
+        current_digest = token_digest(session_token)
+        db.query(DbSession).filter(
+            DbSession.user_id == user.id,
+            DbSession.token_digest != current_digest,
+        ).delete(synchronize_session=False)
     db.commit()
     log.info("password_changed", user_id=user.id)
     return {"ok": True}

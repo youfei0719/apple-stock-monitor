@@ -32,7 +32,9 @@ TIERS: dict[str, dict] = {
         "name": "Pro",
         "tasks_limit": 30,
         "push_limit": 500,
-        "channels": ["email", "sms"],
+        # 注意：sms 短信通道尚未实现（send_sms 会 raise NotImplementedError），
+        # 在短信供应商接入前不向任何档位开放，避免用户配了发不出去。
+        "channels": ["email"],
         "history": True,
         "priority": True,
         "price_cny": 39,

@@ -3,14 +3,17 @@
 匿名体验：无会话时可用 X-Device-Id 创建 1 个任务（不计配额）。
 """
 
-from fastapi import APIRouter, Depends, Header
+from datetime import datetime, timedelta
+
+from fastapi import APIRouter, Depends, Header, Request
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, get_optional_user
+from app.api.deps import _client_ip, get_current_user, get_optional_user
 from app.api.errors import APIError
 from app.core.db import get_db
 from app.core.logging import get_logger
+from app.core.ratelimit import check_rate_limit
 from app.core.tiers import tier_of
 from app.models.models import MonitorTask, StockState, User
 from app.schemas import TaskBatchIn, TaskCreateIn, TaskOut, TaskPatchIn
@@ -19,6 +22,22 @@ router = APIRouter(prefix="/tasks", tags=["tasks"])
 log = get_logger("tasks")
 
 DISPLAY_STATE_ORDER = ("available", "unavailable", "unknown", "verifying", "cooling", "paused")
+
+# 匿名体验任务最长存活 24h（服务端强制，不信任客户端传的 expires_at）
+TRIAL_MAX_TTL = timedelta(hours=24)
+# 任务创建接口 IP 维度限流：20 次/小时/IP
+TASK_CREATE_LIMIT = 20
+TASK_CREATE_WINDOW_SEC = 3600
+
+
+def _clamp_expires(expires_at: datetime | None, anonymous: bool) -> datetime | None:
+    """匿名任务强制 24h 过期：为空或超过 24h 时一律 clamp 到 now+24h。"""
+    if not anonymous:
+        return expires_at
+    cap = datetime.utcnow() + TRIAL_MAX_TTL
+    if expires_at is None or expires_at > cap:
+        return cap
+    return expires_at
 
 
 def _display_state(task: MonitorTask, row: StockState | None) -> str:
@@ -107,12 +126,18 @@ def list_tasks(
 @router.post("", response_model=TaskOut, status_code=201)
 def create_task(
     data: TaskCreateIn,
+    request: Request,
     user: User | None = Depends(get_optional_user),
     db: Session = Depends(get_db),
     x_device_id: str | None = Header(default=None),
 ):
     if not user and not x_device_id:
         raise APIError(401, "匿名创建任务需要 X-Device-Id 头", "device_required")
+    ip = _client_ip(request)
+    if not check_rate_limit(
+        f"task_create:{ip}", limit=TASK_CREATE_LIMIT, window_sec=TASK_CREATE_WINDOW_SEC
+    ):
+        raise APIError(429, "创建任务过于频繁，请稍后再试", "rate_limited")
     _validate_task_in(data)
     _check_task_limit(db, user, x_device_id)
     stores = [s.model_dump() for s in data.stores]
@@ -131,7 +156,7 @@ def create_task(
         mode=data.mode,
         repeat_interval_sec=data.repeat_interval_sec,
         channels=data.channels,
-        expires_at=data.expires_at,
+        expires_at=_clamp_expires(data.expires_at, anonymous=user is None),
     )
     db.add(task)
     db.commit()
@@ -202,11 +227,14 @@ def patch_task(
     x_device_id: str | None = Header(default=None),
 ):
     task = _get_owned(task_id, user, x_device_id, db)
-    fields = ("name", "group", "paused", "expires_at", "channels", "mode", "repeat_interval_sec")
+    fields = ("name", "group", "paused", "channels", "mode", "repeat_interval_sec")
     for field in fields:
         v = getattr(data, field)
         if v is not None:
             setattr(task, field, v)
+    if data.expires_at is not None:
+        # 匿名任务同样强制 24h 上限
+        task.expires_at = _clamp_expires(data.expires_at, anonymous=user is None)
     if data.mode is not None and data.mode not in ("instant", "confirmed"):
         raise APIError(400, "mode 必须为 instant 或 confirmed", "bad_mode")
     db.add(task)

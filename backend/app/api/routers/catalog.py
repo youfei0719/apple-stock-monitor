@@ -6,17 +6,22 @@
 
 import time
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlalchemy.orm import Session
 
+from app.api.deps import get_optional_user
 from app.api.errors import APIError
-from app.core.db import get_db
+from app.core.db import SessionLocal, get_db
 from app.core.logging import get_logger
+from app.models.models import User
 from app.services.apple_client import AppleClient, AppleError, AppleRateLimitError
 from app.services.engine import get_config, set_config
 
 router = APIRouter(prefix="/catalog", tags=["catalog"])
 log = get_logger("catalog")
+
+# 后台刷新互斥标记（进程内；防管理员连点导致并发刷新打爆 Apple 接口）
+_refresh_running = False
 
 STORE_CATALOG_KEY = "store_catalog"
 PRODUCT_CATALOG_KEY = "products_catalog"
@@ -101,16 +106,15 @@ def _seed_if_empty(db: Session) -> None:
         set_config(db, PRODUCT_CATALOG_KEY, {"products": SEED_PRODUCTS})
 
 
-@router.get("/stores")
-def list_stores(
-    refresh: int = Query(default=0, ge=0, le=1),
-    db: Session = Depends(get_db),
-):
-    _seed_if_empty(db)
-    if refresh == 1:
-        last = get_config(db, REFRESH_AT_KEY, {}).get("at", 0)
-        if time.time() - last < REFRESH_COOLDOWN_SEC:
-            raise APIError(429, "门店目录刷新限流：每小时 1 次", "refresh_limited")
+def _do_refresh_stores() -> None:
+    """后台刷新任务：独立 DB 会话，不占用请求 worker。"""
+    global _refresh_running
+    if _refresh_running:
+        log.warning("catalog_refresh_already_running")
+        return
+    _refresh_running = True
+    db = SessionLocal()
+    try:
         client = AppleClient()
         anchors = get_config(db, CITY_ANCHORS_KEY, {}).get("anchors", SEED_CITY_ANCHORS)
         merged: dict[str, dict] = {}
@@ -127,7 +131,7 @@ def list_stores(
                         }
             except AppleRateLimitError as e:
                 log.warning("catalog_refresh_rate_limited", anchor=anchor, error=str(e))
-                raise APIError(429, "Apple 接口限流，稍后再试", "apple_rate_limited") from e
+                return  # 被 Apple 限流：本轮放弃，下次再刷
             except AppleError as e:
                 errors += 1
                 log.warning("catalog_refresh_anchor_failed", anchor=anchor, error=str(e))
@@ -139,6 +143,38 @@ def list_stores(
             )
             set_config(db, REFRESH_AT_KEY, {"at": time.time()})
             log.info("catalog_refreshed", stores=len(merged), anchor_errors=errors)
+        else:
+            log.warning("catalog_refresh_empty", anchor_errors=errors)
+    except Exception as e:
+        log.error("catalog_refresh_failed", error=str(e))
+    finally:
+        db.close()
+        _refresh_running = False
+
+
+@router.get("/stores")
+def list_stores(
+    background_tasks: BackgroundTasks,
+    refresh: int = Query(default=0, ge=0, le=1),
+    db: Session = Depends(get_db),
+    user: User | None = Depends(get_optional_user),
+):
+    _seed_if_empty(db)
+    if refresh == 1:
+        # 刷新是在线打 Apple 接口的重操作：仅管理员可触发，且走后台异步任务
+        if not user or not user.is_admin:
+            raise APIError(403, "刷新门店目录需要管理员权限", "forbidden")
+        last = get_config(db, REFRESH_AT_KEY, {}).get("at", 0)
+        if time.time() - last < REFRESH_COOLDOWN_SEC:
+            raise APIError(429, "门店目录刷新限流：每小时 1 次", "refresh_limited")
+        current = get_config(db, STORE_CATALOG_KEY, {}).get("stores", [])
+        if _refresh_running:
+            return {"refreshing": True, "stores": current}
+        # 先占位写刷新时间，防并发重复触发
+        set_config(db, REFRESH_AT_KEY, {"at": time.time()})
+        background_tasks.add_task(_do_refresh_stores)
+        log.info("catalog_refresh_enqueued", admin_id=user.id)
+        return {"refreshing": True, "stores": current}
     stores = get_config(db, STORE_CATALOG_KEY, {}).get("stores", [])
     return stores
 

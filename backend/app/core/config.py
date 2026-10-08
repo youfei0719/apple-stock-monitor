@@ -43,10 +43,14 @@ class Settings(BaseSettings):
     # --- 爱发电 ---
     AFDIAN_USER_ID: str = ""
     AFDIAN_TOKEN: str = ""
-    AFDIAN_PLAN_STANDARD: str = "afdian_plan_id_standard"
-    AFDIAN_PLAN_PRO: str = "afdian_plan_id_pro"
+    # 占位默认值已移除：prod 启动时若为空直接拒绝启动（见 main.lifespan）
+    AFDIAN_PLAN_STANDARD: str = ""
+    AFDIAN_PLAN_PRO: str = ""
 
     # --- 安全 ---
+    # 受信代理 IP（逗号分隔）。X-Forwarded-For 仅当直连来源是受信代理时才被信任；
+    # 为空时一律只取直连 IP，防止客户端伪造 XFF 绕过 IP 限流。
+    TRUSTED_PROXIES: str = ""
     SESSION_EXPIRE_HOURS: int = 168
     ADMIN_TOTP_REQUIRED: int = 1
     LOGIN_FAIL_LOCK: int = 5
@@ -82,6 +86,10 @@ class Settings(BaseSettings):
             "standard": self.TIER_INTERVAL_STANDARD,
             "pro": self.TIER_INTERVAL_PRO,
         }
+
+    @property
+    def trusted_proxies(self) -> list[str]:
+        return [p.strip() for p in self.TRUSTED_PROXIES.split(",") if p.strip()]
 
     @property
     def is_prod(self) -> bool:

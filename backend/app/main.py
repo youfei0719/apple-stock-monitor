@@ -4,6 +4,7 @@ import hashlib
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
@@ -38,6 +39,17 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("app_startup", env=settings.APP_ENV)
+    # prod 硬门槛：支付验签为 fail-closed，无 token / 无 plan_id 时拒绝启动，
+    # 防止回调接口在未配置签名的情况下对外放行。
+    if settings.is_prod:
+        required = {
+            "AFDIAN_TOKEN": settings.AFDIAN_TOKEN,
+            "AFDIAN_PLAN_STANDARD": settings.AFDIAN_PLAN_STANDARD,
+            "AFDIAN_PLAN_PRO": settings.AFDIAN_PLAN_PRO,
+        }
+        missing = [k for k, v in required.items() if not (v or "").strip()]
+        if missing:
+            raise RuntimeError(f"prod 启动拒绝：缺少必需配置 {missing}")
     _bootstrap_admin()
     await engine.start()
     yield
@@ -73,6 +85,15 @@ def _bootstrap_admin():
 
 
 app = FastAPI(title="Apple Stock Monitor", version=settings.APP_VERSION, lifespan=lifespan)
+
+# CORS：只允许前端域名，禁止 "*"
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[settings.FRONTEND_URL],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.exception_handler(APIError)
