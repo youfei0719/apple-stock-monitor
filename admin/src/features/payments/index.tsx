@@ -34,7 +34,10 @@ import { AdminProfile } from '@/components/admin-profile'
 import { ThemeSwitch } from '@/components/theme-switch'
 import {
   claimPayment,
+  closePayment,
+  fmtLocalTime,
   getPayments,
+  refundPayment,
   type PaymentRecord,
   type Tier,
   TIER_LABEL,
@@ -47,11 +50,16 @@ const STATUS_LABEL: Record<string, string> = {
   refunded: '已退款',
   resolved: '已处理',
   cancelled: '已取消',
+  unknown_plan: '未知档位',
 }
 
-function fmtTime(iso: string | null): string {
-  if (!iso) return '—'
-  return iso.slice(0, 16).replace('T', ' ')
+/** 可标记退款的状态（后端仅拦截已退款；cancelled/resolved 为终态不重复操作） */
+function canRefund(r: PaymentRecord): boolean {
+  return r.status === 'paid' || r.status === 'amount_mismatch' || r.status === 'unknown_plan'
+}
+/** 可关闭（不处理）的状态（后端仅允许 amount_mismatch/paid → resolved） */
+function canClose(r: PaymentRecord): boolean {
+  return r.status === 'amount_mismatch' || r.status === 'paid'
 }
 
 function fmtTierChange(r: PaymentRecord): string {
@@ -67,6 +75,10 @@ export function Payments() {
   const [claiming, setClaiming] = useState<PaymentRecord | null>(null)
   const [claimUserId, setClaimUserId] = useState('')
   const [claimBusy, setClaimBusy] = useState(false)
+  // F1/F2：退款 / 关闭（不处理）二次确认
+  const [refunding, setRefunding] = useState<PaymentRecord | null>(null)
+  const [closing, setClosing] = useState<PaymentRecord | null>(null)
+  const [actionBusy, setActionBusy] = useState(false)
 
   const load = async (unclaimed: boolean) => {
     setRows(null)
@@ -102,6 +114,40 @@ export function Payments() {
       toast.error(e instanceof Error ? e.message : '认领失败')
     } finally {
       setClaimBusy(false)
+    }
+  }
+
+  /** F1：标记退款——后端联动把用户降回 free、revenue 只计 paid 自动排除、记审计 */
+  async function confirmRefund() {
+    if (!refunding) return
+    setActionBusy(true)
+    try {
+      const out = await refundPayment(refunding.id)
+      toast.success(
+        `订单 ${refunding.order_id} 已标记退款${out.user ? `（用户 #${out.user.user_id} 降回免费版）` : ''}`,
+      )
+      setRefunding(null)
+      await load(unclaimedOnly)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '标记退款失败')
+    } finally {
+      setActionBusy(false)
+    }
+  }
+
+  /** F2：关闭（不处理）——status 置 resolved，从待处理队列移除，不绑定用户、不开通档位 */
+  async function confirmClose() {
+    if (!closing) return
+    setActionBusy(true)
+    try {
+      await closePayment(closing.id)
+      toast.success(`订单 ${closing.order_id} 已关闭（不处理）`)
+      setClosing(null)
+      await load(unclaimedOnly)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '关闭订单失败')
+    } finally {
+      setActionBusy(false)
     }
   }
 
@@ -160,7 +206,7 @@ export function Payments() {
                     <TableHead>套餐</TableHead>
                     <TableHead>等级变化</TableHead>
                     <TableHead>状态</TableHead>
-                    <TableHead>支付时间</TableHead>
+                    <TableHead>支付时间（本地时间）</TableHead>
                     <TableHead className='text-right'>操作</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -204,22 +250,43 @@ export function Payments() {
                           </Badge>
                         </TableCell>
                         <TableCell className='text-muted-foreground'>
-                          {fmtTime(r.created_at)}
+                          {fmtLocalTime(r.created_at)}
                         </TableCell>
                         <TableCell className='text-right'>
-                          {r.user_id === null ? (
-                            <button
-                              onClick={() => {
-                                setClaiming(r)
-                                setClaimUserId('')
-                              }}
-                              className='rounded-2xl bg-[#0071e3] px-3.5 py-1.5 text-[13px] font-medium text-white hover:bg-[#0071e3]/90'
-                            >
-                              认领
-                            </button>
-                          ) : (
-                            <span className='text-muted-foreground'>—</span>
-                          )}
+                          <div className='flex justify-end gap-1.5'>
+                            {r.user_id === null && (
+                              <button
+                                onClick={() => {
+                                  setClaiming(r)
+                                  setClaimUserId('')
+                                }}
+                                className='rounded-2xl bg-[#0071e3] px-3.5 py-1.5 text-[13px] font-medium text-white hover:bg-[#0071e3]/90'
+                              >
+                                认领
+                              </button>
+                            )}
+                            {canRefund(r) && (
+                              <button
+                                onClick={() => setRefunding(r)}
+                                className='rounded-2xl bg-[#ff9f0a]/10 px-3.5 py-1.5 text-[13px] font-medium text-[#b26a00] hover:bg-[#ff9f0a]/20'
+                                title='标记退款：联动把用户降回免费版，后端记审计'
+                              >
+                                标记退款
+                              </button>
+                            )}
+                            {canClose(r) && (
+                              <button
+                                onClick={() => setClosing(r)}
+                                className='rounded-2xl bg-muted px-3.5 py-1.5 text-[13px] font-medium text-muted-foreground hover:text-foreground'
+                                title='关闭（不处理）：状态置"已处理"，从待处理队列移除，不开通档位'
+                              >
+                                关闭（不处理）
+                              </button>
+                            )}
+                            {r.user_id !== null && !canRefund(r) && !canClose(r) && (
+                              <span className='text-muted-foreground'>—</span>
+                            )}
+                          </div>
                         </TableCell>
                       </TableRow>
                     )
@@ -268,6 +335,61 @@ export function Payments() {
               disabled={claimBusy}
             >
               {claimBusy ? '处理中…' : '确认认领'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* F1：标记退款二次确认 */}
+      <AlertDialog open={refunding !== null} onOpenChange={(o) => !o && setRefunding(null)}>
+        <AlertDialogContent className='rounded-3xl'>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认标记退款？</AlertDialogTitle>
+            <AlertDialogDescription>
+              将订单 <span className='font-mono text-foreground'>{refunding?.order_id}</span>
+              （¥{refunding?.amount_cny}，{refunding && (STATUS_LABEL[refunding.status] ?? refunding.status)}）
+              标记为退款。该操作会：
+              <br />
+              1. 把订单状态置为「已退款」（收入统计只计已到账，自动排除）；
+              <br />
+              2. 把绑定的用户降回免费版并清空到期时间；
+              <br />
+              3. 写入管理员审计日志。退款本身需在爱发电后台操作。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className='rounded-2xl'>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className='rounded-2xl bg-[#ff9f0a] hover:bg-[#ff9f0a]/90 text-white'
+              onClick={confirmRefund}
+              disabled={actionBusy}
+            >
+              {actionBusy ? '处理中…' : '确认标记退款'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* F2：关闭（不处理）二次确认 */}
+      <AlertDialog open={closing !== null} onOpenChange={(o) => !o && setClosing(null)}>
+        <AlertDialogContent className='rounded-3xl'>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认关闭该订单？</AlertDialogTitle>
+            <AlertDialogDescription>
+              将订单 <span className='font-mono text-foreground'>{closing?.order_id}</span>
+              （¥{closing?.amount_cny}，{closing && (STATUS_LABEL[closing.status] ?? closing.status)}）
+              关闭（不处理）。状态将置为「已处理」，从待处理队列移除，不绑定用户、不开通任何档位。
+              该操作会写入管理员审计日志。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className='rounded-2xl'>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className='rounded-2xl bg-[#1d1d1f] hover:bg-[#1d1d1f]/90 text-white'
+              onClick={confirmClose}
+              disabled={actionBusy}
+            >
+              {actionBusy ? '处理中…' : '确认关闭'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { api, type ChannelHealth, type Payment, type Plan, type Quota } from '../lib/api';
 import { useApp } from '../components/App';
 import { NotificationHistory } from '../components/NotifyChannels';
@@ -29,6 +29,24 @@ const PAID_TIER_LABEL: Record<string, string> = {
   pro: 'Pro版',
   trial: '体验版',
   free: '免费版',
+};
+
+/** 付费记录状态中文映射（后端 Payment.status：paid/amount_mismatch/refunded/cancelled/resolved，未来可能有 unknown_plan） */
+const PAY_STATUS_LABEL: Record<string, string> = {
+  paid: '已到账',
+  amount_mismatch: '金额异常',
+  refunded: '已退款',
+  resolved: '已处理',
+  cancelled: '已取消',
+  unknown_plan: '未知档位（待处理）',
+};
+const PAY_STATUS_CLS: Record<string, string> = {
+  paid: 'bg-[#e8f7ec] text-[#1a7f37]',
+  amount_mismatch: 'bg-[#fdecea] text-[#b3261e]',
+  refunded: 'bg-[#e8f1fd] text-accent',
+  resolved: 'bg-[#f2f2f4] text-sub',
+  cancelled: 'bg-[#f2f2f4] text-faint',
+  unknown_plan: 'bg-[#fff7e8] text-[#b25e09]',
 };
 
 /** 按后端 GET /plans 实际字段（tier/name/price_cny/tasks_limit/push_limit/channels/history/priority/refresh_interval_sec）渲染 */
@@ -210,7 +228,19 @@ export default function Me() {
       <div>
         <PageHeader title="我的" />
         <div className="px-4 pb-6">
-          <ErrorState message="未登录或会话已失效，请重新登录" onRetry={() => navigate('/login')} />
+          {/* F4：匿名体验中进入"我的"，引导注册/登录而非报错 */}
+          <Card className="p-8 text-center rise-in">
+            <p className="text-ink font-medium">你正在匿名体验</p>
+            <p className="mt-2 text-sm text-sub">
+              注册 / 登录后可管理会员档位、查看配额与付费记录，匿名创建的任务会自动迁移过来。
+            </p>
+            <Link
+              to="/login"
+              className="mt-5 inline-block px-6 py-2.5 rounded-pill bg-accent text-white text-sm font-medium active:scale-95 transition"
+            >
+              去注册 / 登录
+            </Link>
+          </Card>
         </div>
       </div>
     );
@@ -341,6 +371,13 @@ export default function Me() {
                     {/* N20：按 tier_to 映射中文档位，不显示裸英文 plan */}
                     <p className="text-sm font-medium">
                       {p.tier_to ? PAID_TIER_LABEL[p.tier_to] ?? p.tier_to : p.plan || '—'}
+                      <span
+                        className={`ml-2 px-2 py-0.5 rounded-pill text-[11px] font-medium ${
+                          PAY_STATUS_CLS[p.status] ?? 'bg-[#f2f2f4] text-sub'
+                        }`}
+                      >
+                        {PAY_STATUS_LABEL[p.status] ?? p.status}
+                      </span>
                     </p>
                     <p className="mono text-[11px] text-faint">
                       {new Date(p.created_at).toLocaleDateString('zh-CN')}

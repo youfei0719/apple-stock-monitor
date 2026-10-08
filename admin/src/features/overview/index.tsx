@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from '@tanstack/react-router'
 import { Users, Send, Wallet, Activity } from 'lucide-react'
 import {
   Card,
@@ -84,6 +85,10 @@ export function Overview() {
   const paid = Object.entries(dist)
     .filter(([t]) => !NON_PAID_TIERS.has(t))
     .reduce((s, [, c]) => s + c, 0)
+  // 待处理支付 KPI（P2）：后端 /api/admin/overview 返回；可选链防御旧后端
+  const pendingUnclaimed = data?.pending_payments?.unclaimed ?? 0
+  const pendingMismatch = data?.pending_payments?.amount_mismatch ?? 0
+  const pendingTotal = pendingUnclaimed + pendingMismatch
 
   return (
     <>
@@ -127,11 +132,36 @@ export function Overview() {
           <KpiCard
             title='累计收入'
             value={data ? `¥${data.revenue_cny.toLocaleString()}` : '—'}
-            sub='爱发电到账（税后口径）'
+            sub='爱发电到账（仅计 paid 状态，不含退款/异常）'
             icon={Wallet}
             loading={loading}
           />
         </div>
+
+        {/* 待处理支付 KPI（P2）：unclaimed=待认领坏账，amount_mismatch=金额异常；为 0 时不打扰 */}
+        {!loading && pendingTotal > 0 && (
+          <Card className='mt-4 rounded-3xl border-[#ff9f0a]/30'>
+            <CardContent className='flex items-center justify-between px-5 py-4'>
+              <div className='flex items-center gap-3'>
+                <span className='flex h-9 w-9 items-center justify-center rounded-2xl bg-[#ff9f0a]/10 text-[#b26a00]'>
+                  <Wallet className='h-4.5 w-4.5' />
+                </span>
+                <div>
+                  <p className='text-sm font-medium'>待处理支付 {pendingTotal} 笔</p>
+                  <p className='text-xs text-muted-foreground'>
+                    待认领 {pendingUnclaimed} · 金额异常 {pendingMismatch}
+                  </p>
+                </div>
+              </div>
+              <Link
+                to='/payments'
+                className='rounded-2xl bg-[#ff9f0a]/10 px-4 py-2 text-sm font-medium text-[#b26a00] hover:bg-[#ff9f0a]/20'
+              >
+                去处理 →
+              </Link>
+            </CardContent>
+          </Card>
+        )}
 
         <Card className='mt-4 rounded-3xl'>
           <CardHeader>

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, ApiError, type PollStats, type RankingItem, type ReleaseRecord, type StockEvent } from '../lib/api';
+import { useApp } from '../components/App';
 import StockStateBadge from '../components/StockStateBadge';
 import { Card, EmptyState, ErrorState, LoadingState, PageHeader } from '../components/ui';
 
@@ -22,7 +23,82 @@ function fmt(iso: string): string {
   });
 }
 
+/**
+ * 数据分析摘要（F5 修复）。
+ * 后端 GET /analytics/overview 契约：{days, total_events, by_part: [[part_number, count]...],
+ * by_day: [[day, count]...]}。by_part/by_day 是 [键, 次数] 二元组数组——必须按榜单渲染，
+ * 禁止 String() 成逗号文本，也禁止把英文 key（by_part/by_day）裸奔展示。
+ */
+function BarList({ rows, unit }: { rows: [string, number][]; unit: string }) {
+  const max = Math.max(...rows.map(([, n]) => n), 1);
+  return (
+    <div className="space-y-2.5">
+      {rows.map(([label, n], i) => (
+        <div key={label}>
+          <div className="flex items-center justify-between text-sm mb-1">
+            <span className="min-w-0">
+              <span className="mono text-faint mr-2">{String(i + 1).padStart(2, '0')}</span>
+              <span className="mono truncate">{label}</span>
+            </span>
+            <span className="mono shrink-0">
+              {n}
+              <span className="text-faint text-xs"> {unit}</span>
+            </span>
+          </div>
+          <div className="h-2 rounded-full bg-bg overflow-hidden">
+            <div
+              className="h-full rounded-full bg-accent transition-all"
+              style={{ width: `${(n / max) * 100}%` }}
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function toPairs(v: unknown): [string, number][] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter(
+      (p): p is [string, number] =>
+        Array.isArray(p) && p.length >= 2 && typeof p[0] === 'string' && typeof p[1] === 'number',
+    )
+    .map(([k, n]) => [k, n]);
+}
+
+function OverviewSummary({ overview }: { overview: Record<string, unknown> }) {
+  const days = typeof overview.days === 'number' ? overview.days : 7;
+  const total = typeof overview.total_events === 'number' ? overview.total_events : 0;
+  const byPart = toPairs(overview.by_part);
+  const byDay = toPairs(overview.by_day);
+  return (
+    <Card className="p-4 rise-in">
+      <p className="text-sm font-medium mb-1">数据分析摘要 · 近 {days} 天</p>
+      <p className="text-xs text-faint mb-3">
+        共 <span className="mono text-ink font-semibold">{total}</span> 次到货通知（仅统计你自己的）
+      </p>
+      {byPart.length > 0 && (
+        <div className="mb-4">
+          <p className="text-[13px] font-medium text-sub mb-2">机型放货榜</p>
+          <BarList rows={byPart} unit="次放货" />
+        </div>
+      )}
+      {byDay.length > 0 && (
+        <div>
+          <p className="text-[13px] font-medium text-sub mb-2">每日放货分布</p>
+          <BarList rows={byDay} unit="次放货" />
+        </div>
+      )}
+      {byPart.length === 0 && byDay.length === 0 && (
+        <p className="text-sm text-faint">近 {days} 天还没有放货记录</p>
+      )}
+    </Card>
+  );
+}
+
 export default function History() {
+  const { me } = useApp();
   const [tab, setTab] = useState<TabId>('events');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -67,6 +143,22 @@ export default function History() {
   }, [tab]);
 
   const renderBody = () => {
+    // F4：历史接口无匿名链路（后端要求登录），匿名用户引导注册/登录
+    if (me === null)
+      return (
+        <Card className="p-8 text-center rise-in">
+          <p className="text-ink font-medium">历史数据需要登录后查看</p>
+          <p className="mt-2 text-sm text-sub">
+            注册 / 登录后可查看活动日志、放货记录与数据分析，匿名创建的任务会自动迁移过来。
+          </p>
+          <Link
+            to="/login"
+            className="mt-5 inline-block px-6 py-2.5 rounded-pill bg-accent text-white text-sm font-medium active:scale-95 transition"
+          >
+            去注册 / 登录
+          </Link>
+        </Card>
+      );
     if (error) return <ErrorState message={error} onRetry={() => load(tab)} />;
     if (loading) return <LoadingState rows={4} />;
 
@@ -206,44 +298,7 @@ export default function History() {
           </div>
         </Card>
         {overview && Object.keys(overview).length > 0 && (
-          <Card className="p-4 rise-in">
-            <p className="text-sm font-medium mb-3">数据分析摘要</p>
-            <div className="grid grid-cols-2 gap-3">
-              {Object.entries(overview).map(([key, val]) => {
-                const num = typeof val === 'number' ? val : null;
-                const display =
-                  num !== null ? num.toLocaleString('zh-CN') : String(val ?? '—');
-                return (
-                  <div key={key} className="rounded-card-sm bg-bg p-3">
-                    <p className="text-xs text-sub truncate" title={key}>
-                      {key}
-                    </p>
-                    <p className="mt-1 text-lg font-semibold mono">{display}</p>
-                    {num !== null && num > 0 && (
-                      <div className="mt-2 h-1.5 rounded-full bg-white overflow-hidden">
-                        <div
-                          className="h-full rounded-full bg-accent"
-                          style={{
-                            width: `${Math.min(
-                              100,
-                              (num /
-                                Math.max(
-                                  1,
-                                  ...Object.values(overview).filter(
-                                    (v): v is number => typeof v === 'number',
-                                  ),
-                                )) *
-                                100,
-                            )}%`,
-                          }}
-                        />
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </Card>
+          <OverviewSummary overview={overview} />
         )}
       </div>
     );
