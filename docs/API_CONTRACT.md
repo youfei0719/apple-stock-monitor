@@ -101,7 +101,7 @@ state ∈ `available | unavailable | unknown | verifying | cooling | paused`
 
 ## 补充接口（round4 补齐：认证/任务详情/续期）
 
-- `POST /api/auth/resend-code` `{email}` → **永远返回 200** `{ok:true}`（防用户枚举：无论邮箱是否注册都不透露，这是代码与契约的一致行为）。
+- `POST /api/auth/resend-code` `{email}` → 返回 200 `{ok:true}`（防用户枚举：无论邮箱是否注册都不透露；SMTP 发送失败时返回 500 `email_failed`，见下）。
   - 限流：同一邮箱每小时最多 3 次 → 429 `{code:"rate_limited"}`。
   - 邮箱未注册 → 200 `{ok:true}`（不发信，不透露是否注册）；已验证过 → 200 `{ok:true, already:true}`（不再发信）；邮件发送失败 → 500 `{code:"email_failed"}`。
   - 典型用途：注册后没收到验证码、验证码过期（过期文案见 R4-P1-D6，引导用户点"重新发送"而非重新注册）。

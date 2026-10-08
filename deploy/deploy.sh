@@ -193,6 +193,19 @@ echo "[deploy] systemd units 已安装并 enable"
 #   所以首次部署用 `--standalone` 拿证（需先停 nginx 释放 80 端口），拿证后再 -t/reload。
 #   R6-D7：certonly 追加 --deploy-hook（写入 renewal 配置，60-90 天后的自动续期
 #   才会 reload nginx，否则证书续了但 nginx 仍用旧证书，HTTPS 中断）。
+#   R9-D6：renewal 配置记录 authenticator=standalone；certbot timer 续期时
+#   standalone 必须独占 :80，但 nginx 常驻监听 :80 → bind 失败 → 续期失败 →
+#   证书到期后 HTTPS 中断（--deploy-hook 只在续期成功后触发，救不了失败的续期）。
+#   修复（方案 a）：certonly 追加 --pre-hook "systemctl stop nginx"
+#   --post-hook "systemctl start nginx"（同样写入 renewal 配置，续期时先停
+#   nginx 拿证再启动）。
+#   R9-D6-实测：certbot hook 执行顺序是 pre-hook → deploy-hook → post-hook，
+#   即 deploy-hook 运行时 nginx 还处于 pre-hook 停掉的状态；实测
+#   `systemctl reload` 对 inactive 的 unit 直接报错退出（"not active, cannot
+#   reload"，exit=1），会导致每次续期都被 certbot 报告为失败。所以 deploy-hook
+#   用 `reload-or-restart`：nginx 在跑就 reload（用上新证书），被停了就 start。
+#   注意：续期时 nginx 会短暂重启（数秒不可用），运维手册已按此诚实描述，
+#   不再写"自动续期无需人工"。
 #   待联调：certbot 与自带 SSL stanza 的 conf 在真机首次部署可能交互异常，
 #   首次部署请人工盯一次 certbot 输出（见运维手册"首次部署完整步骤"）。
 SSL_EMAIL_VAL=$(env_val SSL_EMAIL)
@@ -210,7 +223,8 @@ if [ ! -d "/etc/letsencrypt/live/$DOMAIN" ]; then
   trap 'systemctl start nginx || true' ERR
   certbot certonly --non-interactive --agree-tos -m "$SSL_EMAIL_VAL" \
     --standalone -d "$DOMAIN" \
-    --deploy-hook "systemctl reload nginx"
+    --pre-hook "systemctl stop nginx" --post-hook "systemctl start nginx" \
+    --deploy-hook "systemctl reload-or-restart nginx"
   trap - ERR
   systemctl start nginx
   echo "[deploy] 证书申请完成"
