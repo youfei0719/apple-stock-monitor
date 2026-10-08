@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import App from './components/App';
+import ErrorBoundary from './components/ErrorBoundary';
 import Home from './pages/Home';
 import TaskDetail from './pages/TaskDetail';
 import AddMonitor from './pages/AddMonitor';
@@ -16,7 +17,14 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <BrowserRouter>
       <Routes>
-        <Route element={<App />}>
+        {/* R6-D6：全站 ErrorBoundary——渲染崩溃兜底出错页+重试按钮 */}
+        <Route
+          element={
+            <ErrorBoundary>
+              <App />
+            </ErrorBoundary>
+          }
+        >
           <Route path="/login" element={<Login />} />
           <Route path="/verify" element={<VerifyEmail />} />
           <Route path="/" element={<Home />} />

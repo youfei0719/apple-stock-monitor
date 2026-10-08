@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, ApiError, type PollStats, type RankingItem, type ReleaseRecord, type StockEvent } from '../lib/api';
 import { useApp } from '../components/App';
+import { CHANNEL_LABEL } from '../components/NotifyChannels';
 import StockStateBadge from '../components/StockStateBadge';
 import { Card, EmptyState, ErrorState, LoadingState, PageHeader } from '../components/ui';
 
@@ -177,7 +178,8 @@ export default function History() {
                   <p className="mt-0.5 text-xs text-faint">
                     <span className="mono">{e.part_number}</span>
                     {' · '}
-                    {e.channel}
+                    {/* R6-I10：复用 NotifyChannels 的 CHANNEL_LABEL 中文映射，不裸显英文 key */}
+                    {CHANNEL_LABEL[e.channel] ?? e.channel}
                   </p>
                 </div>
                 <StockStateBadge state="available" size="sm" />

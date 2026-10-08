@@ -18,7 +18,8 @@ const PLATFORMS = [
   { id: 'feishu', label: '飞书' },
 ];
 
-const CHANNEL_LABEL: Record<string, string> = {
+/** R6-I10：History 活动日志复用该中文映射，不再裸显英文 channel key */
+export const CHANNEL_LABEL: Record<string, string> = {
   bark: 'Bark',
   email: '邮件',
   wecom: '企业微信',
@@ -43,9 +44,11 @@ function useTest() {
     setBusy(key);
     try {
       const res = await api.notifyTest(channel, target.trim());
+      const ok = res.ok !== false;
+      // R6-U4：测试失败时优先展示后端返回的 error 原因（而不是吞掉只看 message）
       setResults((r) => ({
         ...r,
-        [key]: { ok: res.ok !== false, msg: res.message || (res.ok !== false ? '测试消息已发送' : '发送失败') },
+        [key]: { ok, msg: res.error || res.message || (ok ? '测试消息已发送' : '发送失败') },
       }));
     } catch (e) {
       setResults((r) => ({ ...r, [key]: { ok: false, msg: e instanceof Error ? e.message : '测试失败' } }));

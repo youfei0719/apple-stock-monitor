@@ -12,6 +12,8 @@ export default function VerifyEmail() {
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // R6-U1：重发成功给一条成功提示（之前零反馈，用户不知道有没有发出去）
+  const [resentMsg, setResentMsg] = useState<string | null>(null);
 
   const submit = async () => {
     setError(null);
@@ -45,6 +47,7 @@ export default function VerifyEmail() {
 
   const resend = async () => {
     setError(null);
+    setResentMsg(null);
     if (!email.trim()) {
       setError('请先填写注册邮箱');
       return;
@@ -52,7 +55,7 @@ export default function VerifyEmail() {
     setBusy(true);
     try {
       await api.resendCode(email.trim());
-      setError(null);
+      setResentMsg('验证码已重新发送，请查收邮箱');
     } catch (e) {
       // F-N8：后端 resend-code 防枚举永远 200，404 死分支已删除
       setError(e instanceof Error ? e.message : '重发失败');
@@ -86,6 +89,7 @@ export default function VerifyEmail() {
             />
           </div>
           {error && <p className="mt-3 text-sm text-bad text-center">{error}</p>}
+          {resentMsg && <p className="mt-3 text-sm text-ok text-center">{resentMsg}</p>}
           <div className="mt-5">
             <PrimaryButton onClick={submit} disabled={busy}>
               {busy ? '验证中…' : '验证'}

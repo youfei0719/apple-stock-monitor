@@ -70,10 +70,15 @@ export default function AddMonitor() {
     try {
       setStores(await api.stores(refresh));
     } catch (e) {
-      // D10：403（门店目录刷新仅管理员可用）不清空已有列表，toast 提示即可
-      if (e instanceof ApiError && e.status === 403) {
+      // D10：403（门店目录刷新仅管理员可用）不清空已有列表，toast 提示即可；
+      // R6-I14：429（refresh_limited）同样不清空列表，toast 提示即可
+      if (e instanceof ApiError && (e.status === 403 || e.status === 429 || e.code === 'refresh_limited')) {
         if (refresh) {
-          setStoreToast('门店目录刷新仅管理员可用');
+          setStoreToast(
+            e.status === 429 || e.code === 'refresh_limited'
+              ? '刷新太频繁，请稍后再试'
+              : '门店目录刷新仅管理员可用',
+          );
         } else {
           setStoreErr('门店目录需要管理员权限，可直接手动填写门店编号');
         }
@@ -109,11 +114,12 @@ export default function AddMonitor() {
   const filteredStores = useMemo(() => {
     const q = storeQuery.trim().toLowerCase();
     if (!q || !stores) return stores ?? [];
+    // R6-I3：脏 catalog 数据（缺 name/city/number）不再让 toLowerCase 崩掉渲染
     return stores.filter(
       (s) =>
-        s.name.toLowerCase().includes(q) ||
-        s.city.toLowerCase().includes(q) ||
-        s.number.toLowerCase().includes(q),
+        (s.name ?? '').toLowerCase().includes(q) ||
+        (s.city ?? '').toLowerCase().includes(q) ||
+        (s.number ?? '').toLowerCase().includes(q),
     );
   }, [stores, storeQuery]);
 
@@ -304,7 +310,8 @@ export default function AddMonitor() {
                         <span className="product-name">{p.name}</span>
                       </span>
                       <span className={`mono text-sm shrink-0 ${on ? 'text-white/90' : 'text-sub'}`}>
-                        ¥{p.price_cny.toLocaleString('zh-CN')}
+                        {/* R6-I3：缺 price_cny 的脏条目回退 0，避免 toLocaleString 崩溃 */}
+                        ¥{(p.price_cny ?? 0).toLocaleString('zh-CN')}
                       </span>
                     </div>
                     <div className={`mt-1 text-xs ${on ? 'text-white/70' : 'text-faint'}`}>

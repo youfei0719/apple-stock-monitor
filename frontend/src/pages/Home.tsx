@@ -33,6 +33,8 @@ function TaskCard({
   anonymous: boolean;
 }) {
   const [busy, setBusy] = useState(false);
+  // R6-U3：续期失败用行内错误文案（参考 TaskDetail 的 renewMsg 模式），不再弹原生 alert
+  const [renewMsg, setRenewMsg] = useState<string | null>(null);
   const { state, availableCount, total, updatedAt, partialUnknown } = summarizeTask(task);
   const expired = state === 'expired';
   const remaining = daysLeft(task.expires_at);
@@ -61,11 +63,12 @@ function TaskCard({
 
   const renew = async () => {
     setBusy(true);
+    setRenewMsg(null);
     try {
       await api.renewTask(task.id);
       await onChanged();
     } catch (e) {
-      alert(e instanceof Error ? e.message : '续期失败');
+      setRenewMsg(e instanceof Error ? e.message : '续期失败');
     } finally {
       setBusy(false);
     }
@@ -132,35 +135,46 @@ function TaskCard({
         )}
         {trialExhausted && (
           <p className="mt-1.5 text-[11px] text-bad font-medium">
-            体验推送已用完，去<Link to="/me" className="underline">注册 / 升级</Link>继续监控
+            体验推送已用完，去
+            {/* R6-I11：匿名用户文案"去注册"，已登录用户文案"去升级"
+                （被 admin 授予 trial 的已注册用户也会命中横幅） */}
+            <Link to={anonymous ? '/login' : '/me'} className="underline">
+              {anonymous ? '注册' : '升级'}
+            </Link>
+            继续监控
           </p>
         )}
       </Link>
-      <div className="mt-3 pt-3 border-t border-line flex gap-2">
-        {expired ? (
+      <div className="mt-3 pt-3 border-t border-line">
+        <div className="flex gap-2">
+          {expired ? (
+            <button
+              onClick={renew}
+              disabled={busy}
+              className="flex-1 py-2 rounded-card-sm bg-accent text-white text-[13px] font-medium active:scale-[0.98] transition disabled:opacity-40"
+            >
+              {busy ? '续期中…' : `一键续期（${anonymous ? '+24 小时' : '+30 天'}）`}
+            </button>
+          ) : (
+            <button
+              onClick={togglePause}
+              disabled={busy}
+              className="flex-1 py-2 rounded-card-sm bg-bg text-[13px] font-medium active:scale-[0.98] transition disabled:opacity-40"
+            >
+              {task.paused ? '恢复监控' : '暂停'}
+            </button>
+          )}
           <button
-            onClick={renew}
+            onClick={remove}
             disabled={busy}
-            className="flex-1 py-2 rounded-card-sm bg-accent text-white text-[13px] font-medium active:scale-[0.98] transition disabled:opacity-40"
+            className="flex-1 py-2 rounded-card-sm bg-bg text-[13px] font-medium text-bad active:scale-[0.98] transition disabled:opacity-40"
           >
-            {busy ? '续期中…' : `一键续期（${anonymous ? '+24 小时' : '+30 天'}）`}
+            删除
           </button>
-        ) : (
-          <button
-            onClick={togglePause}
-            disabled={busy}
-            className="flex-1 py-2 rounded-card-sm bg-bg text-[13px] font-medium active:scale-[0.98] transition disabled:opacity-40"
-          >
-            {task.paused ? '恢复监控' : '暂停'}
-          </button>
+        </div>
+        {renewMsg && (
+          <p className="mt-1.5 text-[11px] text-center text-bad">{renewMsg}</p>
         )}
-        <button
-          onClick={remove}
-          disabled={busy}
-          className="flex-1 py-2 rounded-card-sm bg-bg text-[13px] font-medium text-bad active:scale-[0.98] transition disabled:opacity-40"
-        >
-          删除
-        </button>
       </div>
     </Card>
   );
@@ -172,7 +186,7 @@ const TABS: { id: TaskStatusFilter; label: string }[] = [
 ];
 
 export default function Home() {
-  const { me, tasks, refreshTasks } = useApp();
+  const { me, tasks, refreshTasks, tasksError } = useApp();
   const [tab, setTab] = useState<TaskStatusFilter>('active');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -182,6 +196,7 @@ export default function Home() {
     setLoading(true);
     setError(null);
     try {
+      // R6-D5：refreshTasks 会抛异常，这里 catch 后渲染 ErrorState（以前被吞掉永不可达）
       await refreshTasks(t);
     } catch (e) {
       setError(e instanceof Error ? e.message : '加载失败');
@@ -210,6 +225,9 @@ export default function Home() {
     quota !== null &&
     quota.push_limit > 0 &&
     quota.push_used >= quota.push_limit;
+  // R6-D5：App 层维护的首屏任务加载错误（/me 或 /tasks 失败）也在这里渲染 ErrorState，
+  // 而不是误导成"还没有监控任务"
+  const loadError = error ?? tasksError;
 
   return (
     <div>
@@ -228,9 +246,9 @@ export default function Home() {
             </button>
           ))}
         </div>
-        {error && <ErrorState message={error} onRetry={() => reload()} />}
-        {!error && loading && tasks.length === 0 && <LoadingState rows={3} />}
-        {!error && !loading && tasks.length === 0 && (
+        {loadError && <ErrorState message={loadError} onRetry={() => reload()} />}
+        {!loadError && loading && tasks.length === 0 && <LoadingState rows={3} />}
+        {!loadError && !loading && tasks.length === 0 && (
           <EmptyState
             title={tab === 'expired' ? '没有已过期的任务' : '还没有监控任务'}
             hint={tab === 'expired' ? '过期的任务会出现在这里，可一键续期' : '添加你想抢的机型和门店，有货立刻 DING 你'}
@@ -246,7 +264,7 @@ export default function Home() {
             }
           />
         )}
-        {!error && tasks.length > 0 && (
+        {!loadError && tasks.length > 0 && (
           <div className="space-y-3">
             {tasks.map((t) => (
               <TaskCard

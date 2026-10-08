@@ -426,8 +426,9 @@ export const api = {
   },
   products: (category: string) => req<Product[]>(`/catalog/products?category=${category}`),
 
+  // R6-U4：后端测试失败时可能返回 {ok:false, error:'原因'}，error 优先展示
   notifyTest: (channel: string, target: string) =>
-    req<{ ok: boolean; message?: string }>('/notify/test', {
+    req<{ ok: boolean; message?: string; error?: string }>('/notify/test', {
       method: 'POST',
       body: JSON.stringify({ channel, target }),
     }),

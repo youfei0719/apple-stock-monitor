@@ -27,7 +27,13 @@ export default function Login() {
     setBusy(true);
     try {
       if (mode === 'login') {
-        await api.login(email.trim(), password);
+        const res = await api.login(email.trim(), password);
+        // R6-I12：totp_required 时不自动跳首页——后端只建了半会话，直接进首页会被 403 踢回；
+        // 管理员账号请前往后台完成 TOTP 验证
+        if (res.totp_required === true) {
+          setError('管理员请前往后台登录完成 TOTP 验证');
+          return;
+        }
         window.location.href = '/';
       } else {
         await api.register(email.trim(), password);

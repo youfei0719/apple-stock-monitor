@@ -278,7 +278,7 @@ export function Members() {
                   {rows.length === 0 && (
                     <TableRow>
                       <TableCell
-                        colSpan={7}
+                        colSpan={8}
                         className='py-12 text-center text-muted-foreground'
                       >
                         没有符合条件的会员
