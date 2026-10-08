@@ -319,7 +319,16 @@ def _claim_idempotency_key(
             db.flush()
             new_rec = IdempotencyRecord(scope=scope, key=key, task_ids=[])
             db.add(new_rec)
-            db.flush()
+            # R22-P3-1：delete+insert 之间另一请求也可能接管同一 stale key，
+            # 唯一约束撞车在这里是预期事件——回滚后按"没抢到"处理，上游
+            # replay 看到赢家的记录（有结果直接返回创建结果，仍在创建中则
+            # 409 idempotency_in_progress），不抛 500。
+            try:
+                db.flush()
+            except IntegrityError:
+                db.rollback()
+                log.warning("idempotency_claim_takeover_lost", scope=scope)
+                return None, False
             log.warning("idempotency_claim_takeover", scope=scope)
             return new_rec, True
         return rec, False

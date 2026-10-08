@@ -491,6 +491,11 @@ def task_expiry_sweep(db: Session) -> dict:
             continue
         if t.id in expiring_notified:
             continue
+        # R22-P3-2：匿名 trial 任务（user_id=None）的 task_expiring 提醒会写入
+        # 通知行，但匿名用户调不了 /notifications，永远不可见（除非随后注册
+        # 过户）——跳过，卡片已有"剩余 N 天"+续期按钮，不重复写无人读取的行。
+        if t.user_id is None:
+            continue
         _sys_notify(
             db,
             t.user_id,

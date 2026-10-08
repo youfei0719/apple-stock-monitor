@@ -493,13 +493,29 @@ def claim_payment(
     # user_id=None 并各自执行 apply_tier_grant（原子 UPDATE 每次 +30 天，
     # 用户会多得 30 天）。带条件的 UPDATE + rowcount 校验保证只有一个请求
     # 能绑定成功，失败方按 already_claimed 处理，不再二次开会员。
+    # R22-P2-1：WHERE 追加 status 守卫——并发下另一管理员 close/refund 已落库
+    # （resolved/refunded），本请求守卫读到的是旧 ORM 快照，仍会通过守卫；
+    # 原子 UPDATE 必须把 status 条件带进 WHERE，否则"不予开通"的订单照样
+    # 被 apply_tier_grant 开出会员。
     claimed = db.execute(
         update(Payment)
-        .where(Payment.id == p.id, Payment.user_id.is_(None))
+        .where(
+            Payment.id == p.id,
+            Payment.user_id.is_(None),
+            Payment.status.in_(["paid", "amount_mismatch"]),
+        )
         .values(user_id=user.id)
     ).rowcount
     if claimed != 1:
+        # R22-P2-1：rowcount!=1 只说明"未认领 & 状态可认领"两个条件有一个
+        # 没过，重读 DB 真值区分：状态已流转（close/refund）→ bad_status；
+        # 仍是可认领状态 → 被别的请求先认领 → already_claimed。
+        fresh = db.execute(
+            select(Payment.status, Payment.user_id).where(Payment.id == p.id)
+        ).one()
         db.rollback()
+        if fresh.status not in ("paid", "amount_mismatch"):
+            raise APIError(400, f"订单状态 {fresh.status} 不可认领", "bad_status")
         raise APIError(400, "订单已被认领", "already_claimed")
     p.user_id = user.id  # 同步 ORM 状态（原子 UPDATE 绕过了 ORM）
     old_tier = (user.tier, user.tier_expires_at.isoformat() if user.tier_expires_at else None)

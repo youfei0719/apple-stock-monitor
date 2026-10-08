@@ -180,6 +180,7 @@ export interface Task {
  * 注意：与后端 _display_state / _is_expired 保持一致——paused 优先于 expired，
  * 手动暂停的任务不视为过期（后端 _is_expired 在 paused 时返回 False）。 */
 export function isTaskExpired(task: Task): boolean {
+  if (task.paused) return false;
   if (!task.expires_at) return false;
   return new Date(task.expires_at).getTime() < Date.now();
 }
