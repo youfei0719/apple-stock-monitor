@@ -447,6 +447,13 @@ export default function AddMonitor() {
                 </button>
               ))}
             </div>
+            {/* R23-P3-7（产品）：engine evaluate_transition —— instant 模式首轮有货仅静默建基线、
+                从下一次状态变化开始通知；此处说明，避免新建任务第一轮收不到通知的困惑 */}
+            {mode === 'instant' && (
+              <p className="text-[11px] text-faint leading-relaxed">
+                新建任务首次检测到有货时仅建立基线，从下一次状态变化开始通知。
+              </p>
+            )}
             {mode === 'confirmed' && (
               <>
                 <input

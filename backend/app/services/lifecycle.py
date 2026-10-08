@@ -19,6 +19,7 @@ from app.core.tiers import TIERS, VALID_TIERS, effective_tier
 from app.core.timeutil import utcnow
 from app.models.models import (
     ApiHit,
+    IdempotencyRecord,
     MonitorTask,
     Notification,
     QuotaUsage,
@@ -106,7 +107,8 @@ def converge_task_limit(
     paused = active[keep_limit:]
     for t in paused:
         t.paused = True
-        # R6-I9：暂停原因落库（认领时只有 quota_exhausted 会自动恢复）
+        # R6-I9：暂停原因落库，供 resume_tier_limited_tasks（tier_limit）/
+        # resume_quota_exhausted_tasks（quota_exhausted）区分恢复
         if reason is not None:
             t.paused_reason = reason
         db.add(t)
@@ -364,7 +366,10 @@ def membership_sweep(db: Session) -> dict:
         old = u.tier
         new_exp: datetime | None = None
         new_quota: datetime | None = None
-        if u.pending_tier in VALID_TIERS:
+        # R23-P3-5：是否晋升先记旗标，计数器移到原子 UPDATE 成功之后
+        # （并发 webhook 续费导致 rowcount=0 走 continue 时不再虚增）。
+        promoted = u.pending_tier in VALID_TIERS
+        if promoted:
             # 不自洽-1：降级到期生效——到期时按 pending_tier 切换
             new = u.pending_tier
             new_exp = now + timedelta(days=30)
@@ -375,10 +380,8 @@ def membership_sweep(db: Session) -> dict:
                 f"已按预约切换为{TIERS[new]['name']}"
                 f"（有效期至 {_beijing_date(new_exp)}，北京时间）"
             )
-            stats["pending_promoted"] += 1
         else:
             new = "free"
-            stats["downgraded"] += 1
             action = "已降为免费版（任务上限 3 个、每周期推送 5 次，周期为 30 天滚动）"
             # R11-P2-1：降 free 也置 now+30d（与 refund / 手动降档同口径），
             # 不再置 NULL（此前靠 ensure_quota_anchor 懒初始化，口径不一）。
@@ -399,6 +402,7 @@ def membership_sweep(db: Session) -> dict:
         if result.rowcount != 1:
             log.warning("membership_sweep_race_skipped", user_id=u.id)
             continue
+        stats["pending_promoted" if promoted else "downgraded"] += 1
         # 把 ORM 对象与原子 UPDATE 后的行同步（后续 converge/通知读 u.tier 等字段）
         u.tier = new
         u.tier_expires_at = new_exp
@@ -644,6 +648,10 @@ NOTIFICATIONS_RETENTION_DAYS = 90
 NOTIFICATIONS_PRUNE_KEY = "notifications_pruned_at"
 # R9-O4：sessions 清理的每日去重 key
 SESSIONS_PRUNE_KEY = "sessions_pruned_at"
+# R23-P3-2：幂等键记录保留期——10 分钟 TTL 后即无用（重复请求只在短窗口重放），
+# 保留 7 天兜底（排查用），之后删除，否则 idempotency_records 无限增长。
+IDEMPOTENCY_RETENTION_DAYS = 7
+IDEMPOTENCY_PRUNE_KEY = "idempotency_pruned_at"
 
 
 def _beijing_date_str(now: datetime) -> str:
@@ -712,6 +720,28 @@ def prune_notifications(db: Session, retention_days: int = NOTIFICATIONS_RETENTI
     return {"pruned": n}
 
 
+def prune_idempotency_records(
+    db: Session, retention_days: int = IDEMPOTENCY_RETENTION_DAYS
+) -> dict:
+    """R23-P3-2：idempotency_records 保留 retention_days 天，删更早的行。
+
+    幂等键 TTL 只有 10 分钟，过期记录纯粹占表；保留 7 天供排查。
+    幂等、可重入，每天最多执行一次。"""
+    if _pruned_today(db, IDEMPOTENCY_PRUNE_KEY):
+        return {"pruned": 0, "skipped": "daily"}
+    cutoff = _utcnow() - timedelta(days=retention_days)
+    n = (
+        db.query(IdempotencyRecord)
+        .filter(IdempotencyRecord.created_at < cutoff)
+        .delete(synchronize_session=False)
+    )
+    _mark_pruned(db, IDEMPOTENCY_PRUNE_KEY)
+    db.commit()
+    if n:
+        log.info("idempotency_records_pruned", deleted=n, retention_days=retention_days)
+    return {"pruned": n}
+
+
 # ---------------------------------------------------------------- entry
 def run_lifecycle_sweep(db: Session) -> dict:
     """执行一轮生命周期 sweep，返回各项计数。幂等、可重入。
@@ -728,6 +758,8 @@ def run_lifecycle_sweep(db: Session) -> dict:
         ("notifications_retention", prune_notifications),
         # R9-O4：已过期登录会话清理
         ("sessions_retention", prune_sessions),
+        # R23-P3-2：幂等键记录保留期清理（7 天）
+        ("idempotency_retention", prune_idempotency_records),
     ):
         try:
             out[name] = fn(db)
@@ -750,4 +782,5 @@ __all__ = [
     "prune_api_hits",
     "prune_notifications",
     "prune_sessions",
+    "prune_idempotency_records",
 ]

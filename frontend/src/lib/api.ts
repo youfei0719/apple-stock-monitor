@@ -20,6 +20,19 @@ function newDeviceId(): string {
     : `dev-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+/** R23-P2-1：crypto.randomUUID 在非安全上下文（http://IP、非 localhost 域名）下为
+ * undefined，直接调用抛 TypeError；降级为 Math.random 拼 UUID v4 格式（newDeviceId 同模式）。
+ * 幂等键/去重键用，碰撞概率可忽略，不用于安全场景。 */
+function newUuid(): string {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+  });
+}
+
 /** localStorage/sessionStorage 都不可用时的进程内回退 id（页面生命周期内稳定） */
 let memDeviceId: string | undefined;
 
@@ -432,7 +445,14 @@ export const api = {
     category?: string;
     mode?: 'instant' | 'confirmed';
     channels?: TaskChannels;
-  }) => req<Task[]>('/tasks/batch', { method: 'POST', body: JSON.stringify(payload) }),
+  }) =>
+    // R23-P3-1：batch_create 同样支持幂等键（R6-P2-10），带上 Idempotency-Key，
+    // 批量提交的网络重试/重复点击不再建重复任务。
+    req<Task[]>('/tasks/batch', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': newUuid() },
+      body: JSON.stringify(payload),
+    }),
   // F-1：单任务创建（POST /tasks），支持匿名（X-Device-Id 由 req 统一带）。
   // 匿名用户调这个逐个创建——后端 /tasks/batch 要求登录，匿名调 batch 会 401。
   // R21-P3-4：带 Idempotency-Key 头，接线后端 R6-P2-10 幂等键机制
@@ -453,7 +473,7 @@ export const api = {
     channels?: TaskChannels;
   }) => req<Task>('/tasks', {
     method: 'POST',
-    headers: { 'Idempotency-Key': crypto.randomUUID() },
+    headers: { 'Idempotency-Key': newUuid() },
     body: JSON.stringify(payload),
   }),
   updateTask: (id: string | number, payload: Partial<Task>) =>

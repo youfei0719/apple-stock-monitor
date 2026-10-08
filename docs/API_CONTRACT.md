@@ -58,7 +58,7 @@ state ∈ `available | unavailable | unknown | verifying | cooling | paused | ex
 - `GET /api/quota` → `{tier（有效档位，过期按 free）, tier_expires_at, pending_tier, quota_reset_at（配额周期锚点 ISO，前端按北京时间展示）, push_used, push_limit, tasks_used, tasks_limit, refresh_interval_sec, period（锚点日期 YYYY-MM-DD）}`；配额周期为购买日+30天滚动
   - `pending_tier`：降级预约档位。用户从 standard/pro 降级时不立即切换、只写 `pending_tier`，到期 sweep 才切换为它；无预约时为 `null`。前端可在到期前展示"到期后切换为 X"。
   - 匿名 trial 分支（未登录 + 携带 `X-Device-Id`）：返回 `{tier:"trial", tier_expires_at:null, pending_tier:null, quota_reset_at:null, period:"YYYY-MM"}`。
-    配额为**自然月口径**：用量键 `trial_quota:{device_id}:{YYYY-MM}`（月份取 UTC `now`），每月 1 日（UTC）自动归零；与登录用户的"购买日+30天滚动"区分。
+    配额为**自然月口径**：用量键 `trial_quota:{device_id}:{YYYY-MM}`（月份取北京时间（UTC+8）`now`），每月 1 日（北京时间）自动归零；与登录用户的"购买日+30天滚动"区分。
 - `GET /api/plans` → 三档说明（公开，**不再返回 trial**）：`[{tier, name, price_cny, tasks_limit, push_limit, channels[], history, priority, refresh_interval_sec}]`
   - free：免费 · standard：标准（¥19/月） · pro：Pro（¥39/月）；trial 只用于未登录匿名体验，不可购买
   - 前端渲染注意：无 `features`/`period`/`id` 字段；档位名用 `name`，价格用 `price_cny`，周期文案前端自拼（`price_cny>0` → "¥X / 月"）；"当前"徽章用 `p.tier === me.tier` 判断。
@@ -77,7 +77,7 @@ state ∈ `available | unavailable | unknown | verifying | cooling | paused | ex
 | `GET /api/stats/poll` | ❌ 无门控 | 按用户任务聚合的查询统计 |
 
 - 降级后历史数据仅被 403 隐藏、不删除（断裂-1 修完后到期降级路径可达）。
-- 注意实现细节：`history.py` 当前门控用的是 `tier_of(user.tier)`（见断裂-1，有效档位应走 `effective_tier()`），后端 worker 修完后此处语义不变（"完整历史"= `/history/releases` 可见性）。
+- 注意实现细节：`history.py` 门控用的是 `effective_tier_of(user)["history"]`（档位过期按 free 算；见断裂-1，已修完），此处语义为"完整历史"= `/history/releases` 可见性。
 
 ## 支付（爱发电）
 - `POST /api/pay/afdian-webhook`（签名校验）→ 自动开通/续期会员，写 payments 表；升级/续费立即生效（配额锚点同步+30天），**降级到期生效**（只写 `pending_tier`，到期 sweep 切换）；金额与档位不符时仍落库 `status='amount_mismatch'` 待人工处理（返回 200 + `pending_count`）
