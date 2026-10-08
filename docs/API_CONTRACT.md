@@ -54,6 +54,8 @@ state ∈ `available | unavailable | unknown | verifying | cooling | paused`
 ## 配额与会员
 - `GET /api/quota` → `{tier（有效档位，过期按 free）, tier_expires_at, pending_tier, quota_reset_at（配额周期锚点 ISO，前端按北京时间展示）, push_used, push_limit, tasks_used, tasks_limit, refresh_interval_sec, period（锚点日期 YYYY-MM-DD）}`；配额周期为购买日+30天滚动
   - `pending_tier`：降级预约档位。用户从 standard/pro 降级时不立即切换、只写 `pending_tier`，到期 sweep 才切换为它；无预约时为 `null`。前端可在到期前展示"到期后切换为 X"。
+  - 匿名 trial 分支（未登录 + 携带 `X-Device-Id`）：返回 `{tier:"trial", tier_expires_at:null, pending_tier:null, quota_reset_at:null, period:"YYYY-MM"}`。
+    配额为**自然月口径**：用量键 `trial_quota:{device_id}:{YYYY-MM}`（月份取 UTC `now`），每月 1 日（UTC）自动归零；与登录用户的"购买日+30天滚动"区分。
 - `GET /api/plans` → 三档说明（公开，**不再返回 trial**）：`[{tier, name, price_cny, tasks_limit, push_limit, channels[], history, priority, refresh_interval_sec}]`
   - free：免费 · standard：标准（¥19/月） · pro：Pro（¥39/月）；trial 只用于未登录匿名体验，不可购买
   - 前端渲染注意：无 `features`/`period`/`id` 字段；档位名用 `name`，价格用 `price_cny`，周期文案前端自拼（`price_cny>0` → "¥X / 月"）；"当前"徽章用 `p.tier === me.tier` 判断。
@@ -106,6 +108,6 @@ state ∈ `available | unavailable | unknown | verifying | cooling | paused`
   - 鉴权：登录用户只能看自己的；未登录时按 `X-Device-Id` 匹配自己的匿名任务，否则 403 `{code:"forbidden"}`；任务不存在 404 `{code:"not_found"}`。
 
 - `POST /api/tasks/{id}/renew` → 200 Task（同形）。
-  - 一键续期：`expires_at = now + 30 天`。只延长时间，不改 `paused`/配额状态。
+  - 一键续期：`expires_at = max(now, 原 expires_at) + 30 天`。只延长时间，不改 `paused`/配额状态。
   - 匿名 trial 任务受 24h 上限钳制（`expires_at` 会被 clamp 到 now+24h）。
-  - 注意：提前续期时**不保留**剩余天数（renew 语义 = 从现在起 30 天）。
+  - 注意：提前续期**保留**剩余天数（实现语义 `max(now, expires_at)+30天`；R4-P2：此前一律 now+30d，剩 20 天时续期反而亏，已修正）。

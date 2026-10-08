@@ -11,9 +11,11 @@ mkdir -p "$DST_DIR"
 [ -f "$ENV_FILE" ] || { echo "[$DAY] backup FAIL: $ENV_FILE 不存在" >&2; exit 1; }
 
 # ===== R5-D-1/D-2：.env 提取器（与 deploy.sh 同逻辑：先去行尾注释再取值，支持 export 前缀） =====
+# R6-P2-6：重复键取最后一个（与 `source` 语义一致）；R6-P2-1：最终清理只去首尾
+# （空白/CR/引号），值内空格原样保留。
 env_val() {
   local key="$1" line val rest
-  line=$(grep -E "^[[:space:]]*(export[[:space:]]+)?${key}=" "$ENV_FILE" | head -n1) || return 0
+  line=$(grep -E "^[[:space:]]*(export[[:space:]]+)?${key}=" "$ENV_FILE" | tail -n1) || return 0
   [ -z "$line" ] && return 0
   val=$(printf '%s\n' "$line" | sed -E 's/^[[:space:]]*(export[[:space:]]+)?[^=[:space:]]+=//')
   val=$(printf '%s' "$val" | sed -E 's/^[[:space:]]+//;s/[[:space:]]+$//')
@@ -30,7 +32,12 @@ env_val() {
       val=$(printf '%s' "$val" | sed -E 's/[[:space:]]+#.*$//;s/[[:space:]]+$//')
       ;;
   esac
-  printf '%s' "$val" | tr -d " '\"\t\r"
+  val=$(printf '%s' "$val" | tr -d '\r')
+  val="${val#"${val%%[![:space:]]*}"}"
+  val="${val%"${val##*[![:space:]]}"}"
+  val="${val#\"}"; val="${val%\"}"
+  val="${val#\'}"; val="${val%\'}"
+  printf '%s' "$val"
 }
 
 # ===== P0-26：从 .env 的 DATABASE_URL 解析 sqlite 真实路径（只支持 sqlite） =====
@@ -70,7 +77,8 @@ chmod 600 "$DST_DIR/env-$DAY"
 find "$DST_DIR" -name 'app-*.db' -mtime +14 -delete
 find "$DST_DIR" -name 'env-*' -mtime +14 -delete
 echo "[$DAY] backup ok: $DST_DIR/app-$DAY.db + $DST_DIR/env-$DAY"
-# 恢复：
+# 恢复（⚠️ 先 systemctl stop 再 restore：WAL 模式下运行中 restore 有损坏风险）：
+#   systemctl stop stockmon-api stockmon-engine
 #   sqlite3 <上一步解析出的 SRC> ".restore '/opt/stockmon/backups/app-YYYY-MM-DD.db'"
 #   cp /opt/stockmon/backups/env-YYYY-MM-DD /opt/stockmon/.env && chmod 600 /opt/stockmon/.env
 #   systemctl restart stockmon-api stockmon-engine

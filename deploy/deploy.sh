@@ -21,9 +21,12 @@ DOMAIN=stock.glint.red
 #   - 先去行尾注释再取值：`APP_ENV=prod  # 生产环境` → `prod`（R5-D-1）
 #   - 支持 `export KEY=...` 前缀写法（R5-D-2）
 #   - 值里含 # 时必须加引号（如 PASSWORD='a#b'）；引号包裹的值按引号边界取值
+#   - R6-P2-6：重复键取最后一个，与 `source` 语义一致（重复键以后者为准）
+#   - R6-P2-1：最终清理只去首尾（空白/CR/引号），值内空格原样保留
+#     （旧 tr -d " '\"\t\r" 会吃掉引号内合法空格，如 SMTP_FROM="StockMon <noreply@glint.red>"）
 env_val() {
   local key="$1" line val rest
-  line=$(grep -E "^[[:space:]]*(export[[:space:]]+)?${key}=" "$ENV_FILE" | head -n1) || return 0
+  line=$(grep -E "^[[:space:]]*(export[[:space:]]+)?${key}=" "$ENV_FILE" | tail -n1) || return 0
   [ -z "$line" ] && return 0
   # 剥掉可选的 export 前缀与 KEY=（值里可能含 =，只剥第一个）
   val=$(printf '%s\n' "$line" | sed -E 's/^[[:space:]]*(export[[:space:]]+)?[^=[:space:]]+=//')
@@ -42,7 +45,14 @@ env_val() {
       val=$(printf '%s' "$val" | sed -E 's/[[:space:]]+#.*$//;s/[[:space:]]+$//')
       ;;
   esac
-  printf '%s' "$val" | tr -d " '\"\t\r"
+  # R6-P2-1：CR 直接去掉（Windows 行尾残留），首尾空白与残留引号剥掉，
+  # 值内空格/tab 原样保留。
+  val=$(printf '%s' "$val" | tr -d '\r')
+  val="${val#"${val%%[![:space:]]*}"}"
+  val="${val%"${val##*[![:space:]]}"}"
+  val="${val#\"}"; val="${val%\"}"
+  val="${val#\'}"; val="${val%\'}"
+  printf '%s' "$val"
 }
 
 # ===== R5-D-4：前置软件检查（缺哪个报哪个，一次列完再退出） =====
@@ -68,7 +78,16 @@ if [ -n "$MISSING_SW" ]; then
   echo "请先安装（如 Debian/Ubuntu：apt install -y git python3-venv nodejs npm nginx curl sqlite3 rsync certbot），再重新运行本脚本。"
   exit 1
 fi
-echo "[deploy] 前置软件检查通过"
+# ===== R6-D8：node 主版本号 ≥18 校验（vite 6 硬要求） =====
+# Ubuntu 22.04 的 apt 默认 node 是 v12，装了但 build 必失败；这里提前拦截。
+NODE_MAJOR=$(node --version 2>/dev/null | sed -E 's/^[vV]?([0-9]+).*/\1/')
+if [ -z "$NODE_MAJOR" ] || [ "$NODE_MAJOR" -lt 18 ]; then
+  echo "ERROR: node 版本过低（$(node --version 2>/dev/null || echo 未知)），vite 6 要求 node ≥ 18。"
+  echo "Ubuntu 22.04 的 apt 默认 node 是 v12，不可用。请用 nodesource 安装 node 20 LTS 后重试："
+  echo "  curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs"
+  exit 1
+fi
+echo "[deploy] 前置软件检查通过（node $(node --version)）"
 
 # ===== P0-24：.env 校验（root/软件检查之后，不满足直接报错退出） =====
 [ -f "$ENV_FILE" ] || {
@@ -152,6 +171,8 @@ echo "[deploy] systemd units 已安装并 enable"
 #   禁止 `certbot --nginx`（会改写我们手写的 conf）；统一用 certonly。
 #   注意：conf 的 443 块引用 letsencrypt 真实路径，证书不存在时 `nginx -t` 必失败，
 #   所以首次部署用 `--standalone` 拿证（需先停 nginx 释放 80 端口），拿证后再 -t/reload。
+#   R6-D7：certonly 追加 --deploy-hook（写入 renewal 配置，60-90 天后的自动续期
+#   才会 reload nginx，否则证书续了但 nginx 仍用旧证书，HTTPS 中断）。
 #   待联调：certbot 与自带 SSL stanza 的 conf 在真机首次部署可能交互异常，
 #   首次部署请人工盯一次 certbot 输出（见运维手册"首次部署完整步骤"）。
 SSL_EMAIL_VAL=$(env_val SSL_EMAIL)
@@ -165,7 +186,8 @@ if [ ! -d "/etc/letsencrypt/live/$DOMAIN" ]; then
   echo "[deploy] 为 $DOMAIN 申请证书（certonly --standalone，不改写 nginx conf）..."
   systemctl stop nginx || true
   certbot certonly --non-interactive --agree-tos -m "$SSL_EMAIL_VAL" \
-    --standalone -d "$DOMAIN"
+    --standalone -d "$DOMAIN" \
+    --deploy-hook "systemctl reload nginx"
   systemctl start nginx
   echo "[deploy] 证书申请完成"
 else
