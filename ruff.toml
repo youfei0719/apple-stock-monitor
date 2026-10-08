@@ -1,6 +1,6 @@
-[lint]
-select = ["E", "F", "I", "N", "W", "UP", "B"]
 line-length = 100
 
-[format]
-line-length = 100
+[lint]
+select = ["E", "F", "I", "N", "W", "UP", "B"]
+# B008 是 FastAPI 官方写法的误报（Depends() 写在参数默认值里是标准用法）
+ignore = ["B008"]

@@ -1,11 +1,12 @@
 .env
 .env.*
 !.env.example
+.secrets/
 __pycache__/
 *.py[cod]
 .venv/
 venv/
-data/
+backend/data/
 *.db
 *.db-journal
 logs/
