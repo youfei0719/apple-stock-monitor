@@ -55,12 +55,14 @@ fail() {
   exit 1
 }
 
-[ -f "$ENV_FILE" ] || fail "$ENV_FILE 不存在"
-
 # ===== R5-D-1/D-2：.env 提取器 =====
 # R11-P2-10：实现抽到 deploy/lib.sh（与 deploy.sh 共用），此处只 source，消两份拷贝漂移风险。
+# R12-P3-1：source 必须在首次 fail 调用之前——fail→alert→env_val，
+# 缺 .env 时若 lib.sh 还没 source，会报 env_val: command not found（set -e 下直接退出）。
 # shellcheck disable=SC1091
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+[ -f "$ENV_FILE" ] || fail "$ENV_FILE 不存在"
 
 # ===== P0-26：从 .env 的 DATABASE_URL 解析 sqlite 真实路径（只支持 sqlite） =====
 DB_URL=$(env_val DATABASE_URL)

@@ -31,7 +31,7 @@ const PAID_TIER_LABEL: Record<string, string> = {
   free: '免费版',
 };
 
-/** 付费记录状态中文映射（后端 Payment.status：paid/amount_mismatch/refunded/cancelled/resolved，未来可能有 unknown_plan） */
+/** 付费记录状态中文映射（后端 Payment.status：paid/amount_mismatch/refunded/cancelled/resolved/unknown_plan） */
 const PAY_STATUS_LABEL: Record<string, string> = {
   paid: '已到账',
   amount_mismatch: '金额异常',

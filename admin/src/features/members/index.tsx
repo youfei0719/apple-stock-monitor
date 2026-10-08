@@ -343,7 +343,9 @@ export function Members() {
                         colSpan={8}
                         className='py-12 text-center text-muted-foreground'
                       >
-                        没有符合条件的会员
+                        {/* R12-P2-1：总数恰为 pageSize 整数倍时，下一页返回空数组，
+                            此时显示"已到最后一页"而非"没有符合条件的会员" */}
+                        {page > 0 ? '已到最后一页' : '没有符合条件的会员'}
                       </TableCell>
                     </TableRow>
                   )}
