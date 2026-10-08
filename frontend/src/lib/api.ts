@@ -434,6 +434,10 @@ export const api = {
   }) => req<Task[]>('/tasks/batch', { method: 'POST', body: JSON.stringify(payload) }),
   // F-1：单任务创建（POST /tasks），支持匿名（X-Device-Id 由 req 统一带）。
   // 匿名用户调这个逐个创建——后端 /tasks/batch 要求登录，匿名调 batch 会 401。
+  // R21-P3-4：带 Idempotency-Key 头，接线后端 R6-P2-10 幂等键机制
+  //（重复 key 直接返回首次创建的任务，网络重试/重复提交不再建重复任务）。
+  // 每次调用生成一个新 key：单次 createTask 调用即一次逻辑操作，调用方
+  //（AddMonitor 逐个创建）每个任务调一次，各自幂等语义独立正确。
   createTask: (payload: {
     name: string;
     group?: string;
@@ -446,7 +450,11 @@ export const api = {
     mode?: 'instant' | 'confirmed';
     repeat_interval_sec?: number | null;
     channels?: TaskChannels;
-  }) => req<Task>('/tasks', { method: 'POST', body: JSON.stringify(payload) }),
+  }) => req<Task>('/tasks', {
+    method: 'POST',
+    headers: { 'Idempotency-Key': crypto.randomUUID() },
+    body: JSON.stringify(payload),
+  }),
   updateTask: (id: string | number, payload: Partial<Task>) =>
     req<Task>(`/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   deleteTask: (id: string | number) => req<void>(`/tasks/${id}`, { method: 'DELETE' }),

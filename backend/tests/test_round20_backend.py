@@ -115,4 +115,6 @@ def test_r20_resend_unknown_email_padded(client, monkeypatch):
     assert r.status_code == 200
     assert r.json() == {"ok": True}, "未知邮箱分支不得携带可枚举 flag"
     assert len(calls) == 1, f"未注册分支应 sleep 一次，实际 {calls}"
-    assert 1.5 <= calls[0] <= 3.5, f"padding 时长应与发信耗时同量级：{calls}"
+    # R21-P3-2：padding 改为"垫到公共下限"的补足量（uniform - elapsed），
+    # 允许 elapsed 带来的毫秒级浮动，下限放宽到 1.4。
+    assert 1.4 <= calls[0] <= 3.5, f"padding 时长应与发信耗时同量级：{calls}"

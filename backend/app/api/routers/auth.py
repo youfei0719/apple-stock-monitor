@@ -340,21 +340,34 @@ class ResendCodeIn(BaseModel):
     email: EmailStr
 
 
+# R21-P3-1：登录计时侧信道垫片。未知邮箱无 hash 可验，模块加载时预计算
+# 一个 Argon2 dummy hash（一次性约 0.2–0.5s），未知分支跑一次
+# verify_password 消耗与真实校验同量级的耗时，使"未知邮箱"与"密码错误"
+# 的 401 响应时长不可区分。verify_password 对错误密码恒返回 False，
+# 结果丢弃。
+_DUMMY_HASH = hash_password("r21-login-timing-dummy")
+
+
 # R20-P3-5：resend-code 计时侧信道收敛。未注册邮箱分支瞬时返回，已注册
-# 走 SMTP 实发（秒级），响应时长可区分出邮箱是否注册。未注册分支加一段
-# 与发信耗时同量级的随机延迟，两分支时长分布不可区分。元组可被测试 patch
-# 为 (0, 0) 加速单测。
+# 走 SMTP 实发（秒级），响应时长可区分出邮箱是否注册。两分支统一垫到
+# 公共下限，两分支时长分布不可区分。
+# R21-P3-2：只给未注册分支 padding 不彻底——已注册分支走真实 SMTP
+#（典型 0.3–2s），SMTP 快于下限时仍可区分。改为分支开始记
+# time.monotonic()，结束时 sleep(max(0, uniform(lo, hi) - elapsed))，
+# 500 email_failed 分支垫完再抛。元组可被测试 patch 为 (0, 0) 加速单测。
 UNKNOWN_EMAIL_DELAY_RANGE = (1.5, 3.5)
 
 
-def _pad_unknown_email_timing() -> None:
+def _pad_resend_timing(start: float) -> None:
     lo, hi = UNKNOWN_EMAIL_DELAY_RANGE
-    time.sleep(random.uniform(lo, hi))
+    time.sleep(max(0.0, random.uniform(lo, hi) - (time.monotonic() - start)))
 
 
 @router.post("/resend-code")
 def resend_code(data: ResendCodeIn, request: Request, db: Session = Depends(get_db)):
     """重发邮箱验证码（每小时每邮箱限 3 次）。"""
+    # R21-P3-2：分支开始计时，结束时两分支统一垫到公共下限
+    start = time.monotonic()
     email = data.email.strip().lower()
     if not check_rate_limit(f"resend_code:{email}", limit=3, window_sec=3600):
         raise APIError(429, "发送过于频繁，请稍后再试", "rate_limited")
@@ -364,15 +377,17 @@ def resend_code(data: ResendCodeIn, request: Request, db: Session = Depends(get_
     user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
     if not user:
         # R4-P2 防用户枚举：未知邮箱也返回 ok，不可探测邮箱是否注册
-        # R20-P3-5：加随机延迟，与真实发信耗时同量级，收敛计时侧信道
-        _pad_unknown_email_timing()
+        _pad_resend_timing(start)
         return {"ok": True}
     # R19-P2-1 防用户枚举：删掉"已验证"早退，统一走发码流程，一律返回无 flag 的
     # {"ok": true}，不可通过 already 字段区分已验证用户与未注册邮箱
     # （前端从未使用 already 字段）。
     ok = _send_verification_code(db, user)
     if not ok:
+        # R21-P3-2：500 分支垫完再抛，否则失败路径快于成功路径仍可区分
+        _pad_resend_timing(start)
         raise APIError(500, "邮件发送失败，请稍后重试", "email_failed")
+    _pad_resend_timing(start)
     return {"ok": True}
 
 
@@ -386,6 +401,11 @@ def login(data: LoginIn, request: Request, response: Response, db: Session = Dep
     email = data.email.strip().lower()
     user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
     if not user:
+        # R21-P3-1：计时侧信道加固——未知邮箱分支同样跑一次对模块级
+        # _DUMMY_HASH 的 verify_password（结果丢弃，仅消耗与真实校验
+        # 同量级的 Argon2 耗时），与 R10-P2-4 同口径；否则"未知邮箱 401
+        # 快 / 已注册密码错误 401 慢"的计时差异可枚举邮箱是否注册。
+        verify_password(data.password, _DUMMY_HASH)
         fails = record_login_failure(ip)
         # R4-P1-B3：失败日志不打邮箱明文（撞库时会攒出真实邮箱清单），只记哈希
         email_hash = hashlib.sha256(email.encode()).hexdigest()[:16]

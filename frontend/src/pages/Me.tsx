@@ -433,7 +433,7 @@ export default function Me() {
               </p>
               <p className="text-[11px] text-white/50">
                 配额按实际发送成功的通知条数扣减 · 付费档以购买日 +30
-                天为一周期滚动重置，体验档按自然月重置
+                天为一周期滚动重置，匿名体验档按自然月重置
               </p>
             </div>
           )}
