@@ -302,6 +302,20 @@ def patch_user(
         resumed = resume_tier_limited_tasks(db, target)
         if resumed:
             notices.append(f"自动恢复 {len(resumed)} 个因档位超限被暂停的监控任务")
+    # R10-P1-1：手动降档后立即收敛任务数——复用 refund_payment 的同口径
+    # （converge_task_limit(reason="tier_limit")）。注意降为 free 时
+    # tier_expires_at 已被清空（上文 R4-P1-D2 分支），membership_sweep 只扫
+    # standard/pro（到期会员），tier 已是 free 的用户永远逃过自动收敛；
+    # 所以收敛必须在这里做，否则超限任务继续轮询、继续扣配额。
+    # 判定：新档位 rank 低于旧档位（pro→standard、pro→free、standard→free
+    # 等全覆盖；free→trial 同样触发，trial 上限更低）。
+    if data.tier is not None and TIER_RANK.get(data.tier, 0) < TIER_RANK.get(old_tier, 0):
+        converged = converge_task_limit(db, target, reason="tier_limit")
+        if converged:
+            changes["tasks_paused"] = len(converged)
+            notices.append(
+                f"档位已降级，超出当前档位任务上限的 {len(converged)} 个监控任务已暂停"
+            )
     db.add(target)
     audit(db, admin, "user.patch", "user", user_id, changes, _client_ip(request))
     db.commit()

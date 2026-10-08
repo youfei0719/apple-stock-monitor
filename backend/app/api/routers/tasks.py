@@ -43,6 +43,9 @@ TASK_CREATE_WINDOW_SEC = 3600
 # 多个任务，配额比单建高）
 BATCH_CREATE_LIMIT = 10
 BATCH_CREATE_WINDOW_SEC = 3600
+# R10-P2-7：续期并发双击去重窗口（秒）——窗口内重复点击视为重复提交，
+# 直接返回当前状态不再叠加 +30 天（保守方向：双击只 +30 天不叠加）
+RENEW_DEDUP_WINDOW_SEC = 10
 
 
 # R8-B0-3：归一化实现已提升到 app.core.timeutil（公共模块），此处保留
@@ -134,6 +137,34 @@ def _check_task_limit(db: Session, user: User | None, device_id: str | None) -> 
             raise APIError(403, "体验版仅可创建 1 个任务，请登录后使用", "task_limit_trial")
 
 
+def _conflict_key(task: MonitorTask) -> tuple[str, frozenset]:
+    """任务的归一化冲突键：(part_number 大写去空格, 门店号集合)。
+
+    N7：两侧门店号都做 strip().upper() 归一化再比较，大小写/空格不一致
+    不产生重复任务。
+    """
+    return (
+        (task.part_number or "").strip().upper(),
+        frozenset((s or "").strip().upper() for s in (task.store_numbers or [])),
+    )
+
+
+def _find_conflict_in(
+    tasks: list[MonitorTask], part_number: str, store_numbers: list[str]
+) -> MonitorTask | None:
+    """R10-P1-2：纯内存冲突比对（调用方先单次查询拿到候选任务，再逐条比对）。
+
+    归一化口径与 _find_conflict 一致。
+    """
+    want = frozenset((s or "").strip().upper() for s in store_numbers)
+    part_norm = (part_number or "").strip().upper()
+    for t in tasks:
+        p, have = _conflict_key(t)
+        if p == part_norm and have == want:
+            return t
+    return None
+
+
 def _find_conflict(
     db: Session,
     user_id: int | None,
@@ -150,13 +181,7 @@ def _find_conflict(
         q = q.where(MonitorTask.user_id == user_id)
     else:
         q = q.where(MonitorTask.device_id == device_id, MonitorTask.user_id.is_(None))
-    want = frozenset((s or "").strip().upper() for s in store_numbers)
-    part_norm = (part_number or "").strip().upper()
-    for t in db.execute(q).scalars().all():
-        have = frozenset((s or "").strip().upper() for s in (t.store_numbers or []))
-        if (t.part_number or "").strip().upper() == part_norm and have == want:
-            return t
-    return None
+    return _find_conflict_in(db.execute(q).scalars().all(), part_number, store_numbers)
 
 
 def _conflict_error(task: MonitorTask) -> APIError:
@@ -310,9 +335,21 @@ def _idempotent_replay(
     rec = _lookup_idempotency(db, scope, key)
     if not rec or not rec.task_ids:
         return None
+    # R10-P1-2：单次查询 + selectinload 预加载 states（此前 db.get 逐个取
+    # + _task_out 逐任务懒加载 states）。按 task_ids 原顺序返回。
+    tasks = (
+        db.execute(
+            select(MonitorTask)
+            .options(selectinload(MonitorTask.states))
+            .where(MonitorTask.id.in_(rec.task_ids))
+        )
+        .scalars()
+        .all()
+    )
+    by_id = {t.id: t for t in tasks}
     out = []
     for tid in rec.task_ids:
-        task = db.get(MonitorTask, tid)
+        task = by_id.get(tid)
         if task is None:
             # R7 诚实注释（此前写"按新请求处理"不成立）：这里返回 None 后，上游
             # _claim_idempotency_key 撞唯一约束会看到 task_ids 非空的记录——
@@ -475,6 +512,11 @@ def batch_create(
             "task_limit",
         )
     # 断裂-8：批量内去重 + 与已有任务查重（409）；N7：门店号归一化后再查重
+    # R10-P1-2：用户已有任务单次查询后内存比对（此前每 combo 一次 _find_conflict，
+    # 每次全表拉回逐条比对，最多几百次查询）
+    owned = (
+        db.execute(select(MonitorTask).where(MonitorTask.user_id == user.id)).scalars().all()
+    )
     seen: set[tuple[str, frozenset]] = set()
     combos_norm = [(part.strip().upper(), store.strip().upper()) for part, store in combos]
     for pn, sn in combos_norm:
@@ -482,7 +524,7 @@ def batch_create(
         if key in seen:
             raise APIError(409, f"批量内重复：{pn} × {sn} 出现了多次", "task_conflict")
         seen.add(key)
-        conflict = _find_conflict(db, user.id, None, pn, [sn])
+        conflict = _find_conflict_in(owned, pn, [sn])
         if conflict:
             raise _conflict_error(conflict)
     channels = data.channels.model_dump(exclude_none=True)
@@ -511,9 +553,24 @@ def batch_create(
         )
         db.add(task)
         created.append(task)
+    # R10-P1-2：先 flush 拿到 PK（flush 不过期对象，取 t.id 不触发查询），再
+    # commit，最后单次 select + selectinload 预加载 states。此前是逐任务
+    # db.refresh（N 次查询）+ _task_out 逐任务懒加载 states（又是 N 次）。
+    db.flush()
+    created_ids = [t.id for t in created]
     db.commit()
-    for t in created:
-        db.refresh(t)
+    if created_ids:
+        created = (
+            db.execute(
+                select(MonitorTask)
+                .options(selectinload(MonitorTask.states))
+                .where(MonitorTask.id.in_(created_ids))
+                # id 按插入顺序递增，排序后即创建时间顺序（与此前 created 顺序一致）
+                .order_by(MonitorTask.id)
+            )
+            .scalars()
+            .all()
+        )
     if idem_rec is not None:
         idem_rec.task_ids = [t.id for t in created]
         db.add(idem_rec)
@@ -599,6 +656,16 @@ def renew_task(
     """
     task = _get_owned(task_id, user, x_device_id, db)
     now = datetime.utcnow()
+    # R10-P2-7：并发双击防护——updated_at 在去重窗口内说明上一次续期刚提交
+    #（updated_at 由 onupdate=_utcnow 自动推进），视为重复点击直接返回当前
+    # 状态，不再叠加 +30 天。纯 DB 口径，多 worker 同样有效；误伤场景（10 秒
+    # 内刚编辑过任务又点续期）只是本次不延长，用户再点一次即可。
+    if (
+        task.updated_at is not None
+        and (now - task.updated_at).total_seconds() < RENEW_DEDUP_WINDOW_SEC
+    ):
+        log.info("task_renew_duplicate_click", task_id=task_id)
+        return _task_out(task, db)
     base = max(now, task.expires_at) if task.expires_at else now
     task.expires_at = _clamp_expires(base + timedelta(days=30), anonymous=user is None)
     db.add(task)

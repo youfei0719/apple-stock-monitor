@@ -557,13 +557,19 @@ NOTIFICATIONS_PRUNE_KEY = "notifications_pruned_at"
 SESSIONS_PRUNE_KEY = "sessions_pruned_at"
 
 
+def _beijing_date_str(now: datetime) -> str:
+    """R10-P2-3：北京时间日期字符串（与 _today_start 的北京时间口径一致；
+    此前按 UTC 日期去重，"每天一次"的边界差 8 小时）。"""
+    return (now + timedelta(hours=8)).strftime("%Y-%m-%d")
+
+
 def _pruned_today(db: Session, key: str) -> bool:
     """今天是否已执行过该 prune（R6-P2-15：每天一次）。"""
-    return _get_kv(db, key).get("date") == _utcnow().strftime("%Y-%m-%d")
+    return _get_kv(db, key).get("date") == _beijing_date_str(_utcnow())
 
 
 def _mark_pruned(db: Session, key: str) -> None:
-    _set_kv(db, key, {"date": _utcnow().strftime("%Y-%m-%d")})
+    _set_kv(db, key, {"date": _beijing_date_str(_utcnow())})
 
 
 def prune_api_hits(db: Session, retention_days: int = API_HITS_RETENTION_DAYS) -> dict:

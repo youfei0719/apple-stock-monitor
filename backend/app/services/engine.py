@@ -138,7 +138,9 @@ def read_engine_status(db) -> dict:
             last_hb = datetime.fromisoformat(str(at_s).rstrip("Z"))
             running = (datetime.utcnow() - last_hb).total_seconds() < ENGINE_HEARTBEAT_TTL_SEC
         except ValueError:
-            pass
+            # R10-P2-5：心跳损坏时 fail-safe（running 保持 False），补 debug
+            # 日志方便排查（此前静默 pass，坏心跳无从发现）
+            log.debug("engine_heartbeat_unparsable", raw=str(at_s)[:64])
 
     def _iso(dt):
         return dt.isoformat() + "Z" if dt else None
@@ -551,9 +553,13 @@ class Engine:
         db.add(usage)
 
     def _trial_quota_state(self, db, task: MonitorTask) -> tuple[int, int, str]:
-        """返回 (used, limit, key)。匿名 trial 按 device_id 逐月计数。"""
+        """返回 (used, limit, key)。匿名 trial 按 device_id 逐月计数。
+
+        R10-P2-2：月界按北京时间（全库口径；此前按 UTC，每月 1 日 0:00–8:00
+        配额错月）。
+        """
         device_id = task.device_id or "unknown"
-        period = datetime.utcnow().strftime("%Y-%m")
+        period = (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m")
         key = f"trial_quota:{device_id}:{period}"
         used = int(get_config(db, key, {}).get("used", 0))
         limit = effective_tier_of(None)["push_limit"]

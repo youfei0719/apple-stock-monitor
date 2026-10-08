@@ -43,6 +43,7 @@ from app.schemas import (
     UserOut,
 )
 from app.services.engine import ensure_quota_anchor, quota_period_key
+from app.services.lifecycle import converge_task_limit
 from app.services.notifier import send_email
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -177,12 +178,16 @@ def _claim_device_tasks(db: Session, request: Request, user: User) -> dict:
     重新配置。
     R6-I9：因配额耗尽自动暂停的任务（paused_reason == "quota_exhausted"）
     自动恢复——用户已注册/登录，有新的配额周期可用；其他原因暂停的不动。
+    R10-P2-6：认领后做任务数冲突检测——用户已在档位上限时，认领会把总数
+    推超上限（匿名 trial 限额 1，最多超 1 个，影响小但真实）。超限时按
+    converge_task_limit 口径暂停超出的任务（reason="tier_limit"，升级后
+    I14 可恢复），返回 paused_over_limit 供提示文案使用。
 
-    返回 {"claimed": n, "secrets_stripped": m, "resumed": k}。
+    返回 {"claimed": n, "secrets_stripped": m, "resumed": k, "paused_over_limit": j}。
     """
     device_id = request.headers.get("x-device-id")
     if not device_id:
-        return {"claimed": 0, "secrets_stripped": 0, "resumed": 0}
+        return {"claimed": 0, "secrets_stripped": 0, "resumed": 0, "paused_over_limit": 0}
     rows = (
         db.execute(
             select(MonitorTask).where(
@@ -206,6 +211,7 @@ def _claim_device_tasks(db: Session, request: Request, user: User) -> dict:
             t.paused_reason = None
             resumed += 1
         db.add(t)
+    paused_over_limit = 0
     if rows:
         db.execute(
             update(Notification)
@@ -215,12 +221,20 @@ def _claim_device_tasks(db: Session, request: Request, user: User) -> dict:
             )
             .values(user_id=user.id)
         )
+        # R10-P2-6：认领把任务数推超档位上限时立即收敛（与 refund/patch_user
+        # 降档同口径），别让刚认领的任务静默吃超限配额
+        paused_over_limit = len(converge_task_limit(db, user, reason="tier_limit"))
         log.info("device_tasks_claimed", user_id=user.id, device_id=device_id, count=len(rows))
-    return {"claimed": len(rows), "secrets_stripped": secrets_stripped, "resumed": resumed}
+    return {
+        "claimed": len(rows),
+        "secrets_stripped": secrets_stripped,
+        "resumed": resumed,
+        "paused_over_limit": paused_over_limit,
+    }
 
 
 def _claim_notice(info: dict) -> str | None:
-    """把认领结果拼成给用户的提示文案（R6-I4/I9）。"""
+    """把认领结果拼成给用户的提示文案（R6-I4/I9；R10-P2-6 补超限暂停提示）。"""
     parts = []
     if info["claimed"]:
         parts.append(f"已认领 {info['claimed']} 个匿名任务")
@@ -228,6 +242,10 @@ def _claim_notice(info: dict) -> str | None:
         parts.append("认领任务的通知渠道密钥已清空，请重新配置通知渠道")
     if info["resumed"]:
         parts.append(f"{info['resumed']} 个因配额耗尽暂停的任务已自动恢复")
+    if info.get("paused_over_limit"):
+        parts.append(
+            f"任务数超出当前档位上限，{info['paused_over_limit']} 个任务已自动暂停"
+        )
     return "；".join(parts) if parts else None
 
 
@@ -360,6 +378,11 @@ def login(data: LoginIn, request: Request, response: Response, db: Session = Dep
     # （密码正确但未验证本来就是 403），且不记录登录失败（未验证账号的
     # 密码本来就不可用，不应计入 IP 锁定）。
     if not user.email_verified:
+        # R10-P2-4：计时侧信道加固——未验证分支同样跑一次 verify_password
+        #（结果丢弃，仅为消耗与真实校验同量级的 bcrypt 耗时），否则攻击者
+        # 可用"未验证+密码正确 → 403 快 / 未验证+密码错误 → 403 慢"的计时
+        # 差异预言密码正确性。
+        verify_password(data.password, user.password_hash)
         raise APIError(403, "邮箱尚未验证，请先完成邮箱验证", "email_unverified")
     if not verify_password(data.password, user.password_hash):
         fails = record_login_failure(ip)

@@ -191,7 +191,17 @@ async def afdian_webhook(request: Request, db: Session = Depends(get_db)):
     user_id_raw = order.get("user_id") or data.get("user_id") or ""
     remark = str(order.get("remark") or data.get("remark") or "")
     # total_amount 单位为分
-    amount_fen = int(float(order.get("total_amount") or data.get("total_amount") or 0))
+    # R10-P2-1：解析放进 try——total_amount 非数字（如空字符串/乱码）时
+    # 此前 ValueError → 500 → 爱发电无限重试黑洞。解析失败记为 None，下方
+    # 走 amount_mismatch 落库待人工（amount_cny 记 0），返回 200。
+    raw_amount = order.get("total_amount") or data.get("total_amount") or 0
+    try:
+        amount_fen = int(float(raw_amount))
+    except (TypeError, ValueError):
+        log.error(
+            "afdian_amount_unparsable", order_id=order_id, raw_amount=str(raw_amount)[:50]
+        )
+        amount_fen = None
 
     if not order_id:
         raise APIError(400, "缺少订单号", "bad_order")
@@ -214,7 +224,7 @@ async def afdian_webhook(request: Request, db: Session = Depends(get_db)):
                 user_id=user.id if user else None,
                 order_id=order_id,
                 plan=plan_id,
-                amount_cny=amount_fen / 100,
+                amount_cny=(amount_fen / 100) if amount_fen is not None else 0,
                 tier_from=effective_tier(user) if user else "",
                 tier_to="",
                 status="unknown_plan",
@@ -242,7 +252,8 @@ async def afdian_webhook(request: Request, db: Session = Depends(get_db)):
     # 金额与档位价比对：不符不再直接 400 拒绝（断裂-15）。
     # 爱发电已扣款（不退），拒绝会导致"钱货两空"黑洞；改为落库待人工处理。
     expected_fen = EXPECTED_AMOUNT_FEN[tier_to]
-    if amount_fen != expected_fen:
+    # R10-P2-1：amount_fen 为 None（解析失败）同样走金额异常待人工，不 500。
+    if amount_fen is None or amount_fen != expected_fen:
         log.error(
             "afdian_amount_mismatch",
             order_id=order_id,
@@ -258,7 +269,7 @@ async def afdian_webhook(request: Request, db: Session = Depends(get_db)):
                 user_id=user.id if user else None,
                 order_id=order_id,
                 plan=plan_id,
-                amount_cny=amount_fen / 100,
+                amount_cny=(amount_fen / 100) if amount_fen is not None else 0,
                 tier_from=effective_tier(user) if user else "",
                 tier_to=tier_to,
                 status="amount_mismatch",
