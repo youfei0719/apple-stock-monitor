@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api, type Payment, type Plan, type Quota } from '../lib/api';
+import { api, type ChannelHealth, type Payment, type Plan, type Quota } from '../lib/api';
 import { useApp } from '../components/App';
+import { NotificationHistory } from '../components/NotifyChannels';
 import { Card, EmptyState, ErrorState, LoadingState, PageHeader, PrimaryButton } from '../components/ui';
 
 const TIER_LABEL: Record<string, string> = {
@@ -16,6 +17,9 @@ const CHANNEL_LABEL: Record<string, string> = {
   email: '邮件',
   sms: '短信',
   bark: 'Bark',
+  wecom: '企业微信',
+  dingtalk: '钉钉',
+  feishu: '飞书',
 };
 
 /** 按后端 GET /plans 实际字段（tier/name/price_cny/tasks_limit/push_limit/channels/history/priority/refresh_interval_sec）渲染 */
@@ -37,12 +41,37 @@ function planPeriodLabel(p: Plan): string {
   return `¥${p.price_cny} / 月`;
 }
 
+/** 北京时间格式化（配额按购买日 +30 天滚动，展示时标注北京时间） */
+function fmtBeijingDate(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  return new Date(iso).toLocaleDateString('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+}
+
 function QuotaBar({ label, used, limit }: { label: string; used: number; limit: number }) {
   const pct = limit > 0 ? Math.min(100, (used / limit) * 100) : 0;
+  const warn = pct >= 80 && pct < 100;
+  const full = pct >= 100;
   return (
     <div>
       <div className="flex items-center justify-between text-sm mb-1.5">
-        <span className="text-sub">{label}</span>
+        <span className="text-sub">
+          {label}
+          {full && (
+            <span className="ml-2 text-[11px] px-1.5 py-0.5 rounded-pill bg-bad/20 text-bad font-medium">
+              已用完
+            </span>
+          )}
+          {warn && (
+            <span className="ml-2 text-[11px] px-1.5 py-0.5 rounded-pill bg-warn/20 text-warn font-medium">
+              即将用完
+            </span>
+          )}
+        </span>
         <span className="mono">
           {used}
           <span className="text-faint"> / {limit}</span>
@@ -50,11 +79,83 @@ function QuotaBar({ label, used, limit }: { label: string; used: number; limit: 
       </div>
       <div className="h-2 rounded-full bg-bg overflow-hidden">
         <div
-          className={`h-full rounded-full transition-all ${pct >= 90 ? 'bg-bad' : 'bg-accent'}`}
+          className={`h-full rounded-full transition-all ${full ? 'bg-bad' : warn ? 'bg-warn' : 'bg-accent'}`}
           style={{ width: `${pct}%` }}
         />
       </div>
     </div>
+  );
+}
+
+function ChannelHealthCard() {
+  const [channels, setChannels] = useState<ChannelHealth[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api
+      .channelHealth()
+      .then((r) => setChannels(r.channels))
+      .catch((e) => {
+        setChannels([]);
+        setError(e instanceof Error ? e.message : '加载失败');
+      });
+  }, []);
+
+  return (
+    <section>
+      <h2 className="text-[13px] font-semibold text-sub mb-2">通道健康</h2>
+      <Card className="p-4 rise-in">
+        {error && <p className="text-xs text-bad">{error}</p>}
+        {channels === null && <LoadingState rows={2} />}
+        {channels !== null && channels.length === 0 && !error && (
+          <EmptyState title="暂无通道数据" action={null} />
+        )}
+        {channels !== null && channels.length > 0 && (
+          <div className="space-y-3">
+            {channels.map((c) => (
+              <div key={c.key} className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium flex items-center gap-2">
+                    {CHANNEL_LABEL[c.key] ?? c.name ?? c.key}
+                    <span
+                      className={`text-[10px] px-1.5 py-0.5 rounded-pill font-medium ${
+                        c.configured ? 'bg-ok/10 text-ok' : 'bg-bg text-faint'
+                      }`}
+                    >
+                      {c.configured ? '已配置' : '未配置'}
+                    </span>
+                  </p>
+                  <p className="mt-0.5 text-xs text-sub">
+                    近 7 天成功率{' '}
+                    <span className="mono text-ink">
+                      {c.success_rate_7d == null ? '暂无数据' : `${(c.success_rate_7d * 100).toFixed(0)}%`}
+                    </span>
+                  </p>
+                  {c.last_failure_at && (
+                    <p className="mt-0.5 text-xs text-bad">
+                      最后失败：
+                      {new Date(c.last_failure_at).toLocaleString('zh-CN', {
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                      {c.last_failure_reason ? ` · ${c.last_failure_reason}` : ''}
+                    </p>
+                  )}
+                </div>
+                {c.configured && c.success_rate_7d != null && c.success_rate_7d < 1 && (
+                  <span className="shrink-0 w-2 h-2 mt-1.5 rounded-full bg-warn" title="有失败记录" />
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        <p className="mt-3 text-[11px] text-faint">
+          通道挂掉时请检查配置或换通道重试；通知历史里可查看每次发送的失败原因。
+        </p>
+      </Card>
+    </section>
   );
 }
 
@@ -64,15 +165,23 @@ export default function Me() {
   const [plans, setPlans] = useState<Plan[] | null>(null);
   const [quota, setQuota] = useState<Quota | null>(null);
   const [payments, setPayments] = useState<Payment[] | null>(null);
+  const [afdianUrl, setAfdianUrl] = useState<string>('https://afdian.com');
   const [error, setError] = useState<string | null>(null);
 
   const load = async () => {
     setError(null);
     try {
-      const [p, q, pay] = await Promise.all([api.plans(), api.quota(), api.payments()]);
-      setPlans(p);
+      const [p, q, pay, cfg] = await Promise.all([
+        api.plans(),
+        api.quota(),
+        api.payments(),
+        api.siteConfig().catch(() => null),
+      ]);
+      // /plans 不再含 trial；防御性过滤掉体验档
+      setPlans(p.filter((x) => x.tier !== 'trial'));
       setQuota(q);
       setPayments(pay);
+      if (cfg?.afdian_page_url) setAfdianUrl(cfg.afdian_page_url);
     } catch (e) {
       setError(e instanceof Error ? e.message : '加载失败');
     }
@@ -87,6 +196,9 @@ export default function Me() {
     navigate('/login', { replace: true });
   };
 
+  const tierLabel = `${TIER_LABEL[me.tier] ?? me.tier}版`;
+  const expiry = quota ? fmtBeijingDate(quota.tier_expires_at) : null;
+
   return (
     <div>
       <PageHeader title="我的" subtitle={me.email} />
@@ -97,7 +209,12 @@ export default function Me() {
             <div>
               <p className="text-xs text-white/60">当前会员</p>
               <p className="mt-1 text-xl font-semibold">
-                {TIER_LABEL[me.tier] ?? me.tier}
+                {tierLabel}
+                {expiry && (
+                  <span className="ml-2 text-sm font-normal text-white/70">
+                    · 到期于 {expiry}（北京时间）
+                  </span>
+                )}
               </p>
             </div>
             <span className="mono text-xs text-white/60">#{String(me.id)}</span>
@@ -111,11 +228,23 @@ export default function Me() {
                 {' · '}
                 {quota.period}
               </p>
+              <p className="text-[11px] text-white/50">
+                配额按实际发送成功的通知条数扣减 · 每购买日起 30 天滚动重置
+              </p>
             </div>
           )}
         </Card>
 
-        {/* 四档会员 */}
+        {/* 通道健康 */}
+        <ChannelHealthCard />
+
+        {/* 通知历史 */}
+        <section>
+          <h2 className="text-[13px] font-semibold text-sub mb-2">通知历史</h2>
+          <NotificationHistory />
+        </section>
+
+        {/* 会员档位 */}
         <section>
           <h2 className="text-[13px] font-semibold text-sub mb-2">会员档位</h2>
           {error && <ErrorState message={error} onRetry={load} />}
@@ -164,12 +293,12 @@ export default function Me() {
             通过爱发电赞助开通，支付成功后系统自动开通对应档位（标准 ¥19/月 · Pro ¥39/月）。
           </p>
           <div className="mt-4">
-            <PrimaryButton onClick={() => window.open('https://afdian.com', '_blank', 'noopener')}>
+            <PrimaryButton onClick={() => window.open(afdianUrl, '_blank', 'noopener')}>
               前往爱发电开通
             </PrimaryButton>
           </div>
           <p className="mt-2 text-xs text-faint text-center">
-            爱发电订单号请与账号邮箱保持一致，以便自动开通
+            赞助时在备注 / 留言中填写你的用户 ID #{me.id} 或注册邮箱，以便自动开通
           </p>
         </Card>
 

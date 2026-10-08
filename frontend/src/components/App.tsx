@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate, useOutletContext } from 'react-router-dom';
-import { api, type Me, type Task } from '../lib/api';
+import { api, isTaskExpired, type Me, type Task, type TaskStatusFilter } from '../lib/api';
 import IslandStatus from './IslandStatus';
 
 const TABS = [
@@ -13,7 +13,7 @@ const TABS = [
 
 function BottomNav() {
   const location = useLocation();
-  if (location.pathname === '/login') return null;
+  if (location.pathname === '/login' || location.pathname === '/verify') return null;
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white/90 backdrop-blur border-t border-line safe-bottom">
       <div className="mx-auto max-w-lg grid grid-cols-5 h-[64px]">
@@ -51,9 +51,9 @@ export default function App() {
   const [me, setMe] = useState<Me | null | undefined>(undefined);
   const [tasks, setTasks] = useState<Task[]>([]);
 
-  const refreshTasks = useCallback(async () => {
+  const refreshTasks = useCallback(async (status: TaskStatusFilter = 'all') => {
     try {
-      setTasks(await api.tasks());
+      setTasks(await api.tasks(status));
     } catch {
       /* 未登录时 /tasks 会 401，忽略 */
     }
@@ -74,8 +74,11 @@ export default function App() {
   }, []);
 
   // 后端 latest 无 buy_url（通知直达链接只在通知里生成），有货时不再传 buyUrl
-  const hotTask = tasks.find((t) => !t.paused && (t.latest?.available_count ?? 0) > 0);
-  const activeCount = tasks.filter((t) => !t.paused).length;
+  // 已过期任务不参与灵动岛展示
+  const hotTask = tasks.find(
+    (t) => !t.paused && !isTaskExpired(t) && (t.latest?.available_count ?? 0) > 0,
+  );
+  const activeCount = tasks.filter((t) => !t.paused && !isTaskExpired(t)).length;
 
   if (me === undefined) {
     return (
@@ -89,7 +92,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-bg text-ink font-sans">
-      {location.pathname !== '/login' && (
+      {location.pathname !== '/login' && location.pathname !== '/verify' && (
         <IslandStatus
           taskCount={activeCount}
           hasStock={!!hotTask}
@@ -107,7 +110,7 @@ export default function App() {
 export interface AppContext {
   me: Me;
   tasks: Task[];
-  refreshTasks: () => Promise<void>;
+  refreshTasks: (status?: TaskStatusFilter) => Promise<void>;
 }
 
 export function useApp(): AppContext {

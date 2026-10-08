@@ -39,6 +39,11 @@ const META: Record<StockState, { label: string; cls: string; dot: string }> = {
     cls: 'bg-white text-faint border border-line',
     dot: 'bg-faint',
   },
+  expired: {
+    label: '已过期',
+    cls: 'bg-[#ececee] text-[#6e6e73] border-transparent',
+    dot: 'bg-[#aeaeb2]',
+  },
 };
 
 export default function StockStateBadge({

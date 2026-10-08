@@ -2,7 +2,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, type Product, type StoreRef, type Task, type TaskChannels } from '../lib/api';
 import { useApp } from '../components/App';
+import NotifyChannels from '../components/NotifyChannels';
 import { Card, EmptyState, ErrorState, LoadingState, PageHeader, PrimaryButton } from '../components/ui';
+
+/** 持续提醒间隔下限（秒）：后端 ge=3600 */
+const MIN_REPEAT_INTERVAL_SEC = 3600;
 
 const CATEGORIES = [
   { id: 'iphone', label: 'iPhone' },
@@ -37,8 +41,7 @@ export default function AddMonitor() {
   const [mode, setMode] = useState<'instant' | 'confirmed'>('instant');
   // 连续确认模式下的重复提醒间隔（秒）；后端字段 repeat_interval_sec 已存在，batch 接口走 PATCH 补齐
   const [repeatInterval, setRepeatInterval] = useState('');
-  const [barkKey, setBarkKey] = useState('');
-  const [email, setEmail] = useState('');
+  const [channels, setChannels] = useState<TaskChannels>({});
 
   const [submitting, setSubmitting] = useState(false);
   const [submitErr, setSubmitErr] = useState<string | null>(null);
@@ -115,6 +118,14 @@ export default function AddMonitor() {
       setSubmitErr('请至少选择一家 Apple 直营店');
       return;
     }
+    // 持续提醒间隔下限 3600 秒（与后端 ge=3600 对齐）
+    const ri = parseInt(repeatInterval, 10);
+    if (mode === 'confirmed' && repeatInterval.trim()) {
+      if (!Number.isFinite(ri) || ri < MIN_REPEAT_INTERVAL_SEC) {
+        setSubmitErr(`持续提醒间隔至少 ${MIN_REPEAT_INTERVAL_SEC} 秒（1 小时），防止一夜烧完月度配额`);
+        return;
+      }
+    }
     setSubmitting(true);
     try {
       const created = await api.batchTasks({
@@ -125,20 +136,16 @@ export default function AddMonitor() {
       });
       // batch 接口只接受 part_numbers/store_numbers/name_template，
       // mode / group / 渠道 / repeat_interval_sec 按契约走 PATCH 逐个补齐
-      const channels: TaskChannels = {};
-      if (barkKey.trim()) channels.bark_key = barkKey.trim();
-      if (email.trim()) channels.email = email.trim();
       const patch: Partial<Task> = { mode };
       if (group.trim()) patch.group = group.trim();
       if (Object.keys(channels).length > 0) patch.channels = channels;
-      const ri = parseInt(repeatInterval, 10);
-      if (mode === 'confirmed' && repeatInterval.trim() && Number.isFinite(ri) && ri > 0) {
+      if (mode === 'confirmed' && repeatInterval.trim() && Number.isFinite(ri)) {
         patch.repeat_interval_sec = ri;
       }
       if (mode !== 'instant' || patch.group || patch.channels || patch.repeat_interval_sec) {
         await Promise.all(created.map((t) => api.updateTask(t.id, patch)));
       }
-      await refreshTasks();
+      await refreshTasks('active');
       navigate('/');
     } catch (e) {
       setSubmitErr(e instanceof Error ? e.message : '创建失败');
@@ -146,6 +153,14 @@ export default function AddMonitor() {
       setSubmitting(false);
     }
   };
+
+  // 预计月消耗（上限估算，按成功发送计）：ceil(30*24*3600 / interval) × 门店数
+  const riNum = parseInt(repeatInterval, 10);
+  const showEstimate =
+    mode === 'confirmed' && Number.isFinite(riNum) && riNum >= MIN_REPEAT_INTERVAL_SEC;
+  const monthlyEstimate = showEstimate
+    ? Math.ceil((30 * 24 * 3600) / riNum) * Math.max(1, pickedStores.size)
+    : 0;
 
   return (
     <div>
@@ -323,27 +338,32 @@ export default function AddMonitor() {
               ))}
             </div>
             {mode === 'confirmed' && (
-              <input
-                value={repeatInterval}
-                onChange={(e) => setRepeatInterval(e.target.value)}
-                inputMode="numeric"
-                placeholder="持续提醒间隔（秒），留空则持续有货只提醒一次"
-                className="w-full px-3 py-2.5 rounded-card-sm bg-bg text-sm outline-none placeholder:text-faint mono"
-              />
+              <>
+                <input
+                  value={repeatInterval}
+                  onChange={(e) => setRepeatInterval(e.target.value)}
+                  inputMode="numeric"
+                  placeholder="持续提醒间隔（秒，最小 3600）"
+                  className="w-full px-3 py-2.5 rounded-card-sm bg-bg text-sm outline-none placeholder:text-faint mono"
+                />
+                {showEstimate && (
+                  <p className="text-xs text-sub leading-relaxed">
+                    预计月消耗 ≈ <span className="mono text-ink font-medium">{monthlyEstimate}</span>{' '}
+                    次
+                    <span className="text-faint">（上限估算，按实际发送成功的通知条数计）</span>
+                  </p>
+                )}
+                <p className="text-[11px] text-faint leading-relaxed">
+                  持续有货时每隔该时间再提醒一次；间隔至少 1 小时，防止快速烧完月度配额。
+                </p>
+              </>
             )}
-            <input
-              value={barkKey}
-              onChange={(e) => setBarkKey(e.target.value)}
-              placeholder="Bark Key（推送渠道，可选）"
-              className="w-full px-3 py-2.5 rounded-card-sm bg-bg text-sm outline-none placeholder:text-faint mono"
-            />
-            <input
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="邮箱（推送渠道，可选）"
-              className="w-full px-3 py-2.5 rounded-card-sm bg-bg text-sm outline-none placeholder:text-faint"
-            />
           </Card>
+        </section>
+
+        {/* 通知渠道（与任务详情页同一套表单） */}
+        <section>
+          <NotifyChannels value={channels} onChange={setChannels} />
         </section>
 
         {submitErr && (

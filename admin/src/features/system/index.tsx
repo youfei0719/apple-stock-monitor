@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Activity, Inbox, Gauge, ShieldCheck } from 'lucide-react'
+import { Activity, Inbox, Gauge, ShieldCheck, Zap } from 'lucide-react'
+import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
+import { Switch } from '@/components/ui/switch'
 import {
   Card,
   CardContent,
@@ -25,6 +27,7 @@ import {
   getSystem,
   getAudit,
   getLogTail,
+  setPeakMode,
   type SystemStatus,
   type AuditEntry,
   USE_MOCK,
@@ -81,12 +84,26 @@ export function System() {
   const [sys, setSys] = useState<SystemStatus | null>(null)
   const [logs, setLogs] = useState<string[] | null>(null)
   const [audit, setAudit] = useState<AuditEntry[] | null>(null)
+  const [peakBusy, setPeakBusy] = useState(false)
 
   useEffect(() => {
     getSystem().then(setSys).catch(() => setSys(null))
     getLogTail().then(setLogs).catch(() => setLogs([]))
     getAudit().then(setAudit).catch(() => setAudit([]))
   }, [])
+
+  async function togglePeakMode(enabled: boolean) {
+    setPeakBusy(true)
+    try {
+      const s = await setPeakMode(enabled)
+      setSys((prev) => (prev ? { ...prev, peak_mode: s.peak_mode ?? enabled } : prev))
+      toast.success(enabled ? '已开启高峰模式' : '已关闭高峰模式')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '切换失败')
+    } finally {
+      setPeakBusy(false)
+    }
+  }
 
   const loading = sys === null
   // 后端 engine 是 dict：{running, last_heartbeat, last_tick_at, rounds_total, rounds_ok, last_error}
@@ -163,6 +180,33 @@ export function System() {
             loading={loading}
           />
         </div>
+
+        {/* 高峰模式开关（对标 DING果：新品期 trial/free 降速、pro 优先） */}
+        <Card className='mt-4 rounded-3xl border-[#ff9f0a]/30'>
+          <CardHeader className='flex flex-row items-center justify-between'>
+            <div>
+              <CardTitle className='flex items-center gap-2'>
+                <Zap className='h-4.5 w-4.5 text-[#ff9f0a]' />
+                高峰模式
+                {sys?.peak_mode && (
+                  <Badge className='rounded-full bg-[#ff9f0a]/10 text-[#b26a00]'>
+                    ● 已开启
+                  </Badge>
+                )}
+              </CardTitle>
+              <CardDescription className='mt-1'>
+                开启后：trial / free 轮询间隔拉长、catalog 后台刷新暂停、pro 任务优先。
+                适用于新品发售等全站流量高峰。
+              </CardDescription>
+            </div>
+            <Switch
+              checked={sys?.peak_mode === true}
+              disabled={loading || peakBusy}
+              onCheckedChange={togglePeakMode}
+              aria-label='高峰模式开关'
+            />
+          </CardHeader>
+        </Card>
 
         <div className='mt-4 grid gap-4 lg:grid-cols-2'>
           <Card className='rounded-3xl'>

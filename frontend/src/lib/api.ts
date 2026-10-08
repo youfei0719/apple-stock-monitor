@@ -52,7 +52,10 @@ export type StockState =
   | 'unknown'
   | 'verifying'
   | 'cooling'
-  | 'paused';
+  | 'paused'
+  | 'expired';
+
+export type TaskStatusFilter = 'active' | 'expired' | 'all';
 
 export type Tier = 'trial' | 'free' | 'standard' | 'pro';
 
@@ -63,9 +66,15 @@ export interface StoreRef {
   province?: string;
 }
 
+/** 后端 notifier 期望 webhooks 为 [{url, platform}]（platform: wecom|dingtalk|feishu） */
+export interface WebhookChannel {
+  url: string;
+  platform: 'wecom' | 'dingtalk' | 'feishu' | string;
+}
+
 export interface TaskChannels {
   bark_key?: string;
-  webhooks?: string[];
+  webhooks?: WebhookChannel[];
   email?: string;
 }
 
@@ -104,12 +113,22 @@ export interface Task {
   latest?: TaskLatest;
 }
 
-/** 从 latest 聚合展示用状态（Home/App 共用） */
+/** 任务是否已过期（expires_at 在过去）——expired 展示态的判定依据 */
+export function isTaskExpired(task: Task): boolean {
+  if (!task.expires_at) return false;
+  return new Date(task.expires_at).getTime() < Date.now();
+}
+
+/** 从 latest 聚合展示用状态（Home/App 共用）
+ *  - expired：任务过期（终态，优先于 paused）
+ *  - partialUnknown：unknown 与其他状态混合（如 3 unknown + 2 unavailable），unknown 不再被淹没
+ */
 export function summarizeTask(task: Task): {
   state: StockState;
   availableCount: number;
   total: number;
   updatedAt?: string;
+  partialUnknown: boolean;
 } {
   const latest = task.latest;
   const rows: TaskLatestRow[] = [];
@@ -122,17 +141,27 @@ export function summarizeTask(task: Task): {
     if (r.updated_at && (!updatedAt || r.updated_at > updatedAt)) updatedAt = r.updated_at;
   }
   const states = rows.map((r) => r.state);
+  const hasUnknown = states.includes('unknown');
   let state: StockState = 'unknown';
-  if (task.paused) state = 'paused';
+  if (isTaskExpired(task)) state = 'expired';
+  else if (task.paused) state = 'paused';
   else if (states.includes('available')) state = 'available';
   else if (states.includes('verifying')) state = 'verifying';
   else if (states.includes('cooling')) state = 'cooling';
   else if (states.length > 0 && !states.every((s) => s === 'unknown')) state = 'unavailable';
+  // 混合 unknown：有 unknown 但不全是 unknown，且展示态不是 available/verifying/expired
+  const partialUnknown =
+    state !== 'expired' &&
+    state !== 'available' &&
+    state !== 'verifying' &&
+    hasUnknown &&
+    states.some((s) => s !== 'unknown');
   return {
     state,
     availableCount: latest?.available_count ?? 0,
     total: latest?.total ?? states.length,
     updatedAt,
+    partialUnknown,
   };
 }
 
@@ -184,6 +213,29 @@ export interface Quota {
   tasks_limit: number;
   refresh_interval_sec: number;
   period: string;
+  /** 会员到期时间（ISO，购买日 +30 天滚动）；null 表示免费/无到期 */
+  tier_expires_at: string | null;
+  /** 配额重置时间（ISO，购买日 +30 天滚动） */
+  quota_reset_at: string | null;
+}
+
+export interface SiteConfig {
+  afdian_page_url: string;
+}
+
+export interface ChannelHealth {
+  key: 'bark' | 'wecom' | 'dingtalk' | 'feishu' | 'email' | string;
+  name: string;
+  configured: boolean;
+  success_rate_7d: number | null;
+  last_failure_at: string | null;
+  last_failure_reason: string | null;
+}
+
+/** /notifications 历史记录：StockEvent 基础上带发送状态与失败原因 */
+export interface NotificationRecord extends StockEvent {
+  status?: 'sent' | 'failed' | 'skipped' | string | null;
+  failure_reason?: string | null;
 }
 
 export interface StockEvent {
@@ -251,10 +303,27 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     }),
+  verifyEmail: (email: string, code: string) =>
+    req<{ ok: boolean }>('/auth/verify-email', {
+      method: 'POST',
+      body: JSON.stringify({ email, code }),
+    }),
+  /** 重发验证码：后端若未实现该接口（404），调用方按"重新注册获取验证码"兜底 */
+  resendCode: (email: string) =>
+    req<{ ok: boolean }>('/auth/resend-code', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    }),
   logout: () => req<void>('/auth/logout', { method: 'POST' }),
   me: () => req<Me>('/me'),
 
-  tasks: () => req<Task[]>('/tasks'),
+  tasks: (status: TaskStatusFilter = 'all') => {
+    const q = status === 'all' ? '' : `?status=${encodeURIComponent(status)}`;
+    return req<Task[]>(`/tasks${q}`);
+  },
+  task: (id: string | number) => req<Task>(`/tasks/${id}`),
+  renewTask: (id: string | number) =>
+    req<{ ok: boolean; expires_at: string }>(`/tasks/${id}/renew`, { method: 'POST' }),
   createTask: (payload: Partial<Task>) =>
     req<Task>('/tasks', { method: 'POST', body: JSON.stringify(payload) }),
   batchTasks: (payload: { part_numbers: string[]; store_numbers: string[]; name_template: string }) =>
@@ -273,8 +342,14 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ channel, target }),
     }),
-  notifications: (task_id?: string) =>
-    req<StockEvent[]>(`/notifications${task_id ? `?task_id=${encodeURIComponent(task_id)}` : ''}`),
+  notifications: (task_id?: string | number) =>
+    req<NotificationRecord[]>(
+      `/notifications${task_id ? `?task_id=${encodeURIComponent(String(task_id))}` : ''}`,
+    ),
+  channelHealth: () =>
+    req<{ channels: ChannelHealth[] }>('/notify/channels/health'),
+
+  siteConfig: () => req<SiteConfig>('/site-config'),
 
   events: (params: { part_number?: string; store?: string; days?: number } = {}) => {
     const q = new URLSearchParams();
@@ -284,7 +359,14 @@ export const api = {
     return req<StockEvent[]>(`/history/events?${q.toString()}`);
   },
   releases: (days = 7) => req<ReleaseRecord[]>(`/history/releases?days=${days}`),
-  ranking: (days = 1) => req<RankingItem[]>(`/analytics/ranking?days=${days}`),
+  /** 后端返回 {"scope": "personal", items|ranking: [...]}；兼容旧的纯数组形状 */
+  ranking: async (days = 1): Promise<RankingItem[]> => {
+    const data = await req<
+      RankingItem[] | { scope?: string; items?: RankingItem[]; ranking?: RankingItem[] }
+    >(`/analytics/ranking?days=${days}`);
+    if (Array.isArray(data)) return data;
+    return data.items ?? data.ranking ?? [];
+  },
   analyticsOverview: () => req<Record<string, unknown>>('/analytics/overview'),
   guide: () => req<PurchaseGuide>('/guide/purchase'),
   pollStats: () => req<PollStats>('/stats/poll'),

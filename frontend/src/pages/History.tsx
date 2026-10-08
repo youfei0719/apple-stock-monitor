@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
-import { api, type PollStats, type RankingItem, type ReleaseRecord, type StockEvent } from '../lib/api';
+import { Link } from 'react-router-dom';
+import { api, ApiError, type PollStats, type RankingItem, type ReleaseRecord, type StockEvent } from '../lib/api';
 import StockStateBadge from '../components/StockStateBadge';
 import { Card, EmptyState, ErrorState, LoadingState, PageHeader } from '../components/ui';
 
 const TABS = [
   { id: 'events', label: '活动日志' },
   { id: 'releases', label: '放货记录' },
-  { id: 'ranking', label: '全国榜单' },
+  { id: 'ranking', label: '我的放货分布' },
   { id: 'stats', label: '数据分析' },
 ] as const;
 
@@ -27,6 +28,7 @@ export default function History() {
   const [error, setError] = useState<string | null>(null);
   const [events, setEvents] = useState<StockEvent[] | null>(null);
   const [releases, setReleases] = useState<ReleaseRecord[] | null>(null);
+  const [releasesForbidden, setReleasesForbidden] = useState(false);
   const [ranking, setRanking] = useState<RankingItem[] | null>(null);
   const [stats, setStats] = useState<{ poll?: PollStats; overview?: Record<string, unknown> } | null>(null);
 
@@ -35,7 +37,18 @@ export default function History() {
     setError(null);
     try {
       if (t === 'events' && !events) setEvents(await api.events({ days: 30 }));
-      if (t === 'releases' && !releases) setReleases(await api.releases(7));
+      if (t === 'releases' && !releases) {
+        try {
+          setReleases(await api.releases(7));
+        } catch (e) {
+          // 无权限（tier_required）→ 渲染升级卡片而非报错页（断裂-18）
+          if (e instanceof ApiError && e.code === 'tier_required') {
+            setReleasesForbidden(true);
+          } else {
+            throw e;
+          }
+        }
+      }
       if (t === 'ranking' && !ranking) setRanking(await api.ranking(1));
       if (t === 'stats' && !stats) {
         const [poll, overview] = await Promise.all([api.pollStats(), api.analyticsOverview()]);
@@ -59,7 +72,7 @@ export default function History() {
 
     if (tab === 'events') {
       if (!events || events.length === 0)
-        return <EmptyState title="暂无活动日志" hint="有货事件会出现在这里" action={null} />;
+        return <EmptyState title="数据积累中" hint="有货事件会出现在这里" action={null} />;
       // 后端 GET /history/events 返回 {id, task_id, part_number, title, body, link, channel, created_at}
       return (
         <div className="space-y-2.5">
@@ -92,8 +105,25 @@ export default function History() {
     }
 
     if (tab === 'releases') {
+      if (releasesForbidden)
+        return (
+          <Card className="p-6 rise-in text-center bg-island text-white">
+            <p className="text-[15px] font-medium">完整历史数据是标准版权益</p>
+            <p className="mt-1.5 text-sm text-white/70">
+              开通标准版后可查看全部放货记录，不再错过每一次放货。
+            </p>
+            <div className="mt-4">
+              <Link
+                to="/me"
+                className="inline-block px-8 py-3 rounded-pill bg-accent text-white text-sm font-medium active:scale-95 transition"
+              >
+                去开通
+              </Link>
+            </div>
+          </Card>
+        );
       if (!releases || releases.length === 0)
-        return <EmptyState title="暂无放货记录" hint="近 7 天的放货会记录在这里" action={null} />;
+        return <EmptyState title="数据积累中" hint="近 7 天的放货会记录在这里" action={null} />;
       // 后端 GET /history/releases 返回 {day, part_number, events}（按天×机型聚合）
       return (
         <div className="space-y-2.5">
@@ -114,12 +144,19 @@ export default function History() {
 
     if (tab === 'ranking') {
       if (!ranking || ranking.length === 0)
-        return <EmptyState title="暂无榜单数据" hint="今日还没有放货记录" action={null} />;
-      // 后端 GET /analytics/ranking 返回 {city, events}；max 兜底 1 防 NaN
+        return (
+          <EmptyState
+            title="数据积累中"
+            hint="仅统计你自己的到货通知，今日还没有放货记录"
+            action={null}
+          />
+        );
+      // 后端 GET /analytics/ranking 返回 {city, events}（scope=personal：只统计你自己的到货通知）；max 兜底 1 防 NaN
       const max = Math.max(...ranking.map((r) => r.events), 1);
       return (
         <Card className="p-4 rise-in">
-          <p className="text-sm font-medium mb-3">城市放货排行 · 今日</p>
+          <p className="text-sm font-medium mb-1">我的放货分布 · 今日</p>
+          <p className="text-xs text-faint mb-3">仅统计你自己的到货通知</p>
           <div className="space-y-3">
             {ranking.map((r, i) => (
               <div key={r.city}>
@@ -147,7 +184,7 @@ export default function History() {
     }
 
     // stats：后端 GET /stats/poll 返回 {tasks, polled_tasks, success_rate, avg_response_ms, last_poll_at, engine}
-    if (!stats) return <EmptyState title="暂无数据" action={null} />;
+    if (!stats) return <EmptyState title="数据积累中" action={null} />;
     const poll = stats.poll;
     const overview = stats.overview;
     return (
@@ -182,7 +219,7 @@ export default function History() {
 
   return (
     <div>
-      <PageHeader title="历史" subtitle="活动日志 · 放货记录 · 全国榜单" />
+      <PageHeader title="历史" subtitle="活动日志 · 放货记录 · 我的放货分布" />
       <div className="px-4 pb-4">
         <div className="flex gap-2 mb-4 overflow-x-auto">
           {TABS.map((t) => (

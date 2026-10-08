@@ -1,29 +1,62 @@
 import { useState } from 'react';
-import { api } from '../lib/api';
+import { useNavigate } from 'react-router-dom';
+import { api, ApiError } from '../lib/api';
 import { Card, PageHeader, PrimaryButton } from '../components/ui';
 
 export default function Login() {
+  const navigate = useNavigate();
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [unverified, setUnverified] = useState(false);
+  const [resending, setResending] = useState(false);
 
   const submit = async () => {
     setError(null);
+    setUnverified(false);
     if (!email.trim() || !password) {
       setError('请填写邮箱和密码');
       return;
     }
     setBusy(true);
     try {
-      if (mode === 'login') await api.login(email.trim(), password);
-      else await api.register(email.trim(), password);
-      window.location.href = '/';
+      if (mode === 'login') {
+        await api.login(email.trim(), password);
+        window.location.href = '/';
+      } else {
+        await api.register(email.trim(), password);
+        // 注册成功 → 跳邮箱验证页（6 位验证码）
+        navigate('/verify', { state: { email: email.trim() }, replace: true });
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : '操作失败');
+      if (e instanceof ApiError && e.code === 'email_unverified') {
+        setUnverified(true);
+        setError('请先验证邮箱');
+      } else {
+        setError(e instanceof Error ? e.message : '操作失败');
+      }
     } finally {
       setBusy(false);
+    }
+  };
+
+  const resend = async () => {
+    setResending(true);
+    setError(null);
+    try {
+      await api.resendCode(email.trim());
+      navigate('/verify', { state: { email: email.trim() } });
+    } catch (e) {
+      // 后端若没有重发接口（404），提示重新注册获取验证码
+      if (e instanceof ApiError && e.status === 404) {
+        setError('暂无重发入口：请切换到「注册」重新注册获取新验证码');
+      } else {
+        setError(e instanceof Error ? e.message : '重发失败');
+      }
+    } finally {
+      setResending(false);
     }
   };
 
@@ -70,9 +103,29 @@ export default function Login() {
             />
           </div>
           {error && <p className="mt-3 text-sm text-bad text-center">{error}</p>}
+          {unverified && (
+            <div className="mt-4 rounded-card-sm bg-bg p-4 text-center">
+              <p className="text-sm text-sub">该邮箱尚未验证，验证后才能登录。</p>
+              <div className="mt-3 flex gap-2">
+                <button
+                  onClick={resend}
+                  disabled={resending || !email.trim()}
+                  className="flex-1 py-2.5 rounded-card-sm bg-island text-white text-sm font-medium active:scale-[0.98] transition disabled:opacity-40"
+                >
+                  {resending ? '发送中…' : '重新发送验证码'}
+                </button>
+                <button
+                  onClick={() => navigate('/verify', { state: { email: email.trim() } })}
+                  className="flex-1 py-2.5 rounded-card-sm bg-white text-sm font-medium text-accent shadow-card active:scale-[0.98] transition"
+                >
+                  去验证
+                </button>
+              </div>
+            </div>
+          )}
           <div className="mt-5">
             <PrimaryButton onClick={submit} disabled={busy}>
-              {busy ? '请稍候…' : mode === 'login' ? '登录' : '注册并登录'}
+              {busy ? '请稍候…' : mode === 'login' ? '登录' : '注册并验证邮箱'}
             </PrimaryButton>
           </div>
         </Card>

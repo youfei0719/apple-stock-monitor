@@ -62,6 +62,21 @@ interface PendingChange {
   tier: Tier
 }
 
+/** datetime-local 值 → ISO（无时区按本地时间理解，后端按 UTC 存） */
+function toISO(local: string): string | null {
+  if (!local) return null
+  const d = new Date(local)
+  return Number.isNaN(d.getTime()) ? null : d.toISOString()
+}
+
+/** ISO → datetime-local 输入值（yyyy-MM-ddTHH:mm） */
+function toLocalInput(iso: string | null): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
 function fmtTime(iso: string | null): string {
   if (!iso) return '—'
   return iso.slice(0, 16).replace('T', ' ')
@@ -73,6 +88,7 @@ export function Members() {
   const [tier, setTier] = useState<'all' | Tier>('all')
   const [pending, setPending] = useState<PendingChange | null>(null)
   const [changing, setChanging] = useState(false)
+  const [expiresAt, setExpiresAt] = useState('')
 
   useEffect(() => {
     setUsers(null)
@@ -83,18 +99,27 @@ export function Members() {
 
   const rows = useMemo(() => users ?? [], [users])
 
+  function openPending(user: AdminUser, tier: Tier) {
+    setPending({ user, tier })
+    // 默认给新档位 +30 天到期（与 webhook 开通语义一致），可手动改
+    setExpiresAt(toLocalInput(new Date(Date.now() + 30 * 86400000).toISOString()))
+  }
+
   async function confirmChange() {
     if (!pending) return
     setChanging(true)
     try {
-      await updateUserTier(pending.user.id, pending.tier)
+      const iso = toISO(expiresAt)
+      await updateUserTier(pending.user.id, pending.tier, iso)
       setUsers((prev) =>
         prev?.map((u) =>
-          u.id === pending.user.id ? { ...u, tier: pending.tier } : u,
+          u.id === pending.user.id
+            ? { ...u, tier: pending.tier, tier_expires_at: iso }
+            : u,
         ) ?? null,
       )
       toast.success(
-        `已将 ${pending.user.email} 改为${TIER_LABEL[pending.tier]}（已记审计）`,
+        `已将 ${pending.user.email} 改为${TIER_LABEL[pending.tier]}${iso ? `（到期 ${fmtTime(iso)}）` : ''}（已记审计）`,
       )
     } catch (e) {
       toast.error(e instanceof Error ? e.message : '改级失败')
@@ -200,8 +225,7 @@ export function Members() {
                         <Select
                           value={u.tier}
                           onValueChange={(v) =>
-                            v !== u.tier &&
-                            setPending({ user: u, tier: v as Tier })
+                            v !== u.tier && openPending(u, v as Tier)
                           }
                         >
                           <SelectTrigger className='ml-auto w-32 rounded-2xl'>
@@ -244,6 +268,20 @@ export function Members() {
               改为 <span className='font-medium text-[#0071e3]'>{pending && TIER_LABEL[pending.tier]}</span>。
               该操作会立即生效并写入管理员审计日志。
             </AlertDialogDescription>
+            <div className='mt-4'>
+              <label className='mb-1.5 block text-sm font-medium'>
+                等级到期时间（补单时手动设定；留空则不改）
+              </label>
+              <Input
+                type='datetime-local'
+                value={expiresAt}
+                onChange={(e) => setExpiresAt(e.target.value)}
+                className='rounded-2xl font-mono'
+              />
+              <p className='mt-1.5 text-xs text-muted-foreground'>
+                当前到期：{fmtTime(pending?.user.tier_expires_at ?? null)}
+              </p>
+            </div>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel className='rounded-2xl'>取消</AlertDialogCancel>

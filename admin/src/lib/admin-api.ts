@@ -44,7 +44,9 @@ export interface PaymentRecord {
   amount_cny: number
   tier_from: string | null
   tier_to: string | null
-  status: string // 后端实际值：'paid'
+  status: string // 后端实际值：'paid' / 'amount_mismatch' / 'refunded' / 'cancelled'
+  /** 从 raw_payload 提取的爱发电备注（用户填写的用户 ID / 邮箱），用于认领坏账 */
+  remark: string | null
   created_at: string
 }
 
@@ -61,6 +63,8 @@ export interface SystemStatus {
   engine: EngineStatus
   apple_cooldown: Record<string, unknown>
   log_tail: string[]
+  /** 高峰模式：trial/free 间隔拉长、catalog 后台刷新暂停、pro 优先 */
+  peak_mode: boolean
 }
 
 export interface AuditEntry {
@@ -124,8 +128,10 @@ const MOCK_USERS: AdminUser[] = [
 ]
 
 const MOCK_PAYMENTS: PaymentRecord[] = [
-  { id: 1, user_id: 1, order_id: 'AFD20261008001', plan: 'afdian_plan_pro', amount_cny: 39, tier_from: 'free', tier_to: 'pro', status: 'paid', created_at: '2026-10-08T10:02:11Z' },
-  { id: 2, user_id: 2, order_id: 'AFD20261008002', plan: 'afdian_plan_standard', amount_cny: 19, tier_from: 'free', tier_to: 'standard', status: 'paid', created_at: '2026-10-08T11:44:02Z' },
+  { id: 1, user_id: 1, order_id: 'AFD20261008001', plan: 'afdian_plan_pro', amount_cny: 39, tier_from: 'free', tier_to: 'pro', status: 'paid', remark: '2', created_at: '2026-10-08T10:02:11Z' },
+  { id: 2, user_id: 2, order_id: 'AFD20261008002', plan: 'afdian_plan_standard', amount_cny: 19, tier_from: 'free', tier_to: 'standard', status: 'paid', remark: 'miffy.fan@163.com', created_at: '2026-10-08T11:44:02Z' },
+  { id: 3, user_id: null, order_id: 'AFD20261008003', plan: 'afdian_plan_standard', amount_cny: 19, tier_from: null, tier_to: null, status: 'paid', remark: null, created_at: '2026-10-08T13:20:00Z' },
+  { id: 4, user_id: null, order_id: 'AFD20261008004', plan: 'afdian_plan_standard', amount_cny: 15, tier_from: null, tier_to: null, status: 'amount_mismatch', remark: 'shenzhen.frank@outlook.com', created_at: '2026-10-08T14:05:00Z' },
 ]
 
 const MOCK_AUDIT: AuditEntry[] = [
@@ -263,8 +269,14 @@ export async function getUsers(q = '', tier: Tier | '' = ''): Promise<AdminUser[
   return req(`/api/admin/users?${params}`)
 }
 
-/** 会员改级（写操作，页面层二次确认；后端记 audit） */
-export async function updateUserTier(id: number, tier: Tier): Promise<void> {
+/** 会员改级（写操作，页面层二次确认；后端记 audit）
+ *  tier_expires_at：补单时手动设定到期时间（ISO），不传则后端保持原值
+ */
+export async function updateUserTier(
+  id: number,
+  tier: Tier,
+  tier_expires_at?: string | null,
+): Promise<void> {
   if (USE_MOCK) {
     await sleep(400)
     const u = MOCK_USERS.find((x) => x.id === id)
@@ -275,24 +287,60 @@ export async function updateUserTier(id: number, tier: Tier): Promise<void> {
         action: 'user.patch',
         target_type: 'user',
         target_id: String(id),
-        detail: { tier: { from: u.tier, to: tier } },
+        detail: { tier: { from: u.tier, to: tier }, tier_expires_at },
         ip: '127.0.0.1',
         created_at: new Date().toISOString(),
       })
       u.tier = tier
+      if (tier_expires_at !== undefined) u.tier_expires_at = tier_expires_at
     }
     return
   }
-  await req(`/api/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify({ tier }) })
+  const body: Record<string, unknown> = { tier }
+  if (tier_expires_at !== undefined) body.tier_expires_at = tier_expires_at
+  await req(`/api/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify(body) })
 }
 
-/** 付费记录 */
-export async function getPayments(): Promise<PaymentRecord[]> {
+/** 付费记录；claimStatus='unclaimed' 时只看待认领坏账 */
+export async function getPayments(
+  claimStatus: '' | 'unclaimed' = '',
+): Promise<PaymentRecord[]> {
   if (USE_MOCK) {
     await sleep(300)
-    return MOCK_PAYMENTS
+    return claimStatus === 'unclaimed'
+      ? MOCK_PAYMENTS.filter((p) => p.user_id === null)
+      : MOCK_PAYMENTS
   }
-  return req('/api/admin/payments')
+  const params = new URLSearchParams()
+  if (claimStatus) params.set('claim_status', claimStatus)
+  const q = params.toString()
+  return req(`/api/admin/payments${q ? `?${q}` : ''}`)
+}
+
+/** 认领坏账：把未认领订单绑定到用户（写操作，后端记 audit） */
+export async function claimPayment(paymentId: number, userId: number): Promise<void> {
+  if (USE_MOCK) {
+    await sleep(400)
+    const p = MOCK_PAYMENTS.find((x) => x.id === paymentId)
+    if (p) {
+      p.user_id = userId
+      MOCK_AUDIT.unshift({
+        id: Date.now(),
+        admin_id: 1,
+        action: 'payment.claim',
+        target_type: 'payment',
+        target_id: String(paymentId),
+        detail: { user_id: userId },
+        ip: '127.0.0.1',
+        created_at: new Date().toISOString(),
+      })
+    }
+    return
+  }
+  await req(`/api/admin/payments/${paymentId}/claim`, {
+    method: 'POST',
+    body: JSON.stringify({ user_id: userId }),
+  })
 }
 
 /** 系统状态：{engine, apple_cooldown, log_tail} */
@@ -310,9 +358,23 @@ export async function getSystem(): Promise<SystemStatus> {
       },
       apple_cooldown: { until: null, reason: '' },
       log_tail: MOCK_LOGS,
+      peak_mode: false,
     }
   }
   return req('/api/admin/system')
+}
+
+/** 高峰模式开关（写操作，后端记 audit） */
+export async function setPeakMode(enabled: boolean): Promise<SystemStatus> {
+  if (USE_MOCK) {
+    await sleep(400)
+    const s = await getSystem()
+    return { ...s, peak_mode: enabled }
+  }
+  return req<SystemStatus>('/api/admin/system/peak-mode', {
+    method: 'POST',
+    body: JSON.stringify({ enabled }),
+  })
 }
 
 /** 审计日志 */
