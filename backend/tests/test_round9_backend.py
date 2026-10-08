@@ -15,7 +15,6 @@ R9-O3  未验证账号不泄露密码正确性（auth.py:348-363）：不存在�
 R9-O4  sessions 清理：改密删其他 session（当前保留）、退出删当前 session
 """
 
-import asyncio
 import hashlib
 import hmac
 import json
@@ -222,7 +221,7 @@ def _webhook_grant(db, monkeypatch, user, plan_id="plan_std", amount=1900, order
         },
         receive=receive,
     )
-    return asyncio.run(pay_router.afdian_webhook(req, db))
+    return pay_router.afdian_webhook(req, db, raw)
 
 
 def test_i14_webhook_grant_resumes_only_tier_limited_capped_by_slots(db, monkeypatch):
@@ -311,7 +310,7 @@ def test_i14_no_resume_on_non_upgrade(db, monkeypatch):
         },
         receive=receive,
     )
-    out = asyncio.run(pay_router.afdian_webhook(req, db))
+    out = pay_router.afdian_webhook(req, db, raw)
     assert out["status"] == "amount_mismatch"
     paused = [t for t in _count(db, u.id) if t.paused]
     assert len(paused) == 2  # 保持暂停，没有被恢复

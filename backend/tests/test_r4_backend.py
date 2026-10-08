@@ -236,7 +236,6 @@ def test_task_batch_in_limits():
 
 # ---- D5: 未知 plan_id 落库 unknown_plan 返回 200 ----
 def test_unknown_plan_recorded(db, monkeypatch):
-    import asyncio
     import hashlib
     import hmac
     import json
@@ -266,7 +265,7 @@ def test_unknown_plan_recorded(db, monkeypatch):
         },
         receive=receive,
     )
-    out = asyncio.run(pay_router.afdian_webhook(req, db))
+    out = pay_router.afdian_webhook(req, db, raw)
     assert out["ok"] is True
     assert out["status"] == "unknown_plan"
     p = db.execute(

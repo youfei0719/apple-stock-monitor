@@ -307,10 +307,11 @@ def verify_email(data: VerifyEmailIn, db: Session = Depends(get_db)):
     if not user:
         # R4-P2 防用户枚举：未知邮箱与"验证码错误"返回完全相同的 400，
         # 不可通过 404/400 差异探测邮箱是否注册
-        _record_attempt_fail(db, "verify_email_fail", email)
+        # R19-P3-1：未知邮箱不记失败（不落库），system_config 不产生无清理的 junk 行
         raise APIError(400, "验证码错误", "bad_code")
-    if user.email_verified:
-        return {"ok": True, "already": True}
+    # R19-P2-1 防用户枚举：删掉"已验证"早退，统一走验证码比对。已验证用户的
+    # 码行在验证通过时已删除，比对恒失败 → 400，与未知邮箱不可区分；且该路径
+    # 照常消耗 attempt-lock，不可全速探测（前端从未使用 already 字段）。
     key = _email_code_key(user.email)
     row = db.execute(select(SystemConfig).where(SystemConfig.key == key)).scalar_one_or_none()
     # R6-P2-18：常量时间比较，防时序侧信道
@@ -350,8 +351,9 @@ def resend_code(data: ResendCodeIn, request: Request, db: Session = Depends(get_
     if not user:
         # R4-P2 防用户枚举：未知邮箱也返回 ok，不可探测邮箱是否注册
         return {"ok": True}
-    if user.email_verified:
-        return {"ok": True, "already": True}
+    # R19-P2-1 防用户枚举：删掉"已验证"早退，统一走发码流程，一律返回无 flag 的
+    # {"ok": true}，不可通过 already 字段区分已验证用户与未注册邮箱
+    # （前端从未使用 already 字段）。
     ok = _send_verification_code(db, user)
     if not ok:
         raise APIError(500, "邮件发送失败，请稍后重试", "email_failed")

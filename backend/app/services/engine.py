@@ -613,13 +613,13 @@ class Engine:
         if level == "100":
             title = "推送配额已用完"
             body = (
-                f"你的{effective_tier_of(user)['name']}档本月推送配额（{limit} 次）已用完，"
+                f"你的{effective_tier_of(user)['name']}档本周期推送配额（{limit} 次）已用完，"
                 "新配额将在下个周期开始时恢复。"
             )
         else:
             title = "推送配额已使用 80%"
             body = (
-                f"你的{effective_tier_of(user)['name']}档本月推送配额已使用 "
+                f"你的{effective_tier_of(user)['name']}档本周期推送配额已使用 "
                 f"{usage.push_count}/{limit} 次（80%），请留意剩余次数。"
             )
         log.info("quota_warning", user_id=user.id, level=level, tier=tier_name)
@@ -637,8 +637,8 @@ class Engine:
             info = effective_tier_of(task.user)
             title = "推送配额已耗尽，任务已自动暂停"
             body = (
-                f"任务「{task.name}」：{info['name']}档本月推送配额（{info['push_limit']} 次）"
-                "已耗尽，任务已自动暂停。下个配额周期开始后可手动恢复，或升级档位。"
+                f"任务「{task.name}」：{info['name']}档本周期推送配额（{info['push_limit']} 次）"
+                "已耗尽，任务已自动暂停。下个周期开始后可手动恢复，或升级档位。"
             )
         log.info("quota_exhausted_pause", task_id=task.id, user_id=task.user_id)
         self._send_system_notice(db, task, "quota_exhausted", title, body)

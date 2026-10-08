@@ -16,7 +16,6 @@ R10-I5 admin GET /users 加 offset 真分页（limit/max 200 配合，响应仍�
 R10-I6 admin overview 返回 effective_tier 会员分布 + 有效付费会员数
 """
 
-import asyncio
 import hashlib
 import hmac
 import json
@@ -238,7 +237,7 @@ def test_webhook_unparsable_amount_recorded_not_500(db, monkeypatch):
         },
         receive=receive,
     )
-    out = asyncio.run(pay_router.afdian_webhook(req, db))
+    out = pay_router.afdian_webhook(req, db, raw)
     assert out["ok"] is True
     assert out["status"] == "amount_mismatch"
     p = db.execute(

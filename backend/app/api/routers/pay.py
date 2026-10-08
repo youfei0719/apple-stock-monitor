@@ -172,9 +172,21 @@ def _tier_by_plan() -> dict[str, str]:
     return m
 
 
+async def _read_raw_body(request: Request) -> bytes:
+    """R19-P3-3：同步端点内不能 await；用异步依赖在事件循环里先读出原始 body。
+
+    FastAPI 允许同步端点挂异步依赖：依赖在事件循环中执行，端点本体跑在
+    worker 线程，同步 SQLAlchemy Session 不再阻塞事件循环。
+    """
+    return await request.body()
+
+
 @router.post("/pay/afdian-webhook")
-async def afdian_webhook(request: Request, db: Session = Depends(get_db)):
-    raw = await request.body()
+def afdian_webhook(
+    request: Request,
+    db: Session = Depends(get_db),
+    raw: bytes = Depends(_read_raw_body),
+):
     signature = request.headers.get("x-afdian-signature")
     if not verify_afdian_signature(raw, signature):
         log.warning("afdian_bad_signature")
