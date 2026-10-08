@@ -85,7 +85,9 @@ class ChannelsIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     bark_key: str | None = Field(default=None, max_length=256)
-    email: str | None = Field(default=None, max_length=255)
+    # R17-P3-2：邮箱格式校验（typo 邮箱创建时即 422 被拦）；email-validator
+    # 已在 requirements.txt，EmailStr 已导入。
+    email: EmailStr | None = Field(default=None, max_length=255)
     webhooks: list[WebhookIn] | None = None
 
     @model_validator(mode="before")

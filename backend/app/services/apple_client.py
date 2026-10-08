@@ -32,8 +32,6 @@ USER_AGENTS = [
     "(KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1",
 ]
 
-STATES = ("available", "unavailable", "unknown")
-
 
 class AppleError(Exception):
     pass

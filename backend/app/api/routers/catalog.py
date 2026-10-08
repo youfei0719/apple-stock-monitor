@@ -169,6 +169,13 @@ def _do_refresh_stores() -> None:
             log.warning("catalog_refresh_empty", anchor_errors=errors)
     except Exception as e:
         log.error("catalog_refresh_failed", error=str(e))
+        # R17-P2-1：非 AppleError 异常（接口形状变更、DB 异常）同样清零占位
+        # 刷新时间，否则管理员被锁 1 小时冷却；先 rollback 防会话已坏。
+        try:
+            db.rollback()
+            set_config(db, REFRESH_AT_KEY, {"at": 0})
+        except Exception as e2:
+            log.error("catalog_refresh_cooldown_clear_failed", error=str(e2))
     finally:
         db.close()
         _refresh_running = False

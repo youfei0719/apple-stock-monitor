@@ -176,10 +176,12 @@ def _buffer_api_hit(path: str, ip_hash: str) -> None:
 
 def _flush_api_hits() -> None:
     """把缓冲的 api_hits 批量入库。"""
-    global _api_hit_last_flush
+    global _api_hit_last_flush, _api_hit_buffer
     with _api_hit_lock:
         batch = _api_hit_buffer
-        _api_hit_buffer.clear()
+        # R17-P1-1：必须换 buffer 而非 clear——batch 与 buffer 是同一对象，
+        # clear 会连 batch 一起清空导致恒写 0 行（api_hits 表唯一写入路径）。
+        _api_hit_buffer = []
         _api_hit_last_flush = time.time()
     if not batch:
         return
