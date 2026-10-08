@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import { api, type NotificationRecord, type TaskChannels, type WebhookChannel } from '../lib/api';
+import { useApp } from './App';
 import { Card, EmptyState, LoadingState } from './ui';
 
 /**
  * 通知渠道配置（五通道）——任务详情 / 添加监控共用
  * - Bark key、邮箱、企微/钉钉/飞书 webhook URL（platform 下拉）
- * - 每个通道独立「发送测试」按钮（POST /notify/test，测试不扣配额）
+ * - 每个通道独立「发送测试」按钮（POST /notify/test，测试不扣配额）；匿名未登录时置灰
+ * - 文案按档位动态：trial → 体验版仅站内通知（在 App 内查看）
  * - 可选：通知历史列表（含失败原因展示）
  * 到货通知附带直达商品页链接。
  */
@@ -198,6 +200,28 @@ export default function NotifyChannels({
   showHistoryFor?: string | number;
 }) {
   const { busy, results, run } = useTest();
+  const { me } = useApp();
+  // UI-2：匿名未登录时"发送测试"按钮置灰（登录后可测试），别等 401 才生硬报错
+  const anonymous = me === null;
+
+  // F-2：通知渠道文案按档位动态。trial 只开放站内（page）；free/standard/pro 只开放邮件。
+  // /quota 要求登录，匿名直接按 trial 渲染。
+  const [tier, setTier] = useState<string | null>(null);
+  useEffect(() => {
+    if (me === null) {
+      setTier('trial');
+      return;
+    }
+    api
+      .quota()
+      .then((q) => setTier(q.tier))
+      .catch(() => setTier(null));
+  }, [me]);
+  const channelNote =
+    tier === 'trial'
+      ? // UI-5：trial 档"仅支持站内通知"补充"（在 App 内查看）"
+        '体验版仅支持站内通知（在 App 内查看）；Bark / 邮件 / 群机器人可配置但到货不会发送（测试通过 ≠ 到货会发）。'
+      : '当前档位仅支持邮件推送；Bark / 群机器人可配置但到货不会发送（测试通过 ≠ 到货会发）。';
 
   const set = (patch: Partial<TaskChannels>) => onChange({ ...value, ...patch });
 
@@ -222,10 +246,15 @@ export default function NotifyChannels({
         <p className="-mt-1 text-xs text-faint leading-relaxed">
           到货时按这里的渠道发送通知（按实际发送成功的通知条数扣减配额），通知附带直达商品页链接。
         </p>
-        {/* N14-B：当前档位仅邮件，Bark/群机器人可配但到货不发，明确标注避免误解 */}
+        {/* F-2：渠道开放范围按档位动态（trial → 体验版仅站内；付费档 → 仅邮件），不写死 */}
         <p className="-mt-2 text-xs text-bad/90 leading-relaxed bg-bad/5 rounded-card-sm px-2.5 py-2">
-          当前档位仅支持邮件；Bark / 群机器人可配置但到货不会发送（测试通过 ≠ 到货会发）。
+          {channelNote}
         </p>
+        {anonymous && (
+          <p className="-mt-1 text-xs text-faint leading-relaxed">
+            登录后可测试通知渠道（测试不扣配额）。
+          </p>
+        )}
 
         {/* Bark */}
         <div>
@@ -238,6 +267,7 @@ export default function NotifyChannels({
             />
             <TestButton
               busy={busy === 'bark'}
+              disabled={anonymous}
               onClick={() => run('bark', 'bark', value.bark_key ?? '')}
             />
           </div>
@@ -256,6 +286,7 @@ export default function NotifyChannels({
             />
             <TestButton
               busy={busy === 'email'}
+              disabled={anonymous}
               onClick={() => run('email', 'email', value.email ?? '')}
             />
           </div>
@@ -286,6 +317,7 @@ export default function NotifyChannels({
                 />
                 <TestButton
                   busy={busy === `wh${i}`}
+                  disabled={anonymous}
                   onClick={() => run(`wh${i}`, w.platform, w.url)}
                 />
                 <button

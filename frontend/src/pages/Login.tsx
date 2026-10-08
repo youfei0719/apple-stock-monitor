@@ -1,12 +1,16 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
 import { Card, PageHeader, PrimaryButton } from '../components/ui';
 
 export default function Login() {
   const navigate = useNavigate();
+  const location = useLocation();
+  // F-3：邮箱验证成功后跳到这里，带 {email, message:'验证成功，请登录'}
+  const flash = (location.state as { email?: string; message?: string } | null)?.message ?? null;
+  const initialEmail = (location.state as { email?: string } | null)?.email ?? '';
   const [mode, setMode] = useState<'login' | 'register'>('login');
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(initialEmail);
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -60,6 +64,9 @@ export default function Login() {
     <div>
       <PageHeader title="DING" subtitle="Apple 直营店库存监控" />
       <div className="px-6">
+        {flash && (
+          <p className="mb-4 text-sm text-ok text-center font-medium">{flash}</p>
+        )}
         <Card className="p-6 rise-in">
           <div className="grid grid-cols-2 gap-2 mb-5 p-1 rounded-pill bg-bg">
             {(

@@ -11,11 +11,11 @@
 
 from datetime import datetime, timedelta
 
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy import func, or_, select, update
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.logging import get_logger
-from app.core.tiers import TIERS, VALID_TIERS
+from app.core.tiers import TIERS, VALID_TIERS, effective_tier
 from app.models.models import (
     ApiHit,
     MonitorTask,
@@ -58,29 +58,42 @@ def _beijing_date(dt: datetime | None) -> str:
     return (dt + timedelta(hours=8)).strftime("%Y-%m-%d") if dt else ""
 
 
-def converge_task_limit(db: Session, user: User) -> list[MonitorTask]:
+def converge_task_limit(
+    db: Session, user: User, tasks: list[MonitorTask] | None = None
+) -> list[MonitorTask]:
     """按用户当前档位的任务上限暂停超限任务（复用 membership_sweep 的 keep_limit 口径）。
 
     R4-P1-B8：refund 把用户打回 free 后立即调用——membership_sweep 只处理
     standard/pro 过期用户，tier 已是 free 会被跳过，pro 的 30 个任务会继续
     轮询、吃 free 的配额。返回被暂停的任务列表。
+
+    R5-F-N7：走 effective_tier（付费过期按 free 算），不再读 user.tier 原始值。
+    R5-B-N3：调用方可传 tasks（已 selectinload 预取），避免每用户一次查询；
+    不传则回退到单次 SQL（refund 等单用户场景）。
     """
-    keep_limit = TIERS.get(user.tier, TIERS["free"])["tasks_limit"]
-    active = (
-        db.execute(
-            select(MonitorTask)
-            .where(MonitorTask.user_id == user.id, MonitorTask.paused.is_(False))
-            .order_by(MonitorTask.updated_at.desc())
+    keep_limit = TIERS.get(effective_tier(user), TIERS["free"])["tasks_limit"]
+    if tasks is None:
+        active = (
+            db.execute(
+                select(MonitorTask)
+                .where(MonitorTask.user_id == user.id, MonitorTask.paused.is_(False))
+                .order_by(MonitorTask.updated_at.desc())
+            )
+            .scalars()
+            .all()
         )
-        .scalars()
-        .all()
-    )
+    else:
+        active = sorted(
+            (t for t in tasks if not t.paused),
+            key=lambda t: t.updated_at or datetime.min,
+            reverse=True,
+        )
     paused = active[keep_limit:]
     for t in paused:
         t.paused = True
         db.add(t)
     if paused:
-        log.info("tasks_converged", user_id=user.id, tier=user.tier, paused=len(paused))
+        log.info("tasks_converged", user_id=user.id, tier=effective_tier(user), paused=len(paused))
     return paused
 
 
@@ -129,6 +142,40 @@ def _notified_today(
     return db.execute(q).scalar() > 0
 
 
+def _notified_today_user_ids(db: Session, kind: str, user_ids: list[int]) -> set[int]:
+    """R5-B-N3：一次查询拿 kind 今天已通知的用户 id 集合，替代每用户一次 count（消 N+1）。"""
+    if not user_ids:
+        return set()
+    return {
+        r
+        for r in db.execute(
+            select(Notification.user_id).where(
+                Notification.kind == kind,
+                Notification.user_id.in_(user_ids),
+                Notification.created_at >= _today_start(_utcnow()),
+            )
+        ).scalars()
+        if r is not None
+    }
+
+
+def _notified_today_task_ids(db: Session, kind: str, task_ids: list[int]) -> set[int]:
+    """R5-B-N3：一次查询拿 kind 今天已通知的任务 id 集合，替代每任务一次 count（消 N+1）。"""
+    if not task_ids:
+        return set()
+    return {
+        r
+        for r in db.execute(
+            select(Notification.task_id).where(
+                Notification.kind == kind,
+                Notification.task_id.in_(task_ids),
+                Notification.created_at >= _today_start(_utcnow()),
+            )
+        ).scalars()
+        if r is not None
+    }
+
+
 def _get_kv(db: Session, key: str) -> dict:
     row = db.execute(select(SystemConfig).where(SystemConfig.key == key)).scalar_one_or_none()
     return dict(row.value) if row and isinstance(row.value, dict) else {}
@@ -155,39 +202,66 @@ def membership_sweep(db: Session) -> dict:
         "tasks_paused": 0,
     }
     # ---- 到期降级 ----
+    # R5-B-N1：tier_expires_at 为 NULL 的付费用户也要回收（历史脏数据：以前 PATCH
+    # 设付费档不强制要求到期时间，NULL 会永远逃过 tier_expires_at < now 的筛选）。
+    # R5-B-N3：selectinload(User.tasks) 预取，converge_task_limit 直接用内存对象。
     expired = (
         db.execute(
-            select(User).where(User.tier.in_(["standard", "pro"]), User.tier_expires_at < now)
+            select(User)
+            .options(selectinload(User.tasks))
+            .where(
+                User.tier.in_(["standard", "pro"]),
+                or_(User.tier_expires_at < now, User.tier_expires_at.is_(None)),
+            )
         )
         .scalars()
         .all()
     )
     for u in expired:
         old = u.tier
+        new_exp: datetime | None = None
+        new_quota: datetime | None = None
         if u.pending_tier in VALID_TIERS:
             # 不自洽-1：降级到期生效——到期时按 pending_tier 切换
             new = u.pending_tier
-            u.tier = new
-            u.pending_tier = None
-            u.tier_expires_at = now + timedelta(days=30)
+            new_exp = now + timedelta(days=30)
             # R4-P1-D1：晋升 pending_tier 时同步配额锚点，否则配额周期与
             # 会员周期错位
-            u.quota_reset_at = now + timedelta(days=30)
+            new_quota = now + timedelta(days=30)
             action = (
                 f"已按预约切换为{TIERS[new]['name']}"
-                f"（有效期至 {_beijing_date(u.tier_expires_at)}，北京时间）"
+                f"（有效期至 {_beijing_date(new_exp)}，北京时间）"
             )
             stats["pending_promoted"] += 1
         else:
-            u.tier = "free"
-            u.tier_expires_at = None
-            u.pending_tier = None
+            new = "free"
             stats["downgraded"] += 1
             action = "已降为免费版（任务上限 3 个、推送 5 次/月）"
+        # R5-竞态-1：降级走原子 UPDATE，WHERE 带 tier_expires_at < now（+NULL）
+        # 且 tier 未变的双重条件——select 与 commit 之间若 webhook 写入了续费
+        # （tier_expires_at 已刷新为未来），WHERE 不命中、rowcount=0，本轮跳过，
+        # 不会把刚续费的用户覆盖降级。rowcount 校验代替"先读后写"的乐观锁。
+        result = db.execute(
+            update(User)
+            .where(
+                User.id == u.id,
+                User.tier == old,
+                or_(User.tier_expires_at < now, User.tier_expires_at.is_(None)),
+            )
+            .values(tier=new, tier_expires_at=new_exp, pending_tier=None, quota_reset_at=new_quota)
+        )
+        if result.rowcount != 1:
+            log.warning("membership_sweep_race_skipped", user_id=u.id)
+            continue
+        # 把 ORM 对象与原子 UPDATE 后的行同步（后续 converge/通知读 u.tier 等字段）
+        u.tier = new
+        u.tier_expires_at = new_exp
+        u.pending_tier = None
+        u.quota_reset_at = new_quota
         # D7：按切换后档位的任务上限保留最近更新的 N 个任务，暂停超出部分
         # （pending_tier=standard 的用户切换后仍是 10 个限额，不是一刀切到 3 个）
         new_info = TIERS.get(u.tier, TIERS["free"])
-        paused_tasks = converge_task_limit(db, u)
+        paused_tasks = converge_task_limit(db, u, tasks=u.tasks)
         stats["tasks_paused"] += len(paused_tasks)
         paused_names = [t.name for t in paused_tasks]
         pause_note = (
@@ -205,7 +279,6 @@ def membership_sweep(db: Session) -> dict:
             f"会员已到期：{TIERS[old]['name']} → {TIERS[u.tier]['name']}",
             f"您的{TIERS[old]['name']}会员已到期，{action}{pause_note}。如需恢复请前往「我」页续费。",
         )
-        db.add(u)
         log.info("membership_downgraded", user_id=u.id, old=old, new=u.tier)
 
     # ---- 到期前 3 天 / 1 天续费提醒（按天去重） ----
@@ -216,12 +289,16 @@ def membership_sweep(db: Session) -> dict:
         .scalars()
         .all()
     )
+    # R5-B-N3：一次查出今天已发过 membership_expiring 的用户，消 N+1
+    expiring_notified = _notified_today_user_ids(
+        db, "membership_expiring", [u.id for u in upcoming]
+    )
     for u in upcoming:
         days_left = (u.tier_expires_at - now).total_seconds() / 86400
         ms = _milestone_3_1(days_left)
         if ms is None:
             continue
-        if _notified_today(db, u.id, "membership_expiring"):
+        if u.id in expiring_notified:
             continue
         _sys_notify(
             db,
@@ -248,7 +325,10 @@ def task_expiry_sweep(db: Session) -> dict:
 
     tasks = (
         db.execute(
-            select(MonitorTask).where(
+            # R5-B-N3：selectinload 预取 states，消每任务一次 StockState 查询
+            select(MonitorTask)
+            .options(selectinload(MonitorTask.states))
+            .where(
                 MonitorTask.expires_at.is_not(None),
                 MonitorTask.paused.is_(False),
             )
@@ -256,12 +336,14 @@ def task_expiry_sweep(db: Session) -> dict:
         .scalars()
         .all()
     )
+    # R5-B-N3：一次查出今天已发过 task_expiring 的任务，消 N+1
+    expiring_notified = _notified_today_task_ids(db, "task_expiring", [t.id for t in tasks])
     for t in tasks:
         days_left = (t.expires_at - now).total_seconds() / 86400
         ms = _milestone_3_1(days_left)
         if ms is None:
             continue
-        if _notified_today(db, t.user_id, "task_expiring", t.id):
+        if t.id in expiring_notified:
             continue
         _sys_notify(
             db,
@@ -300,22 +382,25 @@ def task_expiry_sweep(db: Session) -> dict:
 
 
 # ---------------------------------------------------------------- zombie
-def _zombie_days(db: Session, task: MonitorTask, now: datetime) -> int | None:
+def _zombie_days(
+    states: list[StockState], task_created_at: datetime | None, now: datetime
+) -> int | None:
     """连续无货天数：全部 state 持续非 available 的天数。
+
+    R5-B-N3：调用方已 selectinload 预取 states，直接传列表，消每任务一次查询。
 
     - 任一门店 available → 0（不清零里程碑记录，只是不发提醒）
     - 混有 unknown/cooling/verifying → None（数据不可确认，本轮跳过）
     - 锚点 = 各门店最近一次有货事件（last_event_at），从未有货则按任务创建时间
     """
-    rows = db.execute(select(StockState).where(StockState.task_id == task.id)).scalars().all()
-    if not rows:
+    if not states:
         return None
-    states = {r.state for r in rows}
-    if "available" in states:
+    state_set = {r.state for r in states}
+    if "available" in state_set:
         return 0
-    if not states <= {"unavailable"}:
+    if not state_set <= {"unavailable"}:
         return None
-    anchors = [r.last_event_at or task.created_at for r in rows]
+    anchors = [r.last_event_at or task_created_at for r in states]
     anchors = [a for a in anchors if a]
     if not anchors:
         return None
@@ -335,7 +420,10 @@ def zombie_sweep(db: Session) -> dict:
 
     tasks = (
         db.execute(
-            select(MonitorTask).where(
+            # R5-B-N3：selectinload 预取 states，_zombie_days 直接读内存，消 N+1
+            select(MonitorTask)
+            .options(selectinload(MonitorTask.states))
+            .where(
                 MonitorTask.paused.is_(False),
             )
         )
@@ -346,7 +434,7 @@ def zombie_sweep(db: Session) -> dict:
         # 已过期任务不轮询，僵尸计时冻结，跳过
         if t.expires_at is not None and t.expires_at < now:
             continue
-        days = _zombie_days(db, t, now)
+        days = _zombie_days(t.states, t.created_at, now)
         if not days:
             continue
         done = notified.get(str(t.id), [])

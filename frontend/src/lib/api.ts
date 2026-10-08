@@ -13,20 +13,40 @@ const API_BASE: string =
  * 登录用户也带上该 header——无副作用，是任务迁移（claim）的关键。
  */
 const DEVICE_KEY = 'stockmon.device_id';
+
+function newDeviceId(): string {
+  return typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `dev-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+/** localStorage/sessionStorage 都不可用时的进程内回退 id（页面生命周期内稳定） */
+let memDeviceId: string | undefined;
+
+/** F-N6：绝不回退到固定 'dev-anon'——localStorage 被禁用时所有用户会串号，
+ * 互相覆盖匿名任务与配额；降级链：localStorage → sessionStorage → 内存随机 id */
 export function getDeviceId(): string {
   try {
     let id = localStorage.getItem(DEVICE_KEY);
     if (!id) {
-      id =
-        typeof crypto !== 'undefined' && 'randomUUID' in crypto
-          ? crypto.randomUUID()
-          : `dev-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      id = newDeviceId();
       localStorage.setItem(DEVICE_KEY, id);
     }
     return id;
   } catch {
-    return 'dev-anon';
+    /* localStorage 被禁用 → 降级 sessionStorage */
   }
+  try {
+    let id = sessionStorage.getItem(DEVICE_KEY);
+    if (!id) {
+      id = newDeviceId();
+      sessionStorage.setItem(DEVICE_KEY, id);
+    }
+    return id;
+  } catch {
+    /* sessionStorage 也不可用 → 内存 id */
+  }
+  return (memDeviceId ??= newDeviceId());
 }
 
 export class ApiError extends Error {
@@ -248,6 +268,8 @@ export interface Quota {
   tier_expires_at: string | null;
   /** 配额重置时间（ISO，购买日 +30 天滚动） */
   quota_reset_at: string | null;
+  /** 到期后自动切换的档位（后端 /quota 新增；F-N3：防御式渲染，不存在则忽略） */
+  pending_tier?: Tier | string | null;
 }
 
 export interface SiteConfig {
@@ -372,6 +394,21 @@ export const api = {
     mode?: 'instant' | 'confirmed';
     channels?: TaskChannels;
   }) => req<Task[]>('/tasks/batch', { method: 'POST', body: JSON.stringify(payload) }),
+  // F-1：单任务创建（POST /tasks），支持匿名（X-Device-Id 由 req 统一带）。
+  // 匿名用户调这个逐个创建——后端 /tasks/batch 要求登录，匿名调 batch 会 401。
+  createTask: (payload: {
+    name: string;
+    group?: string;
+    category?: string;
+    part_number: string;
+    product_name?: string;
+    color?: string;
+    capacity?: string;
+    stores: { number: string; name?: string; city?: string }[];
+    mode?: 'instant' | 'confirmed';
+    repeat_interval_sec?: number | null;
+    channels?: TaskChannels;
+  }) => req<Task>('/tasks', { method: 'POST', body: JSON.stringify(payload) }),
   updateTask: (id: string | number, payload: Partial<Task>) =>
     req<Task>(`/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   deleteTask: (id: string | number) => req<void>(`/tasks/${id}`, { method: 'DELETE' }),

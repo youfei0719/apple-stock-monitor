@@ -26,7 +26,11 @@ export default function VerifyEmail() {
     setBusy(true);
     try {
       await api.verifyEmail(email.trim(), code.trim());
-      window.location.href = '/';
+      // F-3：后端验证成功不 Set-Cookie，跳首页会显示匿名态误导用户 → 跳登录页并提示
+      navigate('/login', {
+        state: { email: email.trim(), message: '验证成功，请登录' },
+        replace: true,
+      });
     } catch (e) {
       // 后端验证码过期返回 code=code_expired，前端给统一的用户提示（N4）
       if (e instanceof ApiError && e.code === 'code_expired') {
@@ -50,11 +54,8 @@ export default function VerifyEmail() {
       await api.resendCode(email.trim());
       setError(null);
     } catch (e) {
-      if (e instanceof ApiError && e.status === 404) {
-        setError('暂无重发入口：请返回重新注册获取新验证码');
-      } else {
-        setError(e instanceof Error ? e.message : '重发失败');
-      }
+      // F-N8：后端 resend-code 防枚举永远 200，404 死分支已删除
+      setError(e instanceof Error ? e.message : '重发失败');
     } finally {
       setBusy(false);
     }
@@ -87,7 +88,7 @@ export default function VerifyEmail() {
           {error && <p className="mt-3 text-sm text-bad text-center">{error}</p>}
           <div className="mt-5">
             <PrimaryButton onClick={submit} disabled={busy}>
-              {busy ? '验证中…' : '验证并进入'}
+              {busy ? '验证中…' : '验证'}
             </PrimaryButton>
           </div>
           <button

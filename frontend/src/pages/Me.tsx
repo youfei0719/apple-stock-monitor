@@ -269,6 +269,12 @@ export default function Me() {
                   </span>
                 )}
               </p>
+              {/* F-N3：后端 /quota 补 pending_tier（降级预约），防御式渲染"到期后切换" */}
+              {quota?.pending_tier && (
+                <p className="mt-1 text-[13px] text-white/75">
+                  到期后切换为{PAID_TIER_LABEL[quota.pending_tier] ?? quota.pending_tier}
+                </p>
+              )}
             </div>
             <span className="mono text-xs text-white/60">#{String(me.id)}</span>
           </div>
@@ -279,7 +285,11 @@ export default function Me() {
               <p className="text-xs text-white/60">
                 刷新间隔 <span className="mono text-white">{quota.refresh_interval_sec}s</span>
                 {' · '}
-                配额周期起始 <span className="mono text-white">{quota.period}</span>
+                {/* F-N2：quota_period_key 实际是下次重置日（购买日 +30 天锚点），不是"周期起始" */}
+                下次重置{' '}
+                <span className="mono text-white">
+                  {fmtBeijingDate(quota.quota_reset_at) ?? quota.period}
+                </span>
               </p>
               <p className="text-[11px] text-white/50">
                 配额按实际发送成功的通知条数扣减 · 以购买日 +30
@@ -305,6 +315,42 @@ export default function Me() {
           {!error && plans === null && <LoadingState rows={2} />}
           {!error && plans !== null && plans.length === 0 && (
             <EmptyState title="暂无档位信息" action={null} />
+          )}
+          {/* UI-4：被 admin 授予 trial 的登录用户——/plans 不含 trial，单独渲染体验卡，不直接过滤掉 */}
+          {!error && plans !== null && displayTier === 'trial' && (
+            <div className="grid grid-cols-2 gap-2.5">
+              <Card className="p-4 rise-in ring-2 ring-accent">
+                <div className="flex items-center justify-between">
+                  <p className="font-semibold">体验</p>
+                  <span className="text-[11px] px-2 py-0.5 rounded-pill bg-accent text-white">
+                    当前
+                  </span>
+                </div>
+                <p className="mt-2 mono text-xl font-semibold">免费</p>
+                <ul className="mt-2 space-y-1">
+                  {planFeatures({
+                    tier: 'trial',
+                    name: '体验',
+                    price_cny: 0,
+                    tasks_limit: quota?.tasks_limit ?? 1,
+                    push_limit: quota?.push_limit ?? 1,
+                    channels: ['page'],
+                    history: false,
+                    priority: false,
+                    refresh_interval_sec: quota?.refresh_interval_sec ?? 300,
+                  } as Plan)
+                    .slice(0, 4)
+                    .map((f) => (
+                      <li key={f} className="text-xs text-sub">
+                        · {f}
+                      </li>
+                    ))}
+                </ul>
+                <p className="mt-2 text-[11px] text-faint">
+                  体验版由管理员开通，仅站内通知（在 App 内查看）
+                </p>
+              </Card>
+            </div>
           )}
           {!error && plans !== null && plans.length > 0 && (
             <div className="grid grid-cols-2 gap-2.5">

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api, ApiError, type Product, type StoreRef, type Task, type TaskChannels } from '../lib/api';
+import { api, ApiError, type Product, type Quota, type StoreRef, type Task, type TaskChannels } from '../lib/api';
 import { useApp } from '../components/App';
 import NotifyChannels from '../components/NotifyChannels';
 import { Card, EmptyState, ErrorState, LoadingState, PageHeader, PrimaryButton } from '../components/ui';
@@ -21,7 +21,13 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 
 export default function AddMonitor() {
   const navigate = useNavigate();
-  const { refreshTasks } = useApp();
+  const { refreshTasks, me, tasks } = useApp();
+  // UI-3：提交前按 tasks_limit 预检上限（登录用户拉 /quota；匿名按 trial 1 个算）
+  const [quota, setQuota] = useState<Quota | null>(null);
+  useEffect(() => {
+    if (me) api.quota().then(setQuota).catch(() => setQuota(null));
+  }, [me]);
+  const isAnon = me === null;
 
   const [category, setCategory] = useState('iphone');
   const [products, setProducts] = useState<Product[] | null>(null);
@@ -137,25 +143,80 @@ export default function AddMonitor() {
         return;
       }
     }
+    // UI-3：提交前先按 tasks_limit 提示上限，别等提交时吃 403
+    const combos = partNumbers.length * store_numbers.length;
+    const tasksLimit = isAnon ? 1 : quota?.tasks_limit;
+    const tasksUsed = isAnon ? tasks.length : (quota?.tasks_used ?? tasks.length);
+    if (combos > 0 && tasksLimit !== undefined && tasksUsed + combos > tasksLimit) {
+      setSubmitErr(
+        `将超出任务上限（${tasksLimit} 个）：已有 ${tasksUsed} 个，本次需生成 ${combos} 个，请减少机型或门店选择`,
+      );
+      return;
+    }
     setSubmitting(true);
     try {
-      // batch 接口直接接受 category/mode/channels；group/repeat_interval_sec 仍走 PATCH 补齐
-      const created = await api.batchTasks({
-        part_numbers: partNumbers,
-        store_numbers,
-        // 后端只替换 {part_number} / {store_number}，模板必须用这两个占位符
-        name_template: nameTemplate.trim() || '{part_number} × {store_number}',
-        category,
-        mode,
-        channels,
-      });
-      const patch: Partial<Task> = {};
-      if (group.trim()) patch.group = group.trim();
-      if (mode === 'confirmed' && repeatInterval.trim() && Number.isFinite(ri)) {
-        patch.repeat_interval_sec = ri;
-      }
-      if (Object.keys(patch).length > 0) {
-        await Promise.all(created.map((t) => api.updateTask(t.id, patch)));
+      // F-1：登录用户走批量接口；匿名用户走单任务接口逐个创建
+      // （后端 /tasks/batch 要求登录，匿名调 batch 会 401）
+      const nameTpl = nameTemplate.trim() || '{part_number} × {store_number}';
+      const repeatSec = mode === 'confirmed' && repeatInterval.trim() && Number.isFinite(ri) ? ri : null;
+      // 空 webhook URL 后端会 422（min_length=1），提前过滤掉未填写的行
+      const cleanChannels: TaskChannels = {
+        ...(channels.bark_key?.trim() ? { bark_key: channels.bark_key.trim() } : {}),
+        ...(channels.email?.trim() ? { email: channels.email.trim() } : {}),
+        ...(channels.webhooks ?? []).filter((w) => w.url.trim()).length > 0
+          ? { webhooks: (channels.webhooks ?? []).filter((w) => w.url.trim()) }
+          : {},
+      };
+      if (isAnon) {
+        const storeByNumber = new Map((stores ?? []).map((s) => [s.number, s]));
+        const productByPn = new Map((products ?? []).map((p) => [p.part_number, p]));
+        let createdCount = 0;
+        try {
+          for (const pn of partNumbers) {
+            for (const sn of store_numbers) {
+              const prod = productByPn.get(pn);
+              const info = storeByNumber.get(sn);
+              await api.createTask({
+                name: nameTpl.replace('{part_number}', pn).replace('{store_number}', sn),
+                group: group.trim(),
+                category,
+                part_number: pn,
+                product_name: prod?.name ?? '',
+                color: prod?.color ?? '',
+                capacity: prod?.capacity ?? '',
+                stores: [{ number: sn, name: info?.name ?? '', city: info?.city ?? '' }],
+                mode,
+                repeat_interval_sec: repeatSec,
+                channels: cleanChannels,
+              });
+              createdCount++;
+            }
+          }
+        } catch (e) {
+          if (createdCount > 0) await refreshTasks('active');
+          const msg = e instanceof Error ? e.message : '创建失败';
+          setSubmitErr(
+            createdCount > 0 ? `已创建 ${createdCount} 个任务，后续创建失败：${msg}` : msg,
+          );
+          return;
+        }
+      } else {
+        // batch 接口直接接受 category/mode/channels；group/repeat_interval_sec 仍走 PATCH 补齐
+        const created = await api.batchTasks({
+          part_numbers: partNumbers,
+          store_numbers,
+          // 后端只替换 {part_number} / {store_number}，模板必须用这两个占位符
+          name_template: nameTpl,
+          category,
+          mode,
+          channels: cleanChannels,
+        });
+        const patch: Partial<Task> = {};
+        if (group.trim()) patch.group = group.trim();
+        if (repeatSec !== null) patch.repeat_interval_sec = repeatSec;
+        if (Object.keys(patch).length > 0) {
+          await Promise.all(created.map((t) => api.updateTask(t.id, patch)));
+        }
       }
       await refreshTasks('active');
       navigate('/');
@@ -390,7 +451,9 @@ export default function AddMonitor() {
         <PrimaryButton onClick={submit} disabled={submitting}>
           {submitting
             ? '生成中…'
-            : `批量生成 ${partNumbers.length} 机型 × ${pickedStores.size} 门店`}
+            : isAnon
+              ? `创建 ${partNumbers.length * pickedStores.size} 个监控任务`
+              : `批量生成 ${partNumbers.length} 机型 × ${pickedStores.size} 门店`}
         </PrimaryButton>
         <p className="text-center text-xs text-faint">
           共生成 <span className="mono">{partNumbers.length * pickedStores.size}</span> 个监控组合

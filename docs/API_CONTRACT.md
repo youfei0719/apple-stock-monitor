@@ -52,7 +52,8 @@ state ∈ `available | unavailable | unknown | verifying | cooling | paused`
 - `GET /api/stats/poll` → 上次查询/成功率/平均响应（按用户任务聚合）：`{tasks, polled_tasks, success_rate, avg_response_ms, last_poll_at, engine}`
 
 ## 配额与会员
-- `GET /api/quota` → `{tier（有效档位，过期按 free）, tier_expires_at, quota_reset_at（配额周期锚点 ISO，前端按北京时间展示）, push_used, push_limit, tasks_used, tasks_limit, refresh_interval_sec, period（锚点日期 YYYY-MM-DD）}`；配额周期为购买日+30天滚动
+- `GET /api/quota` → `{tier（有效档位，过期按 free）, tier_expires_at, pending_tier, quota_reset_at（配额周期锚点 ISO，前端按北京时间展示）, push_used, push_limit, tasks_used, tasks_limit, refresh_interval_sec, period（锚点日期 YYYY-MM-DD）}`；配额周期为购买日+30天滚动
+  - `pending_tier`：降级预约档位。用户从 standard/pro 降级时不立即切换、只写 `pending_tier`，到期 sweep 才切换为它；无预约时为 `null`。前端可在到期前展示"到期后切换为 X"。
 - `GET /api/plans` → 三档说明（公开，**不再返回 trial**）：`[{tier, name, price_cny, tasks_limit, push_limit, channels[], history, priority, refresh_interval_sec}]`
   - free：免费 · standard：标准（¥19/月） · pro：Pro（¥39/月）；trial 只用于未登录匿名体验，不可购买
   - 前端渲染注意：无 `features`/`period`/`id` 字段；档位名用 `name`，价格用 `price_cny`，周期文案前端自拼（`price_cny>0` → "¥X / 月"）；"当前"徽章用 `p.tier === me.tier` 判断。
@@ -96,9 +97,9 @@ state ∈ `available | unavailable | unknown | verifying | cooling | paused`
 
 ## 补充接口（round4 补齐：认证/任务详情/续期）
 
-- `POST /api/auth/resend-code` `{email}` → 200 `{ok:true}`；重发 6 位邮箱验证码（10 分钟有效，邮箱大小写归一化）。
+- `POST /api/auth/resend-code` `{email}` → **永远返回 200** `{ok:true}`（防用户枚举：无论邮箱是否注册都不透露，这是代码与契约的一致行为）。
   - 限流：同一邮箱每小时最多 3 次 → 429 `{code:"rate_limited"}`。
-  - 邮箱未注册 → 404 `{code:"not_found"}`；已验证过 → `{ok:true, already:true}`（不再发信）；邮件发送失败 → 500 `{code:"email_failed"}`。
+  - 邮箱未注册 → 200 `{ok:true}`（不发信，不透露是否注册）；已验证过 → 200 `{ok:true, already:true}`（不再发信）；邮件发送失败 → 500 `{code:"email_failed"}`。
   - 典型用途：注册后没收到验证码、验证码过期（过期文案见 R4-P1-D6，引导用户点"重新发送"而非重新注册）。
 
 - `GET /api/tasks/{id}` → 200 Task（与 `POST /api/tasks` 返回同形，含 `channels`、`latest` 状态摘要，见"监控任务"节）。

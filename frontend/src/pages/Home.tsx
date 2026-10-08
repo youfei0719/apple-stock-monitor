@@ -24,10 +24,13 @@ function TaskCard({
   task,
   onChanged,
   trialExhausted,
+  anonymous,
 }: {
   task: Task;
   onChanged: () => void;
   trialExhausted: boolean;
+  /** F-N5：匿名 trial 任务后端续期钳制到 24h，文案别写死 +30 天 */
+  anonymous: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const { state, availableCount, total, updatedAt, partialUnknown } = summarizeTask(task);
@@ -140,7 +143,7 @@ function TaskCard({
             disabled={busy}
             className="flex-1 py-2 rounded-card-sm bg-accent text-white text-[13px] font-medium active:scale-[0.98] transition disabled:opacity-40"
           >
-            {busy ? '续期中…' : '一键续期（+30 天）'}
+            {busy ? '续期中…' : `一键续期（${anonymous ? '+24 小时' : '+30 天'}）`}
           </button>
         ) : (
           <button
@@ -251,6 +254,7 @@ export default function Home() {
                 task={t}
                 onChanged={() => reload()}
                 trialExhausted={trialExhausted}
+                anonymous={me === null}
               />
             ))}
           </div>

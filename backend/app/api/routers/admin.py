@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, select, text
 from sqlalchemy.orm import Session
 
 from app.api.deps import _client_ip, get_current_admin
@@ -49,6 +49,12 @@ class PaymentClaimIn(BaseModel):
 
 class PeakModeIn(BaseModel):
     enabled: bool
+
+
+class RefundIn(BaseModel):
+    """退款二次确认：用户还有其他有效 paid 订单时，必须显式 force=true 才降档。"""
+
+    force: bool = False
 
 
 def audit(
@@ -231,18 +237,25 @@ _AMOUNT_MISMATCH_PENDING_KEY = "payments_amount_mismatch_pending"
 
 
 def _dec_amount_mismatch_pending(db: Session) -> int:
-    """金额异常待处理数 -1（下限 0），返回最新值。认领/关闭动作消费队列时调用。"""
+    """金额异常待处理数 -1（下限 0），返回最新值。认领/关闭/退款动作消费队列时调用。
+
+    R5-竞态-2 配套：与 pay._bump_amount_mismatch_pending 一样走单条
+    INSERT...ON CONFLICT...UPDATE 原子语句（MAX(...,0) 保下限），
+    无 read-modify-write，RETURNING 取回最新值。
+    """
     row = db.execute(
-        select(SystemConfig).where(SystemConfig.key == _AMOUNT_MISMATCH_PENDING_KEY)
-    ).scalar_one_or_none()
-    n = int((row.value or {}).get("count", 0)) if row else 0
-    n = max(0, n - 1)
-    if row:
-        row.value = {"count": n}
-        db.add(row)
-    else:
-        db.add(SystemConfig(key=_AMOUNT_MISMATCH_PENDING_KEY, value={"count": n}))
-    return n
+        text(
+            "INSERT INTO system_config (key, value, updated_at) "
+            'VALUES (:key, \'{"count": 0}\', :now) '
+            "ON CONFLICT(key) DO UPDATE SET "
+            "value = json_set(system_config.value, '$.count', "
+            "MAX(COALESCE(json_extract(system_config.value, '$.count'), 0) - 1, 0)), "
+            "updated_at = excluded.updated_at "
+            "RETURNING json_extract(value, '$.count') AS count"
+        ),
+        {"key": _AMOUNT_MISMATCH_PENDING_KEY, "now": datetime.utcnow()},
+    ).first()
+    return int(row[0]) if row else 0
 
 
 def _payment_remark(p: Payment) -> str:
@@ -365,19 +378,28 @@ def close_payment(
     admin: User = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    """D4：不予开通直接关闭——金额异常/未知 plan/待认领订单人工定夺为"不处理"时，
-    status 置 resolved（从待处理队列移除），不绑定用户、不开通档位。"""
+    """D4：不予开通直接关闭——金额异常/未知 plan 的待处理订单人工定夺为"不处理"时，
+    status 置 resolved（从待处理队列移除），不绑定用户、不开通档位。
+
+    R5-B-4 选择说明（选了"拒绝已开通订单"这条路）：已开通（status=paid）的订单
+    不接受 close——close 不做任何档位回退/资金回滚，若放行会留下"钱货两清但账上
+    仍是 paid"的幽灵状态；已开通订单必须走 POST /payments/{id}/refund（降档 +
+    配额重算 + 任务收敛 + 审计），口径唯一、可追溯。
+    """
     p = db.get(Payment, payment_id)
     if not p:
         raise APIError(404, "订单不存在", "not_found")
-    if p.status not in ("amount_mismatch", "paid", "unknown_plan"):
+    # R5-B-4：已开通的 paid 订单拒绝关闭，提示走退款流程
+    if p.status == "paid":
+        raise APIError(400, "订单已开通，请走退款流程（POST /payments/{id}/refund）", "use_refund_flow")
+    if p.status not in ("amount_mismatch", "unknown_plan"):
         raise APIError(400, f"订单状态 {p.status} 不可关闭", "bad_status")
     old_status = p.status
     p.status = "resolved"
     db.add(p)
-    pending_count = None
-    if old_status == "amount_mismatch":
-        pending_count = _dec_amount_mismatch_pending(db)
+    # R5-B-1：unknown_plan 与 amount_mismatch 共用同一待处理计数（webhook 落库时
+    # 两者都会 _bump），关闭任一都要递减，否则计数永远涨不回去
+    pending_count = _dec_amount_mismatch_pending(db)
     audit(
         db,
         admin,
@@ -401,6 +423,7 @@ def refund_payment(
     request: Request,
     admin: User = Depends(get_current_admin),
     db: Session = Depends(get_db),
+    body: RefundIn | None = None,
 ):
     """D3：标记退款——联动：
     - payment.status='refunded'（revenue 统计只计 paid，已自动排除）
@@ -409,6 +432,11 @@ def refund_payment(
     - R4-P1-B8：立即收敛任务数（复用 sweep keep_limit 口径），别让 pro 的
       30 个任务继续吃 free 配额
     - R4-P0-3：amount_mismatch → refunded 时待处理计数递减
+
+    R5-B-3：退款前查用户是否还有其他 status='paid' 的有效订单——有则说明当前
+    档位可能来自另一笔订单，无条件打回 free 会误杀。该场景下 400 拒绝
+    （code=has_active_paid_orders），前端据此弹二次确认；确认后传 force=true
+    再调一次才会真正降档。
     """
     p = db.get(Payment, payment_id)
     if not p:
@@ -416,18 +444,35 @@ def refund_payment(
     if p.status == "refunded":
         raise APIError(400, "订单已标记退款", "already_refunded")
     old_status = p.status
+    # R5-B-1 配套：unknown_plan 与 amount_mismatch 共用待处理计数，
+    # 标记退款同样消费队列（claim/close/refund 三条终态路径都要递减）
+    pending_count = None
+    if old_status in ("amount_mismatch", "unknown_plan"):
+        pending_count = _dec_amount_mismatch_pending(db)
     p.status = "refunded"
     db.add(p)
-    # R4-P0-3：金额异常订单被标记退款后，待处理计数必须递减
-    # （amount_mismatch → refunded 是合法路径）
-    pending_count = None
-    if old_status == "amount_mismatch":
-        pending_count = _dec_amount_mismatch_pending(db)
     user_info = None
     if p.user_id is not None:
         user = db.get(User, p.user_id)
         if user:
-            old = (user.tier, user.tier_expires_at.isoformat() if user.tier_expires_at else None)
+            other_paid = db.execute(
+                select(func.count())
+                .select_from(Payment)
+                .where(
+                    Payment.user_id == user.id,
+                    Payment.id != p.id,
+                    Payment.status == "paid",
+                )
+            ).scalar()
+            # R5-B-3：还有其他有效已开通订单 → 要求二次确认，不无条件打回 free
+            if other_paid and not (body and body.force):
+                db.rollback()
+                raise APIError(
+                    400,
+                    f"用户还有 {other_paid} 笔有效已开通订单，当前档位可能来自其他订单；"
+                    "确认继续降档请传 force=true",
+                    "has_active_paid_orders",
+                )
             user.tier = "free"
             user.tier_expires_at = None
             user.pending_tier = None

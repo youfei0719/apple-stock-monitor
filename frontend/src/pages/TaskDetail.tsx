@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api, summarizeTask, type StateRow, type StoreRef, type Task, type TaskChannels } from '../lib/api';
+import { useApp } from '../components/App';
 import StockStateBadge from '../components/StockStateBadge';
 import NotifyChannels from '../components/NotifyChannels';
 import { Card, ErrorState, LoadingState, EmptyState, PageHeader } from '../components/ui';
@@ -20,6 +21,10 @@ export default function TaskDetail() {
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [renewing, setRenewing] = useState(false);
   const [renewMsg, setRenewMsg] = useState<string | null>(null);
+  // F-N5：匿名 trial 任务后端续期钳制到 now+24h，文案按实际 expires_at 动态显示
+  const { me } = useApp();
+  const anonymous = me === null;
+  const renewGainLabel = anonymous ? '+24 小时' : '+30 天';
 
   const load = async () => {
     if (!id) return;
@@ -68,9 +73,27 @@ export default function TaskDetail() {
     setRenewing(true);
     setRenewMsg(null);
     try {
+      // 后端 renew 按 max(now, 原 expires_at) + 30 天算（匿名钳制 now+24h），
+      // 文案按返回的实际 expires_at 动态给，不写死 +30 天
+      const oldExp = task?.expires_at ? new Date(task.expires_at).getTime() : Date.now();
       const t = await api.renewTask(id);
       setTask(t);
-      setRenewMsg('已续期 +30 天');
+      if (!t.expires_at) {
+        setRenewMsg('已续期');
+      } else {
+        const gainedDays =
+          (new Date(t.expires_at).getTime() - Math.max(Date.now(), oldExp)) / MS_PER_DAY;
+        setRenewMsg(
+          gainedDays >= 29
+            ? '已续期 +30 天'
+            : gainedDays >= 0.9
+              ? '已续期 +24 小时'
+              : `已续期至 ${new Date(t.expires_at).toLocaleDateString('zh-CN', {
+                  month: '2-digit',
+                  day: '2-digit',
+                })}`,
+        );
+      }
     } catch (e) {
       setRenewMsg(e instanceof Error ? e.message : '续期失败');
     } finally {
@@ -119,8 +142,8 @@ export default function TaskDetail() {
                     {renewing
                       ? '续期中…'
                       : expired
-                        ? '一键续期（+30 天）'
-                        : `一键续期（+30 天）· 剩余 ${days} 天`}
+                        ? `一键续期（${renewGainLabel}）`
+                        : `一键续期（${renewGainLabel}）· 剩余 ${days} 天`}
                   </button>
                   {renewMsg && (
                     <p

@@ -10,4 +10,5 @@ structlog==24.4.0
 httpx==0.28.1
 python-multipart==0.0.20
 email-validator==2.2.0
+# ruff：deploy.sh 用 `ruff check app` 做生产部署门禁（不是 dev-only），pinned 防规则漂移
 ruff==0.14.5

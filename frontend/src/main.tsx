@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { BrowserRouter, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import App from './components/App';
 import Home from './pages/Home';
 import TaskDetail from './pages/TaskDetail';
@@ -25,6 +25,8 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           <Route path="/history" element={<History />} />
           <Route path="/guide" element={<Guide />} />
           <Route path="/me" element={<Me />} />
+          {/* UI-1：未知路径兜底回首页，避免空白 404 死路 */}
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>
     </BrowserRouter>

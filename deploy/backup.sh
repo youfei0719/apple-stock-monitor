@@ -10,8 +10,31 @@ mkdir -p "$DST_DIR"
 
 [ -f "$ENV_FILE" ] || { echo "[$DAY] backup FAIL: $ENV_FILE 不存在" >&2; exit 1; }
 
+# ===== R5-D-1/D-2：.env 提取器（与 deploy.sh 同逻辑：先去行尾注释再取值，支持 export 前缀） =====
+env_val() {
+  local key="$1" line val rest
+  line=$(grep -E "^[[:space:]]*(export[[:space:]]+)?${key}=" "$ENV_FILE" | head -n1) || return 0
+  [ -z "$line" ] && return 0
+  val=$(printf '%s\n' "$line" | sed -E 's/^[[:space:]]*(export[[:space:]]+)?[^=[:space:]]+=//')
+  val=$(printf '%s' "$val" | sed -E 's/^[[:space:]]+//;s/[[:space:]]+$//')
+  case "$val" in
+    \"*)
+      rest="${val#\"}"
+      val="${rest%%\"*}"
+      ;;
+    \'*)
+      rest="${val#\'}"
+      val="${rest%%\'*}"
+      ;;
+    *)
+      val=$(printf '%s' "$val" | sed -E 's/[[:space:]]+#.*$//;s/[[:space:]]+$//')
+      ;;
+  esac
+  printf '%s' "$val" | tr -d " '\"\t\r"
+}
+
 # ===== P0-26：从 .env 的 DATABASE_URL 解析 sqlite 真实路径（只支持 sqlite） =====
-DB_URL=$(sed -n 's/^DATABASE_URL=//p' "$ENV_FILE" | head -n1 | tr -d " '\"\t\r")
+DB_URL=$(env_val DATABASE_URL)
 [ -n "$DB_URL" ] || { echo "[$DAY] backup FAIL: $ENV_FILE 缺少 DATABASE_URL" >&2; exit 1; }
 case "$DB_URL" in
   sqlite:///*) ;;
