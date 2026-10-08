@@ -154,13 +154,18 @@ def _do_refresh_stores() -> None:
             set_config(db, REFRESH_AT_KEY, {"at": time.time()})
             log.info("catalog_refreshed", stores=len(merged), anchor_errors=errors)
         elif merged:
-            # 全部 anchor 失败：保留旧目录、不覆盖、不推进刷新时间，下轮重试
+            # R15-P2-2：全部 anchor 失败（普通 AppleError）同样清零占位刷新时间，
+            # 与 AppleRateLimitError 分支同口径——否则管理员被锁 1 小时冷却
+            # （enqueue 时已先占位写入"已刷新"时间）。保留旧目录、不覆盖。
+            set_config(db, REFRESH_AT_KEY, {"at": 0})
             log.warning(
                 "catalog_refresh_all_failed_kept_existing",
                 anchor_errors=errors,
                 kept=len(merged),
             )
         else:
+            # 目录本就为空且全部失败：同样清零占位，不烧 1 小时冷却
+            set_config(db, REFRESH_AT_KEY, {"at": 0})
             log.warning("catalog_refresh_empty", anchor_errors=errors)
     except Exception as e:
         log.error("catalog_refresh_failed", error=str(e))
@@ -197,10 +202,11 @@ def list_stores(
     refresh: int = Query(default=0, ge=0, le=1),
     db: Session = Depends(get_db),
 ):
-    """R4-P0-5：refresh=1 成功时也返回纯数组（与 refresh=0 同形）。
+    """R13-P3-10：公开接口不再接受 refresh=1——门店目录在线刷新是重操作，
+    唯一入口为管理后台 POST /api/admin/catalog/refresh（经 TOTP 二次验证，
+    全局限流 1 次/小时）。公开接口传 refresh=1 统一 403。
 
-    刷新是在线打 Apple 接口的重操作，走后台异步任务；本请求立即返回当前
-    目录数组，前端轮询/稍后重拉即可拿到新数据。
+    本接口只读当前目录并返回纯数组。旧 R4-P0-5 docstring 已作废。
     """
     _seed_if_empty(db)
     if refresh == 1:

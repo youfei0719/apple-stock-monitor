@@ -2,7 +2,7 @@
 
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import pytest
 
@@ -13,6 +13,7 @@ from app.api.routers import auth as auth_router
 from app.api.routers import pay as pay_router
 from app.core.db import Base
 from app.core.tiers import effective_tier
+from app.core.timeutil import utcnow
 from app.models.models import MonitorTask, Notification, QuotaUsage, SystemConfig, User
 from app.services import engine as engine_mod
 from app.services.engine import Engine, quota_period_key
@@ -35,7 +36,7 @@ def eng():
 
 
 def _user(db, tier="free", days_left=None, email="u@example.com"):
-    exp = datetime.utcnow() + timedelta(days=days_left) if days_left is not None else None
+    exp = utcnow() + timedelta(days=days_left) if days_left is not None else None
     u = User(email=email, password_hash="x", tier=tier, tier_expires_at=exp)
     db.add(u)
     db.commit()
@@ -139,7 +140,7 @@ def test_consume_quota_counts_sent_only(db, eng):
 def test_quota_anchor_rolls_and_old_period_invalid(db, eng):
     u = _user(db, tier="free", days_left=5)
     # 锚点已过期 40 天：应滚动到未来，且老周期计数不再命中
-    u.quota_reset_at = datetime.utcnow() - timedelta(days=40)
+    u.quota_reset_at = utcnow() - timedelta(days=40)
     db.add(u)
     db.commit()
     old_period = quota_period_key(u)
@@ -147,7 +148,7 @@ def test_quota_anchor_rolls_and_old_period_invalid(db, eng):
     db.commit()
     t = _task(db, user=u)
     assert eng._check_quota(db, t) is True  # free 上限 5，老周期 5 次已清零
-    assert u.quota_reset_at > datetime.utcnow()
+    assert u.quota_reset_at > utcnow()
     assert quota_period_key(u) != old_period
 
 
@@ -227,7 +228,7 @@ def test_retry_pending_notifications(db, eng, monkeypatch):
         status="failed",
         error="boom",
         retry_count=1,
-        retry_at=datetime.utcnow() - timedelta(seconds=60),
+        retry_at=utcnow() - timedelta(seconds=60),
     )
     db.add(n)
     db.commit()
@@ -297,7 +298,7 @@ def test_apply_tier_grant_upgrade_immediate(db):
     assert pay_router.apply_tier_grant(db, u, "standard") == "granted"
     assert u.tier == "standard"
     assert u.pending_tier is None
-    assert u.quota_reset_at > datetime.utcnow() + timedelta(days=29)
+    assert u.quota_reset_at > utcnow() + timedelta(days=29)
 
 
 def test_apply_tier_grant_downgrade_pending(db):
@@ -354,7 +355,7 @@ def test_verify_email_flow(db):
             key="email_code:v@example.com",
             value={
                 "code": "123456",
-                "expires_at": (datetime.utcnow() + timedelta(minutes=10)).isoformat() + "Z",
+                "expires_at": (utcnow() + timedelta(minutes=10)).isoformat() + "Z",
             },
         )
     )
@@ -387,7 +388,7 @@ def test_read_engine_status_heartbeat(db):
     set_config(
         db,
         engine_mod.ENGINE_HEARTBEAT_KEY,
-        {"at": datetime.utcnow().isoformat() + "Z", "rounds_total": 7, "rounds_ok": 6},
+        {"at": utcnow().isoformat() + "Z", "rounds_total": 7, "rounds_ok": 6},
     )
     st = engine_mod.read_engine_status(db)
     assert st["running"] is True
@@ -397,7 +398,7 @@ def test_read_engine_status_heartbeat(db):
         db,
         engine_mod.ENGINE_HEARTBEAT_KEY,
         {
-            "at": (datetime.utcnow() - timedelta(seconds=61)).isoformat() + "Z",
+            "at": (utcnow() - timedelta(seconds=61)).isoformat() + "Z",
         },
     )
     assert engine_mod.read_engine_status(db)["running"] is False

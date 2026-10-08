@@ -5,7 +5,7 @@ import hashlib
 import threading
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,6 +32,7 @@ from app.core.db import SessionLocal
 from app.core.logging import configure_logging, get_logger
 from app.core.ratelimit import check_rate_limit
 from app.core.security import hash_password
+from app.core.timeutil import utcnow
 from app.models.models import ApiHit, User
 from app.services.engine import engine, read_engine_status
 
@@ -97,7 +98,7 @@ def _bootstrap_admin():
         user.tier = "pro"
         # R6-D3：bootstrap 管理员给远未来到期（+10 年）——否则 5 分钟内就被
         # membership_sweep 按"付费到期"降回 free；sweep 侧同时排除管理员（双保险）
-        user.tier_expires_at = datetime.utcnow() + timedelta(days=3650)
+        user.tier_expires_at = utcnow() + timedelta(days=3650)
         db.commit()
         # R5-B-N4：管理员邮箱不明文打日志，只记 sha256 前 8 位（可关联不泄露）
         email_hash = hashlib.sha256(email.encode()).hexdigest()[:8]

@@ -9,7 +9,7 @@ R13-P1-1 一键续期去重改用 last_renewed_at 专用列：
 import os
 import sys
 import uuid
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import pytest
 from sqlalchemy import create_engine
@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.api.routers import tasks as tasks_router  # noqa: E402
 from app.core.db import Base  # noqa: E402
+from app.core.timeutil import utcnow
 from app.models.models import MonitorTask, User  # noqa: E402
 
 
@@ -36,8 +37,8 @@ def _user(db):
         email=f"r13-{uuid.uuid4().hex[:8]}@example.com",
         password_hash="x",
         tier="pro",
-        tier_expires_at=datetime.utcnow() + timedelta(days=30),
-        quota_reset_at=datetime.utcnow() + timedelta(days=30),
+        tier_expires_at=utcnow() + timedelta(days=30),
+        quota_reset_at=utcnow() + timedelta(days=30),
         email_verified=True,
     )
     db.add(u)
@@ -52,7 +53,7 @@ def _task(db, user, days_left=5):
         name="续期去重回归",
         part_number="MJYC4CH/A",
         store_numbers=["R484"],
-        expires_at=datetime.utcnow() + timedelta(days=days_left),
+        expires_at=utcnow() + timedelta(days=days_left),
     )
     db.add(t)
     db.commit()
@@ -62,7 +63,7 @@ def _task(db, user, days_left=5):
 
 def _engine_poll(db, task):
     """模拟引擎一轮 poll：写 last_polled_at 等字段并提交（updated_at 被 onupdate 推进）。"""
-    task.last_polled_at = datetime.utcnow()
+    task.last_polled_at = utcnow()
     task.last_poll_ok = True
     task.last_poll_ms = 12.5
     db.add(task)
@@ -79,7 +80,7 @@ def test_renew_not_deduped_after_engine_poll(db):
     # 引擎 poll 紧贴着发生（updated_at 被推到 ~now，旧逻辑下 10s 窗口内必误判）
     _engine_poll(db, t)
     assert t.updated_at >= old_updated
-    assert (datetime.utcnow() - t.updated_at).total_seconds() < 10
+    assert (utcnow() - t.updated_at).total_seconds() < 10
 
     out = tasks_router.renew_task(t.id, u, db, None)
 
@@ -111,9 +112,7 @@ def test_renew_after_window_renews_again(db):
     t = _task(db, u, days_left=5)
     first = tasks_router.renew_task(t.id, u, db, None)
     # 把去重列拨到窗口之外
-    t.last_renewed_at = datetime.utcnow() - timedelta(
-        seconds=tasks_router.RENEW_DEDUP_WINDOW_SEC + 1
-    )
+    t.last_renewed_at = utcnow() - timedelta(seconds=tasks_router.RENEW_DEDUP_WINDOW_SEC + 1)
     db.add(t)
     db.commit()
     second = tasks_router.renew_task(t.id, u, db, None)

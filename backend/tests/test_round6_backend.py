@@ -3,7 +3,7 @@
 import os
 import sys
 import threading
-from datetime import datetime, timedelta
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -18,6 +18,7 @@ from app.api.routers import auth as auth_router
 from app.api.routers import pay as pay_router
 from app.api.routers import tasks as tasks_router
 from app.core.db import Base
+from app.core.timeutil import utcnow
 from app.models.models import IdempotencyRecord, MonitorTask, Notification, StockState, User
 from app.schemas import TaskCreateIn, TaskPatchIn
 from app.services import engine as engine_mod
@@ -46,13 +47,13 @@ def _req(headers=None):
 
 
 def _user(db, tier="free", email="r6@example.com", days_left=None):
-    exp = datetime.utcnow() + timedelta(days=days_left) if days_left is not None else None
+    exp = utcnow() + timedelta(days=days_left) if days_left is not None else None
     u = User(
         email=email,
         password_hash="x",
         tier=tier,
         tier_expires_at=exp,
-        quota_reset_at=datetime.utcnow() + timedelta(days=30),
+        quota_reset_at=utcnow() + timedelta(days=30),
         email_verified=True,
     )
     db.add(u)
@@ -109,7 +110,7 @@ def test_d2_concurrent_grants_stack_to_60_days(tmp_path):
         t.join()
     s = mk()
     u = s.get(User, uid)
-    days = (u.tier_expires_at - datetime.utcnow()).days
+    days = (u.tier_expires_at - utcnow()).days
     assert u.tier == "standard"
     assert days >= 59, f"lost-update：两次续费只剩 {days} 天"
     assert u.quota_reset_at == u.tier_expires_at
@@ -123,7 +124,7 @@ def test_d2_sequential_grants_stack(db):
     pay_router.apply_tier_grant(db, u, "standard")
     db.commit()
     db.refresh(u)
-    days = (u.tier_expires_at - datetime.utcnow()).days
+    days = (u.tier_expires_at - utcnow()).days
     assert days >= 59
 
 
@@ -138,7 +139,7 @@ def test_d3_bootstrap_admin_far_future_expiry(db, monkeypatch):
     admin = db.execute(select(User).where(User.is_admin.is_(True))).scalar_one()
     assert admin.tier == "pro"
     assert admin.tier_expires_at is not None
-    assert (admin.tier_expires_at - datetime.utcnow()).days > 3000
+    assert (admin.tier_expires_at - utcnow()).days > 3000
 
 
 def test_d3_membership_sweep_skips_admin(db):
@@ -315,7 +316,7 @@ def test_i9_claim_resumes_quota_exhausted_only(db):
 # ---------- R6-P2-12：过去 expires_at 400 ----------
 def test_p2_12_past_expires_at_400(db):
     u = _user(db, tier="free", email="d12@example.com")
-    past = datetime.utcnow() - timedelta(hours=1)
+    past = utcnow() - timedelta(hours=1)
     with pytest.raises(APIError) as ei:
         tasks_router.create_task(
             _task_in(expires_at=past, channels={"email": "a@b.c"}), _req(), u, db, None

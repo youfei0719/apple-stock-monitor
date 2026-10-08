@@ -361,7 +361,8 @@ export function System() {
             </div>
             <Button
               onClick={doRefreshCatalog}
-              disabled={refreshBusy}
+              // R15-P2-1：冷却中重复点击不再打接口（此前只按 refreshBusy 禁用）
+              disabled={refreshBusy || refreshCooling}
               className='rounded-2xl'
             >
               {refreshBusy ? (

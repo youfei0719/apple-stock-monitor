@@ -38,6 +38,7 @@ from app.api.routers import auth as auth_router
 from app.api.routers import pay as pay_router
 from app.api.routers import tasks as tasks_router
 from app.core.db import Base
+from app.core.timeutil import utcnow
 from app.models.models import MonitorTask, Payment, SystemConfig, User
 from app.schemas import ChannelsIn, TaskBatchIn
 
@@ -57,13 +58,13 @@ def _req(ip="9.9.9.9", headers=None):
 
 
 def _user(db, tier="free", email=None, days_left=None, **kw):
-    exp = datetime.utcnow() + timedelta(days=days_left) if days_left is not None else None
+    exp = utcnow() + timedelta(days=days_left) if days_left is not None else None
     u = User(
         email=email or f"r10-{uuid.uuid4().hex[:8]}@example.com",
         password_hash="x",
         tier=tier,
         tier_expires_at=exp,
-        quota_reset_at=datetime.utcnow() + timedelta(days=30),
+        quota_reset_at=utcnow() + timedelta(days=30),
         email_verified=True,
         **kw,
     )
@@ -250,19 +251,17 @@ def test_webhook_unparsable_amount_recorded_not_500(db, monkeypatch):
 # ============ R10-P2-2：trial 配额北京时间月界 ============
 def test_trial_quota_state_beijing_month_boundary(db, monkeypatch):
     """UTC 2026-10-31 20:00（北京 11-01 04:00）：月界应为 2026-11，
-    UTC 口径会是 2026-10（错月）。"""
+    UTC 口径会是 2026-10（错月）。
+
+    R15-P3-3：engine 已迁移到 timeutil.utcnow()，fake 改 patch 该入口
+    （此前 patch engine_mod.datetime.FakeDT.utcnow）。"""
     from types import SimpleNamespace
 
     from app.services import engine as engine_mod
 
-    real_dt = datetime
-
-    class FakeDT(real_dt):
-        @classmethod
-        def utcnow(cls):
-            return real_dt(2026, 10, 31, 20, 0, 0)
-
-    monkeypatch.setattr(engine_mod, "datetime", FakeDT)
+    monkeypatch.setattr(
+        engine_mod, "utcnow", lambda: datetime(2026, 10, 31, 20, 0, 0)
+    )
     eng = engine_mod.Engine()
     _used, _limit, key = eng._trial_quota_state(db, SimpleNamespace(device_id="dev10"))
     assert key == "trial_quota:dev10:2026-11"
@@ -271,17 +270,15 @@ def test_trial_quota_state_beijing_month_boundary(db, monkeypatch):
 # ============ R10-P2-3：prune 北京时间口径 ============
 def test_pruned_today_beijing_date(db, monkeypatch):
     """UTC 2026-10-31 20:00 落库的日期应为北京时间 2026-11-01，
-    且 _pruned_today 同口径命中。"""
+    且 _pruned_today 同口径命中。
+
+    R15-P3-3：lifecycle._utcnow() 已委托 timeutil.utcnow()，fake 改 patch
+    lc._utcnow（与 test_round7 同模式；此前 patch lc.datetime.FakeDT）。"""
     from app.services import lifecycle as lc
 
-    real_dt = datetime
-
-    class FakeDT(real_dt):
-        @classmethod
-        def utcnow(cls):
-            return real_dt(2026, 10, 31, 20, 0, 0)
-
-    monkeypatch.setattr(lc, "datetime", FakeDT)
+    monkeypatch.setattr(
+        lc, "_utcnow", lambda: datetime(2026, 10, 31, 20, 0, 0)
+    )
     assert lc._pruned_today(db, "k10") is False
     lc._mark_pruned(db, "k10")
     assert lc._pruned_today(db, "k10") is True
@@ -397,10 +394,10 @@ def test_overview_effective_tier_matches_python(db):
 def test_renew_double_click_no_stack(db):
     """10 秒去重窗口内第二次续期直接返回当前状态，不再叠加 +30 天。"""
     u = _user(db, tier="standard")
-    t = _task(db, u.id, expires_at=datetime.utcnow() + timedelta(days=5))
+    t = _task(db, u.id, expires_at=utcnow() + timedelta(days=5))
     # 把 updated_at 回拨 1 分钟，绕过去重窗口，让第一次续期正常延长
     #（刚创建/编辑 10 秒内的续期本来就会被去重，这是预期的保守行为）
-    t.updated_at = datetime.utcnow() - timedelta(minutes=1)
+    t.updated_at = utcnow() - timedelta(minutes=1)
     db.add(t)
     db.commit()
     orig_expires = t.expires_at

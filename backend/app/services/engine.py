@@ -22,6 +22,7 @@ from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.logging import configure_logging, get_logger
 from app.core.tiers import effective_tier, effective_tier_of
+from app.core.timeutil import utcnow
 from app.models.models import MonitorTask, Notification, QuotaUsage, StockState, SystemConfig
 from app.services.apple_client import AppleClient, AppleError, AppleRateLimitError
 from app.services.notifier import (
@@ -66,7 +67,7 @@ def trial_month_key() -> str:
     配额错月）。R11-P1-5：从 _trial_quota_state 与 quota.py 匿名分支抽取
     共用，两处必须同口径，否则试用横幅与引擎扣减错位。
     """
-    return (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m")
+    return (utcnow() + timedelta(hours=8)).strftime("%Y-%m")
 
 
 def quota_period_key(user) -> str:
@@ -86,7 +87,7 @@ def ensure_quota_anchor(db, user) -> None:
     if user is None:
         return
     if getattr(user, "quota_reset_at", None) is None:
-        user.quota_reset_at = datetime.utcnow() + timedelta(days=QUOTA_CYCLE_DAYS)
+        user.quota_reset_at = utcnow() + timedelta(days=QUOTA_CYCLE_DAYS)
         db.add(user)
         db.commit()
 
@@ -146,7 +147,7 @@ def read_engine_status(db) -> dict:
     if at_s:
         try:
             last_hb = datetime.fromisoformat(str(at_s).rstrip("Z"))
-            running = (datetime.utcnow() - last_hb).total_seconds() < ENGINE_HEARTBEAT_TTL_SEC
+            running = (utcnow() - last_hb).total_seconds() < ENGINE_HEARTBEAT_TTL_SEC
         except ValueError:
             # R10-P2-5：心跳损坏时 fail-safe（running 保持 False），补 debug
             # 日志方便排查（此前静默 pass，坏心跳无从发现）
@@ -213,7 +214,7 @@ class Engine:
             await asyncio.sleep(self.settings.ENGINE_TICK_SEC)
 
     def tick(self) -> None:
-        self.last_heartbeat = datetime.utcnow()
+        self.last_heartbeat = utcnow()
         self.last_tick_at = self.last_heartbeat
         db = SessionLocal()
         try:
@@ -263,7 +264,7 @@ class Engine:
         return False
 
     def _due_tasks(self, db) -> list[MonitorTask]:
-        now = datetime.utcnow()
+        now = utcnow()
         now_ts = time.time()
         self._prune_req_windows(now_ts)
         peak = self._peak_mode(db)
@@ -397,7 +398,7 @@ class Engine:
                 lookup = {(r.store_number, r.part_number): r for r in result.results}
                 for t in tasks:
                     self._process_task(db, t, parts, chunk, lookup)
-                    t.last_polled_at = datetime.utcnow()
+                    t.last_polled_at = utcnow()
                     t.last_poll_ok = True
                     t.last_poll_ms = (time.time() - started) * 1000
                 db.commit()
@@ -415,13 +416,13 @@ class Engine:
                 log.warning("engine_apple_error", error=str(e))
                 for t in tasks:
                     self._mark_unknown(db, t, parts, chunk)
-                    t.last_polled_at = datetime.utcnow()
+                    t.last_polled_at = utcnow()
                     t.last_poll_ok = False
                 db.commit()
         return False
 
     def _process_task(self, db, task: MonitorTask, parts, chunk, lookup) -> None:
-        now = datetime.utcnow()
+        now = utcnow()
         for part in parts:
             for store in chunk:
                 r = lookup.get((store, part))
@@ -540,7 +541,7 @@ class Engine:
         if task.user_id is None or task.user is None:
             return self._check_trial_quota(db, task)
         user = task.user
-        now = datetime.utcnow()
+        now = utcnow()
         self._roll_quota_anchor(db, user, now)
         usage = self._get_usage(db, user.id, quota_period_key(user))
         limit = effective_tier_of(user)["push_limit"]
@@ -557,7 +558,7 @@ class Engine:
             self._consume_trial_quota(db, task, n)
             return
         user = task.user
-        self._roll_quota_anchor(db, user, datetime.utcnow())
+        self._roll_quota_anchor(db, user, utcnow())
         usage = self._get_usage(db, user.id, quota_period_key(user))
         usage.push_count += n
         db.add(usage)
@@ -607,7 +608,7 @@ class Engine:
         key = f"quota_warning:{user.id}:{quota_period_key(user)}:{level}"
         if get_config(db, key, {}).get("sent"):
             return  # 本周期已发过，不重复
-        set_config(db, key, {"sent": True, "at": datetime.utcnow().isoformat() + "Z"})
+        set_config(db, key, {"sent": True, "at": utcnow().isoformat() + "Z"})
         tier_name = effective_tier(user)
         if level == "100":
             title = "推送配额已用完"
@@ -708,7 +709,7 @@ class Engine:
         records = Notifier(db).dispatch(
             task.user_id, task.id, task.channels or {}, title, body, link, commit=False
         )
-        now = datetime.utcnow()
+        now = utcnow()
         for n in records:
             n.part_number = part
             db.add(n)
@@ -790,7 +791,7 @@ class Engine:
 
         重试成功不重复扣配额（配额只在 _fire 返回的 sent 条数上扣）。
         """
-        now = datetime.utcnow()
+        now = utcnow()
         rows = (
             db.execute(
                 select(Notification)
@@ -858,7 +859,7 @@ class Engine:
                     row = self._get_state(db, t.id, store, part)
                     row.state = "cooling"
                     db.add(row)
-            t.last_polled_at = datetime.utcnow()
+            t.last_polled_at = utcnow()
             t.last_poll_ok = False
             db.add(t)
         db.commit()

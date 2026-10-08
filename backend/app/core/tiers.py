@@ -1,5 +1,7 @@
 """会员四档定义：任务数 / 月推送配额 / 刷新间隔 / 渠道。"""
 
+from app.core.timeutil import utcnow
+
 TIERS: dict[str, dict] = {
     "trial": {
         "name": "体验",
@@ -60,9 +62,9 @@ def effective_tier(user) -> str:
     if tier in ("standard", "pro"):
         exp = getattr(user, "tier_expires_at", None)
         if exp is not None:
-            from datetime import datetime, timezone
+            from datetime import timezone
 
-            now = exp.now(timezone.utc) if exp.tzinfo else datetime.utcnow()
+            now = exp.now(timezone.utc) if exp.tzinfo else utcnow()
             if now >= exp:
                 return "free"
     return tier if tier in TIERS else "free"

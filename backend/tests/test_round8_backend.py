@@ -25,6 +25,7 @@ from app.api.routers import notify as notify_router
 from app.api.routers import tasks as tasks_router
 from app.core import timeutil
 from app.core.db import Base
+from app.core.timeutil import utcnow
 from app.models.models import Notification, Payment, User
 
 
@@ -43,13 +44,13 @@ def _req(headers=None):
 
 
 def _user(db, tier="free", email="r8@example.com", days_left=None, **kw):
-    exp = datetime.utcnow() + timedelta(days=days_left) if days_left is not None else None
+    exp = utcnow() + timedelta(days=days_left) if days_left is not None else None
     u = User(
         email=email,
         password_hash="x",
         tier=tier,
         tier_expires_at=exp,
-        quota_reset_at=datetime.utcnow() + timedelta(days=30),
+        quota_reset_at=utcnow() + timedelta(days=30),
         email_verified=True,
         **kw,
     )

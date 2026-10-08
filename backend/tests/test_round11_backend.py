@@ -15,7 +15,7 @@ R11-P2-4 死代码删除：schemas.ErrorOut 零引用；_strip_channel_secrets �
 import os
 import sys
 import uuid
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import pytest
 from fastapi import Request
@@ -29,6 +29,7 @@ from app.api.routers import admin as admin_router  # noqa: E402
 from app.api.routers import auth as auth_router  # noqa: E402
 from app.api.routers import quota as quota_router  # noqa: E402
 from app.core.db import Base  # noqa: E402
+from app.core.timeutil import utcnow
 from app.models.models import User  # noqa: E402
 from app.services import engine as engine_mod  # noqa: E402
 from app.services.lifecycle import membership_sweep  # noqa: E402
@@ -49,13 +50,13 @@ def _req(ip="9.9.9.9", headers=None):
 
 
 def _user(db, tier="free", email=None, days_left=None, **kw):
-    exp = datetime.utcnow() + timedelta(days=days_left) if days_left is not None else None
+    exp = utcnow() + timedelta(days=days_left) if days_left is not None else None
     u = User(
         email=email or f"r11-{uuid.uuid4().hex[:8]}@example.com",
         password_hash="x",
         tier=tier,
         tier_expires_at=exp,
-        quota_reset_at=kw.pop("quota_reset_at", datetime.utcnow() + timedelta(days=30)),
+        quota_reset_at=kw.pop("quota_reset_at", utcnow() + timedelta(days=30)),
         email_verified=True,
         **kw,
     )
@@ -75,7 +76,7 @@ def _admin(db):
 
 # ============ R11-P1-5：匿名 trial 月 key 北京时间口径 ============
 def test_trial_month_key_is_beijing_month():
-    expect = (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m")
+    expect = (utcnow() + timedelta(hours=8)).strftime("%Y-%m")
     assert engine_mod.trial_month_key() == expect
 
 
@@ -88,7 +89,7 @@ def test_quota_anonymous_period_uses_beijing_key(db):
 # ============ R11-P2-1：sweep 降 free 置 now+30d ============
 def test_sweep_downgrade_to_free_sets_quota_anchor(db):
     u = _user(db, tier="standard", days_left=-1, quota_reset_at=None)  # 已过期
-    before = datetime.utcnow()
+    before = utcnow()
     out = membership_sweep(db)
     assert out["downgraded"] == 1
     db.refresh(u)
@@ -104,7 +105,7 @@ def test_sweep_pending_promote_still_plus30d(db):
     db.refresh(u)
     assert u.tier == "pro"
     assert u.quota_reset_at is not None
-    assert u.quota_reset_at - datetime.utcnow() > timedelta(days=29)
+    assert u.quota_reset_at - utcnow() > timedelta(days=29)
 
 
 # ============ R11-P2-2：patch_user 脏状态拒绝 ============
@@ -115,7 +116,7 @@ def test_patch_user_free_with_expires_at_400(db):
         admin_router.patch_user(
             u.id,
             admin_router.AdminUserPatchEx(
-                tier="free", tier_expires_at=datetime.utcnow() + timedelta(days=30)
+                tier="free", tier_expires_at=utcnow() + timedelta(days=30)
             ),
             _req(),
             admin,
@@ -132,7 +133,7 @@ def test_patch_user_trial_with_expires_at_400(db):
         admin_router.patch_user(
             u.id,
             admin_router.AdminUserPatchEx(
-                tier="trial", tier_expires_at=datetime.utcnow() + timedelta(days=30)
+                tier="trial", tier_expires_at=utcnow() + timedelta(days=30)
             ),
             _req(),
             admin,
@@ -147,7 +148,7 @@ def test_patch_user_makeup_expires_on_free_user_400(db):
     with pytest.raises(APIError) as e:
         admin_router.patch_user(
             u.id,
-            admin_router.AdminUserPatchEx(tier_expires_at=datetime.utcnow() + timedelta(days=30)),
+            admin_router.AdminUserPatchEx(tier_expires_at=utcnow() + timedelta(days=30)),
             _req(),
             admin,
             db,
@@ -160,7 +161,7 @@ def test_patch_user_makeup_expires_on_free_user_400(db):
 def test_patch_user_makeup_expires_on_paid_user_ok(db):
     admin = _admin(db)
     u = _user(db, tier="standard", days_left=10)
-    new_exp = datetime.utcnow() + timedelta(days=60)
+    new_exp = utcnow() + timedelta(days=60)
     admin_router.patch_user(
         u.id, admin_router.AdminUserPatchEx(tier_expires_at=new_exp), _req(), admin, db
     )

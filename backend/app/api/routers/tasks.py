@@ -17,6 +17,7 @@ from app.core.logging import get_logger
 from app.core.ratelimit import check_rate_limit
 from app.core.tiers import effective_tier, effective_tier_of, tier_of
 from app.core.timeutil import as_naive_utc as _as_naive_utc
+from app.core.timeutil import utcnow
 from app.models.models import IdempotencyRecord, MonitorTask, StockState, User
 from app.schemas import TaskBatchIn, TaskCreateIn, TaskOut, TaskPatchIn
 from app.services.lifecycle import null_notification_task_ids
@@ -56,7 +57,7 @@ def _clamp_expires(expires_at: datetime | None, anonymous: bool) -> datetime | N
     if not anonymous:
         return _as_naive_utc(expires_at)
     expires_at = _as_naive_utc(expires_at)
-    cap = datetime.utcnow() + TRIAL_MAX_TTL
+    cap = utcnow() + TRIAL_MAX_TTL
     if expires_at is None or expires_at > cap:
         return cap
     return expires_at
@@ -68,7 +69,7 @@ def _is_expired(task: MonitorTask, now: datetime | None = None) -> bool:
         return False
     if task.expires_at is None:
         return False
-    return task.expires_at < (now or datetime.utcnow())
+    return task.expires_at < (now or utcnow())
 
 
 def _display_state(task: MonitorTask, row: StockState | None) -> str:
@@ -203,9 +204,9 @@ def _validate_expires_at(expires_at: datetime | None) -> None:
     """R6-P2-12：expires_at 早于当前时间直接 400（过期任务建了也无意义）。
 
     R7 断裂 后-D-1：先归一化为 naive UTC 再比较（pydantic 解析出的 "…Z"
-    是 tz-aware，与 datetime.utcnow() 直接比会 TypeError→500）。"""
+    是 tz-aware，与 utcnow() 直接比会 TypeError→500）。"""
     expires_at = _as_naive_utc(expires_at)
-    if expires_at is not None and expires_at < datetime.utcnow():
+    if expires_at is not None and expires_at < utcnow():
         raise APIError(400, "expires_at 不能早于当前时间", "bad_expires_at")
 
 
@@ -311,7 +312,7 @@ def _claim_idempotency_key(
             rec is not None
             and not rec.task_ids
             and rec.created_at is not None
-            and datetime.utcnow() - rec.created_at
+            and utcnow() - rec.created_at
             > timedelta(minutes=IDEMPOTENCY_CLAIM_TTL_MIN)
         ):
             db.delete(rec)
@@ -655,7 +656,7 @@ def renew_task(
     只延长时间，不改 paused/配额状态。匿名 trial 任务同样受 24h 上限钳制。
     """
     task = _get_owned(task_id, user, x_device_id, db)
-    now = datetime.utcnow()
+    now = utcnow()
     # R13-P1-1：并发双击防护改用 last_renewed_at 专用列（仅续期成功时写入）。
     # 旧逻辑用 updated_at < 10s 去重，但 updated_at 带 onupdate=_utcnow，
     # 引擎每轮 poll（写 last_polled_at/last_poll_ok/last_poll_ms）都会推进它，

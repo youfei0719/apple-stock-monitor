@@ -7,7 +7,7 @@
 
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import pytest
 from sqlalchemy import create_engine
@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.api.errors import APIError
 from app.api.routers.quota import get_quota
 from app.core.db import Base
+from app.core.timeutil import utcnow
 from app.models.models import MonitorTask, User
 from app.services.engine import Engine
 from app.services.notifier import Notifier
@@ -107,7 +108,7 @@ def test_quota_endpoint_logged_in_regression(db):
         email="f4@example.com",
         password_hash="x",
         tier="free",
-        quota_reset_at=datetime.utcnow() + timedelta(days=30),
+        quota_reset_at=utcnow() + timedelta(days=30),
         email_verified=True,
     )
     db.add(u)

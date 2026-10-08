@@ -1,6 +1,6 @@
 """通知：链路测试、通知历史、通道健康。"""
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import desc, func, select
@@ -10,6 +10,7 @@ from app.api.deps import get_current_user
 from app.api.errors import APIError
 from app.core.db import get_db
 from app.core.tiers import effective_tier_of
+from app.core.timeutil import utcnow
 from app.models.models import MonitorTask, Notification, User
 from app.schemas import NotifyTestIn
 from app.services.lifecycle import _today_start, _utcnow
@@ -106,7 +107,7 @@ def channels_health(
     记录（测试/发送均可），见 configured_basis 字段诚实标注。
     success_rate_7d 只统计 sent/failed（skipped 为档位拦截，不计入通道健康）。
     """
-    now = datetime.utcnow()
+    now = utcnow()
     since_7d = now - timedelta(days=7)
     since_30d = now - timedelta(days=30)
 

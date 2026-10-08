@@ -10,6 +10,16 @@ SQLite DATETIME 方言写入 tz-aware 时静默丢弃 tzinfo、不换算 UTC（�
 from datetime import datetime, timezone
 
 
+def utcnow() -> datetime:
+    """naive UTC 当前时间——datetime.utcnow() 的迁移替代。
+
+    datetime.utcnow() 在 Python 3.12+ 废弃（DeprecationWarning）。
+    本 helper 值语义完全一致：全库时间约定为 naive UTC，SQLite 里也存
+    naive——调用方原样拿 naive 继续比较/入库，无需改时区口径。
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 def as_naive_utc(dt: datetime | None) -> datetime | None:
     """pydantic 会把 "2026-12-01T00:00:00Z" / "...+08:00" 解析为 tz-aware
     datetime，aware 与 naive 直接比较（< now 等）会 TypeError→500，

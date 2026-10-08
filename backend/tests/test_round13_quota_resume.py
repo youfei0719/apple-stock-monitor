@@ -9,7 +9,7 @@ R13-P2-5 升级/续费成功后，配额耗尽暂停的任务在新周期配额�
 import os
 import sys
 import uuid
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import pytest
 from sqlalchemy import create_engine
@@ -18,6 +18,7 @@ from sqlalchemy.orm import sessionmaker
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.core.db import Base  # noqa: E402
+from app.core.timeutil import utcnow
 from app.models.models import MonitorTask, QuotaUsage, User  # noqa: E402
 from app.services.engine import quota_period_key  # noqa: E402
 from app.services.lifecycle import resume_quota_exhausted_tasks  # noqa: E402
@@ -37,8 +38,8 @@ def _user(db, tier="pro"):
         email=f"r13q-{uuid.uuid4().hex[:8]}@example.com",
         password_hash="x",
         tier=tier,
-        tier_expires_at=datetime.utcnow() + timedelta(days=30),
-        quota_reset_at=datetime.utcnow() + timedelta(days=30),
+        tier_expires_at=utcnow() + timedelta(days=30),
+        quota_reset_at=utcnow() + timedelta(days=30),
         email_verified=True,
     )
     db.add(u)

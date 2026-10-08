@@ -17,10 +17,11 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import Base
+from app.core.timeutil import utcnow
 
 
 def _utcnow() -> datetime:
-    return datetime.utcnow()
+    return utcnow()
 
 
 class User(Base):

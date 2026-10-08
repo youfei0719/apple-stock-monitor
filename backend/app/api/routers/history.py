@@ -9,13 +9,14 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.core.db import get_db
 from app.core.tiers import effective_tier_of
+from app.core.timeutil import utcnow
 from app.models.models import MonitorTask, Notification, User
 
 router = APIRouter(prefix="/history", tags=["history"])
 
 
 def _since(days: int) -> datetime:
-    return datetime.utcnow() - timedelta(days=days)
+    return utcnow() - timedelta(days=days)
 
 
 @router.get("/events")

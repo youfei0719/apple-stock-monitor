@@ -15,7 +15,7 @@ from app.api.routers.pay import TIER_RANK, apply_tier_grant
 from app.core.db import get_db
 from app.core.logging import get_logger
 from app.core.tiers import VALID_TIERS
-from app.core.timeutil import as_naive_utc
+from app.core.timeutil import as_naive_utc, utcnow
 from app.models.models import (
     ApiHit,
     AuditLog,
@@ -93,8 +93,8 @@ def overview(admin: User = Depends(get_current_admin), db: Session = Depends(get
     # 有效口径在 SQL 里复刻 tiers.effective_tier 的判定（付费档 + 到期时间已过
     # → 按 free 算；未知档位/NULL → free），与 Python 实现逐用户对齐
     #（见 test_round10_backend.test_overview_effective_tier_matches_python）。
-    # 入库时间为 naive UTC，直接与 datetime.utcnow() 比较。
-    now_eff = datetime.utcnow()
+    # 入库时间为 naive UTC，直接与 utcnow() 比较。
+    now_eff = utcnow()
     eff_tier = case(
         (
             and_(
@@ -110,7 +110,7 @@ def overview(admin: User = Depends(get_current_admin), db: Session = Depends(get
     eff_rows = db.execute(select(eff_tier, func.count()).group_by(eff_tier)).all()
     effective_tier_distribution = {t: c for t, c in eff_rows}
     # R4-P2：today_pushes 按北京时间口径统计（此前按 UTC，用户看到的"今日"少 8 小时）。
-    beijing_today = (datetime.utcnow() + timedelta(hours=8)).date()
+    beijing_today = (utcnow() + timedelta(hours=8)).date()
     today_pushes = db.execute(
         select(func.count())
         .select_from(Notification)
@@ -125,7 +125,7 @@ def overview(admin: User = Depends(get_current_admin), db: Session = Depends(get
     # 的确切谓词是"expires_at < now 且未手动暂停"，active = not expired，即
     # paused 或 expires_at 为空或未到期（注意：含已手动暂停的任务，与原
     # paused IS False 口径不同；原口径把"已过期但未暂停"也算成 active）。
-    now = datetime.utcnow()
+    now = utcnow()
     active_tasks = db.execute(
         select(func.count())
         .select_from(MonitorTask)
@@ -170,7 +170,7 @@ def traffic(
     admin: User = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    since = datetime.utcnow() - timedelta(days=days)
+    since = utcnow() - timedelta(days=days)
     rows = db.execute(
         select(
             # R6-I8："按天"口径统一北京时间（与 overview 的 today_pushes 一致）
@@ -262,12 +262,12 @@ def patch_user(
             # 时间时，默认 +30 天并在响应里提示（NULL 永不到期是幽灵会员；
             # membership_sweep 也会回收 NULL 到期的付费用户作兜底）
             if data.tier_expires_at is None and (
-                target.tier_expires_at is None or target.tier_expires_at < datetime.utcnow()
+                target.tier_expires_at is None or target.tier_expires_at < utcnow()
             ):
                 # R8-I-8 附带：审计 from 记录旧值（可能是已过期时间戳），此前
                 # 硬编码 None 会把"旧值是过期时间戳"的场景记错
                 old_expires = target.tier_expires_at
-                target.tier_expires_at = datetime.utcnow() + timedelta(days=30)
+                target.tier_expires_at = utcnow() + timedelta(days=30)
                 changes["tier_expires_at"] = (
                     old_expires.isoformat() if old_expires else None,
                     target.tier_expires_at.isoformat(),
@@ -312,7 +312,7 @@ def patch_user(
                 target.quota_reset_at = target.tier_expires_at
                 changes["quota_reset_at"] = target.quota_reset_at.isoformat()
         else:
-            target.quota_reset_at = datetime.utcnow() + timedelta(days=30)
+            target.quota_reset_at = utcnow() + timedelta(days=30)
             changes["quota_reset_at"] = target.quota_reset_at.isoformat()
     if data.is_admin is not None:
         changes["is_admin"] = (target.is_admin, data.is_admin)
@@ -339,7 +339,7 @@ def patch_user(
     if (
         target.tier in ("standard", "pro")
         and target.tier_expires_at is not None
-        and target.tier_expires_at > datetime.utcnow()
+        and target.tier_expires_at > utcnow()
         and (
             TIER_RANK.get(target.tier, 0) > TIER_RANK.get(old_tier, 0)
             or old_tier not in ("standard", "pro")
@@ -404,7 +404,7 @@ def _dec_amount_mismatch_pending(db: Session) -> int:
             "updated_at = excluded.updated_at "
             "RETURNING json_extract(value, '$.count') AS count"
         ),
-        {"key": _AMOUNT_MISMATCH_PENDING_KEY, "now": datetime.utcnow()},
+        {"key": _AMOUNT_MISMATCH_PENDING_KEY, "now": utcnow()},
     ).first()
     return int(row[0]) if row else 0
 
@@ -659,7 +659,7 @@ def refund_payment(
             user.tier_expires_at = None
             user.pending_tier = None
             # R4-P1-B7：退款后配额锚点按免费档重算——从退款时刻起新的 30 天周期
-            user.quota_reset_at = datetime.utcnow() + timedelta(days=30)
+            user.quota_reset_at = utcnow() + timedelta(days=30)
             db.add(user)
             # R4-P1-B8：tier 已是 free，membership_sweep 会跳过，pro 的 30 个任务
             # 会继续轮询；这里立即执行一次任务数收敛（free 上限）

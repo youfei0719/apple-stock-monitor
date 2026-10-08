@@ -23,6 +23,7 @@ from app.api.routers import admin as admin_router
 from app.api.routers import auth as auth_router
 from app.api.routers import tasks as tasks_router
 from app.core.db import Base
+from app.core.timeutil import utcnow
 from app.models.models import MonitorTask, Notification, User
 from app.services import lifecycle as lifecycle_mod
 
@@ -42,13 +43,13 @@ def _req(headers=None):
 
 
 def _user(db, tier="free", email="r7@example.com", days_left=None, **kw):
-    exp = datetime.utcnow() + timedelta(days=days_left) if days_left is not None else None
+    exp = utcnow() + timedelta(days=days_left) if days_left is not None else None
     u = User(
         email=email,
         password_hash="x",
         tier=tier,
         tier_expires_at=exp,
-        quota_reset_at=datetime.utcnow() + timedelta(days=30),
+        quota_reset_at=utcnow() + timedelta(days=30),
         email_verified=True,
         **kw,
     )
@@ -99,7 +100,7 @@ def test_clamp_expires_aware_anonymous():
     aware = datetime.now(timezone.utc) + timedelta(hours=1)
     out = tasks_router._clamp_expires(aware, anonymous=True)
     assert out.tzinfo is None
-    assert out <= datetime.utcnow() + timedelta(hours=24)
+    assert out <= utcnow() + timedelta(hours=24)
 
 
 def test_clamp_expires_aware_non_anonymous_normalized():
@@ -113,7 +114,7 @@ def test_clamp_expires_aware_non_anonymous_normalized():
 def test_patch_only_tier_expires_at_syncs_quota_reset_at(db):
     admin = _user(db, email="admin@example.com", is_admin=True)
     u = _user(db, tier="standard", email="paid@example.com", days_left=10)
-    new_exp = datetime.utcnow() + timedelta(days=60)
+    new_exp = utcnow() + timedelta(days=60)
     out = admin_router.patch_user(
         u.id,
         admin_router.AdminUserPatchEx(tier_expires_at=new_exp),
@@ -131,7 +132,7 @@ def test_patch_only_tier_expires_at_syncs_quota_reset_at(db):
 def test_patch_tier_and_expires_at_keeps_paid_quota_alignment(db):
     admin = _user(db, email="admin2@example.com", is_admin=True)
     u = _user(db, tier="free", email="free@example.com")
-    new_exp = datetime.utcnow() + timedelta(days=30)
+    new_exp = utcnow() + timedelta(days=30)
     admin_router.patch_user(
         u.id,
         admin_router.AdminUserPatchEx(tier="pro", tier_expires_at=new_exp),

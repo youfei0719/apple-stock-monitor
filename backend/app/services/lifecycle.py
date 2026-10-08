@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.core.logging import get_logger
 from app.core.tiers import TIERS, VALID_TIERS, effective_tier
+from app.core.timeutil import utcnow
 from app.models.models import (
     ApiHit,
     MonitorTask,
@@ -42,7 +43,7 @@ RENEW_MILESTONES = (3, 1)
 
 
 def _utcnow() -> datetime:
-    return datetime.utcnow()
+    return utcnow()
 
 
 def _today_start(now: datetime) -> datetime:
@@ -193,7 +194,7 @@ def resume_quota_exhausted_tasks(db: Session, user: User) -> list[MonitorTask]:
     tier_cfg = TIERS.get(tier, TIERS["free"])
     # 配额余量检查：先滚锚点（升级路径一般已由 apply_tier_grant 置好新锚点，
     # 这里是兜底），再按周期键读用量
-    now = datetime.utcnow()
+    now = utcnow()
     anchor = getattr(user, "quota_reset_at", None)
     rolled = anchor
     while rolled is not None and now >= rolled:

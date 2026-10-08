@@ -1,7 +1,5 @@
 """认证依赖：Cookie 会话；管理员需 TOTP 验证。"""
 
-from datetime import datetime
-
 from fastapi import Cookie, Depends, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -10,6 +8,7 @@ from app.api.errors import APIError
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.security import token_digest
+from app.core.timeutil import utcnow
 from app.models.models import Session as DbSession
 from app.models.models import User
 
@@ -41,7 +40,7 @@ def get_session(
         return None
     digest = token_digest(session_token)
     s = db.execute(select(DbSession).where(DbSession.token_digest == digest)).scalar_one_or_none()
-    if not s or s.expires_at < datetime.utcnow():
+    if not s or s.expires_at < utcnow():
         return None
     return s
 

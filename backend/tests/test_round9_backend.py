@@ -21,7 +21,7 @@ import hmac
 import json
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import pytest
 from fastapi import Request, Response
@@ -38,6 +38,7 @@ from app.api.routers import tasks as tasks_router
 from app.core import ratelimit
 from app.core.db import Base
 from app.core.security import hash_password, new_session_token, token_digest
+from app.core.timeutil import utcnow
 from app.models.models import MonitorTask, Payment, User
 from app.models.models import Session as DbSession
 from app.schemas import (
@@ -65,13 +66,13 @@ def _req(ip="9.9.9.9", headers=None):
 
 
 def _user(db, tier="free", email="r9@example.com", days_left=None, **kw):
-    exp = datetime.utcnow() + timedelta(days=days_left) if days_left is not None else None
+    exp = utcnow() + timedelta(days=days_left) if days_left is not None else None
     u = User(
         email=email,
         password_hash=kw.pop("password_hash", "x"),
         tier=tier,
         tier_expires_at=exp,
-        quota_reset_at=datetime.utcnow() + timedelta(days=30),
+        quota_reset_at=utcnow() + timedelta(days=30),
         email_verified=kw.pop("email_verified", True),
         **kw,
     )
@@ -100,7 +101,7 @@ def _task(db, user_id, paused=False, paused_reason=None, expires_at=None, hours_
         paused=paused,
         paused_reason=paused_reason,
         expires_at=expires_at,
-        updated_at=datetime.utcnow() - timedelta(hours=hours_ago),
+        updated_at=utcnow() - timedelta(hours=hours_ago),
     )
     db.add(t)
     db.commit()
@@ -110,7 +111,7 @@ def _task(db, user_id, paused=False, paused_reason=None, expires_at=None, hours_
 
 def _unclaimed_payment(db, tier_to="standard", order_id=None):
     p = Payment(
-        order_id=order_id or f"r9-{id(db) % 100000}-{datetime.utcnow().timestamp()}",
+        order_id=order_id or f"r9-{id(db) % 100000}-{utcnow().timestamp()}",
         plan="standard_monthly",
         amount_cny=19.0,
         tier_from="free",
@@ -325,7 +326,7 @@ def test_overview_active_tasks_predicate(db):
     """
     admin = _admin(db)
     u = _user(db, email="r9d5@example.com")
-    now = datetime.utcnow()
+    now = utcnow()
     _task(db, u.id, paused=False, expires_at=None)  # active
     _task(db, u.id, paused=False, expires_at=now + timedelta(days=1))  # active
     _task(db, u.id, paused=False, expires_at=now - timedelta(days=1))  # expired
@@ -435,7 +436,7 @@ def _session(db, user_id, hours=1):
         user_id=user_id,
         token_digest=token_digest(tok),
         ip="1.2.3.4",
-        expires_at=datetime.utcnow() + timedelta(hours=hours),
+        expires_at=utcnow() + timedelta(hours=hours),
     )
     db.add(s)
     db.commit()

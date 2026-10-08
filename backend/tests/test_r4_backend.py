@@ -2,7 +2,7 @@
 
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import pytest
 from fastapi import Request
@@ -15,6 +15,7 @@ from app.api.routers import admin as admin_router
 from app.api.routers import auth as auth_router
 from app.api.routers import pay as pay_router
 from app.core.db import Base
+from app.core.timeutil import utcnow
 from app.models.models import MonitorTask, Payment, SystemConfig, User
 from app.schemas import TaskBatchIn
 from app.services import lifecycle as lifecycle_mod
@@ -35,13 +36,13 @@ def _req():
 
 
 def _user(db, tier="free", email="r4@example.com", days_left=None):
-    exp = datetime.utcnow() + timedelta(days=days_left) if days_left is not None else None
+    exp = utcnow() + timedelta(days=days_left) if days_left is not None else None
     u = User(
         email=email,
         password_hash="x",
         tier=tier,
         tier_expires_at=exp,
-        quota_reset_at=datetime.utcnow() + timedelta(days=30),
+        quota_reset_at=utcnow() + timedelta(days=30),
         email_verified=True,
     )
     db.add(u)
@@ -112,7 +113,7 @@ def test_refund_resets_quota_and_converges_tasks(db):
     assert u.pending_tier is None
     # B7: 锚点重置为 now+30 天
     assert u.quota_reset_at > old_anchor
-    assert u.quota_reset_at > datetime.utcnow() + timedelta(days=29)
+    assert u.quota_reset_at > utcnow() + timedelta(days=29)
     # B8: free 上限 3，5 个任务 → 暂停 2 个
     assert out["user"]["tasks_paused"] == 2
     active = db.execute(
@@ -177,7 +178,7 @@ def test_membership_sweep_pending_promotion_syncs_quota(db):
     assert u.tier == "standard"
     assert u.pending_tier is None
     assert u.quota_reset_at > old_anchor
-    assert u.quota_reset_at > datetime.utcnow() + timedelta(days=29)
+    assert u.quota_reset_at > utcnow() + timedelta(days=29)
 
 
 # ---- B4: api_hits 保留策略 ----
@@ -186,7 +187,7 @@ def test_prune_api_hits(db):
 
     db.add(ApiHit(path="/api/x", ip_hash="a" * 32))
     old = ApiHit(path="/api/y", ip_hash="b" * 32)
-    old.created_at = datetime.utcnow() - timedelta(days=100)
+    old.created_at = utcnow() - timedelta(days=100)
     db.add(old)
     db.commit()
     out = lifecycle_mod.prune_api_hits(db)

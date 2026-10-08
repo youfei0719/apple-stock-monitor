@@ -1,6 +1,6 @@
 """数据分析：全国榜单（城市放货排行）、数据分析摘要。"""
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.db import get_db
+from app.core.timeutil import utcnow
 from app.models.models import MonitorTask, Notification, User
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
@@ -15,7 +16,7 @@ router = APIRouter(prefix="/analytics", tags=["analytics"])
 
 def _event_rows(db: Session, user_id: int, days: int):
     # R4-P2：加界（ranking days≤30 / overview days≤90 全量进内存）
-    since = datetime.utcnow() - timedelta(days=days)
+    since = utcnow() - timedelta(days=days)
     return db.execute(
         select(Notification, MonitorTask)
         .join(MonitorTask, Notification.task_id == MonitorTask.id, isouter=True)

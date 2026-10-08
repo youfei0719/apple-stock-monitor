@@ -16,7 +16,6 @@ docs/reviews/reconciliation-plan.md（首版只留文档，未实现）。
 import hashlib
 import hmac
 import json
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import desc, select, text
@@ -29,6 +28,7 @@ from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.logging import get_logger
 from app.core.tiers import effective_tier
+from app.core.timeutil import utcnow
 from app.models.models import Payment, User
 from app.services.lifecycle import resume_quota_exhausted_tasks, resume_tier_limited_tasks
 
@@ -80,7 +80,7 @@ def _bump_amount_mismatch_pending(db: Session) -> int:
             "updated_at = excluded.updated_at "
             "RETURNING json_extract(value, '$.count') AS count"
         ),
-        {"key": AMOUNT_MISMATCH_PENDING_KEY, "now": datetime.utcnow()},
+        {"key": AMOUNT_MISMATCH_PENDING_KEY, "now": utcnow()},
     ).first()
     return int(row[0]) if row else 0
 
@@ -96,7 +96,7 @@ def apply_tier_grant(db: Session, user: User, tier_to: str) -> str:
     一条 SQL 完成读-改-写。并发 webhook（不同订单）同时给同一用户续费时，
     不再出现"先读后写"的 lost-update（60 天变 30 天）。
     """
-    now = datetime.utcnow()
+    now = utcnow()
     if TIER_RANK.get(tier_to, 0) < TIER_RANK.get(effective_tier(user), 0):
         user.pending_tier = tier_to
         db.add(user)

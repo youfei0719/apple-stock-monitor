@@ -32,6 +32,7 @@ from app.core.security import (
     verify_totp,
 )
 from app.core.tiers import effective_tier, effective_tier_of
+from app.core.timeutil import utcnow
 from app.models.models import MonitorTask, Notification, QuotaUsage, SystemConfig, User
 from app.models.models import Session as DbSession
 from app.schemas import (
@@ -75,7 +76,7 @@ def _check_attempt_lock(db: Session, prefix: str, ident: str, what: str) -> None
                 until = datetime.fromisoformat(str(locked_until).rstrip("Z"))
             except ValueError:
                 until = None
-            if until is not None and datetime.utcnow() < until:
+            if until is not None and utcnow() < until:
                 raise APIError(429, f"{what}尝试次数过多，请 15 分钟后再试", "attempt_locked")
 
 
@@ -87,7 +88,7 @@ def _record_attempt_fail(db: Session, prefix: str, ident: str) -> None:
     value = {"fails": fails}
     if fails >= ATTEMPT_FAIL_LIMIT:
         value["locked_until"] = (
-            datetime.utcnow() + timedelta(minutes=ATTEMPT_LOCK_MINUTES)
+            utcnow() + timedelta(minutes=ATTEMPT_LOCK_MINUTES)
         ).isoformat() + "Z"
     if row:
         row.value = value
@@ -130,7 +131,7 @@ def _email_code_key(email: str) -> str:
 def _send_verification_code(db: Session, user: User) -> bool:
     """生成 6 位验证码并邮件发送（断裂-22；复用 notifier.send_email）。"""
     code = f"{secrets.randbelow(900000) + 100000:06d}"
-    expires_at = datetime.utcnow() + timedelta(minutes=EMAIL_CODE_TTL_MIN)
+    expires_at = utcnow() + timedelta(minutes=EMAIL_CODE_TTL_MIN)
     key = _email_code_key(user.email)
     row = db.execute(select(SystemConfig).where(SystemConfig.key == key)).scalar_one_or_none()
     value = {"code": code, "expires_at": expires_at.isoformat() + "Z"}
@@ -267,7 +268,7 @@ def register(data: RegisterIn, request: Request, db: Session = Depends(get_db)):
         password_hash=hash_password(data.password),
         tier="free",
         email_verified=False,
-        quota_reset_at=datetime.utcnow() + timedelta(days=30),
+        quota_reset_at=utcnow() + timedelta(days=30),
     )
     db.add(user)
     try:
@@ -318,7 +319,7 @@ def verify_email(data: VerifyEmailIn, db: Session = Depends(get_db)):
         _record_attempt_fail(db, "verify_email_fail", email)
         raise APIError(400, "验证码错误", "bad_code")
     expires_at = datetime.fromisoformat((row.value or {}).get("expires_at", "").rstrip("Z"))
-    if datetime.utcnow() > expires_at:
+    if utcnow() > expires_at:
         # R4-P1-D6：过期文案指引"重新发送"，而不是"重新注册"
         # （该邮箱已注册，重新注册必 400 email_taken，用户会撞墙）
         _record_attempt_fail(db, "verify_email_fail", email)
@@ -397,7 +398,7 @@ def login(data: LoginIn, request: Request, response: Response, db: Session = Dep
         token_digest=token_digest(token),
         ip=ip,
         user_agent=(request.headers.get("user-agent") or "")[:512],
-        expires_at=datetime.utcnow() + timedelta(hours=settings.SESSION_EXPIRE_HOURS),
+        expires_at=utcnow() + timedelta(hours=settings.SESSION_EXPIRE_HOURS),
     )
     db.add(s)
     claimed = _claim_device_tasks(db, request, user)
