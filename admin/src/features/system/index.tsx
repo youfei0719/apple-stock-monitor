@@ -26,7 +26,6 @@ import { ThemeSwitch } from '@/components/theme-switch'
 import {
   getSystem,
   getAudit,
-  getLogTail,
   setPeakMode,
   fmtLocalTime,
   type SystemStatus,
@@ -88,18 +87,41 @@ function fmtDetail(detail: unknown): string {
   }
 }
 
+/** R8-U-5：审计"操作"列中文映射（未知 action 回退显示原文） */
+const AUDIT_ACTION_LABEL: Record<string, string> = {
+  'user.patch': '会员改级',
+  'user.verify_email': '邮箱手动验证',
+  'payment.claim': '订单认领',
+  'payment.refund': '订单退款',
+  'payment.close': '订单关闭',
+  'system.peak_mode': '高峰模式切换',
+}
+
 export function System() {
   const [sys, setSys] = useState<SystemStatus | null>(null)
-  const [logs, setLogs] = useState<string[] | null>(null)
   const [audit, setAudit] = useState<AuditEntry[] | null>(null)
+  // R8-I-13：加载失败单独记错误态，区分"加载失败"与"无数据"/骨架屏
+  const [sysError, setSysError] = useState<string | null>(null)
+  const [auditError, setAuditError] = useState<string | null>(null)
   const [peakBusy, setPeakBusy] = useState(false)
   // P2：高峰模式开关二次确认
   const [peakPending, setPeakPending] = useState<boolean | null>(null)
 
+  // R8-U-4：日志直接取 sys.log_tail，不再单独调 getLogTail（原先 /api/admin/system 被请求两次）
+  const loadAll = () => {
+    setSysError(null)
+    getSystem()
+      .then((s) => setSys(s))
+      .catch((e) => setSysError(e instanceof Error ? e.message : '加载系统状态失败'))
+    setAuditError(null)
+    getAudit()
+      .then((a) => setAudit(a))
+      .catch((e) => setAuditError(e instanceof Error ? e.message : '加载审计日志失败'))
+  }
+
   useEffect(() => {
-    getSystem().then(setSys).catch(() => setSys(null))
-    getLogTail().then(setLogs).catch(() => setLogs([]))
-    getAudit().then(setAudit).catch(() => setAudit([]))
+    loadAll()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   async function togglePeakMode(enabled: boolean) {
@@ -117,7 +139,9 @@ export function System() {
     }
   }
 
-  const loading = sys === null
+  const loading = sys === null && sysError === null
+  // R8-U-4：日志直接取 sys.log_tail（getSystem 一次请求已包含）
+  const logs = sys?.log_tail ?? null
   // 后端 engine 是 dict：{running, last_heartbeat, last_tick_at, rounds_total, rounds_ok, last_error}
   const engine = sys?.engine
   const engineOk = engine?.running === true
@@ -142,6 +166,21 @@ export function System() {
             {USE_MOCK && '（mock 数据，待后端联调）'}
           </p>
         </div>
+
+        {/* R8-I-13：加载失败明确展示 + 重试，不再无限骨架屏 */}
+        {sysError && (
+          <Card className='mb-4 rounded-3xl border-[#d70015]/30'>
+            <CardContent className='flex items-center justify-between px-5 py-4'>
+              <p className='text-sm text-[#d70015]'>系统状态加载失败：{sysError}</p>
+              <button
+                onClick={loadAll}
+                className='rounded-2xl bg-muted px-4 py-2 text-sm font-medium hover:text-foreground'
+              >
+                重试
+              </button>
+            </CardContent>
+          </Card>
+        )}
 
         <div className='grid gap-4 sm:grid-cols-2 lg:grid-cols-4'>
           <Card className='rounded-3xl'>
@@ -293,7 +332,13 @@ export function System() {
             </CardHeader>
             <CardContent>
               {logs === null ? (
-                <Skeleton className='h-40 w-full rounded-2xl' />
+                sysError ? (
+                  <p className='py-6 text-center text-sm text-[#d70015]'>
+                    日志加载失败：{sysError}
+                  </p>
+                ) : (
+                  <Skeleton className='h-40 w-full rounded-2xl' />
+                )
               ) : logs.length === 0 ? (
                 <p className='py-6 text-center text-sm text-muted-foreground'>
                   暂无日志
@@ -316,7 +361,19 @@ export function System() {
           </CardHeader>
           <CardContent>
             {audit === null ? (
-              <Skeleton className='h-40 w-full rounded-2xl' />
+              auditError ? (
+                <p className='py-6 text-center text-sm text-[#d70015]'>
+                  审计日志加载失败：{auditError}
+                  <button
+                    onClick={loadAll}
+                    className='mt-3 block rounded-2xl bg-muted px-4 py-2 text-sm font-medium text-foreground hover:text-foreground'
+                  >
+                    重试
+                  </button>
+                </p>
+              ) : (
+                <Skeleton className='h-40 w-full rounded-2xl' />
+              )
             ) : (
               <Table>
                 <TableHeader>
@@ -338,7 +395,7 @@ export function System() {
                       <TableCell className='font-mono text-[13px]'>{a.admin_id}</TableCell>
                       <TableCell>
                         <Badge className='rounded-full bg-[#0071e3]/10 text-[#0071e3]'>
-                          {a.action}
+                          {AUDIT_ACTION_LABEL[a.action] ?? a.action}
                         </Badge>
                       </TableCell>
                       <TableCell className='font-mono text-[13px]'>

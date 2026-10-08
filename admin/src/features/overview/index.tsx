@@ -73,12 +73,22 @@ function KpiCard({
 
 export function Overview() {
   const [data, setData] = useState<OverviewKpi | null>(null)
+  // R8-I-13：加载失败单独记错误态，区分"加载失败"与骨架屏/无数据
+  const [loadError, setLoadError] = useState<string | null>(null)
+
+  const load = () => {
+    setLoadError(null)
+    getOverview()
+      .then((d) => setData(d))
+      .catch((e) => setLoadError(e instanceof Error ? e.message : '加载总览失败'))
+  }
 
   useEffect(() => {
-    getOverview().then(setData).catch(() => setData(null))
+    load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const loading = data === null
+  const loading = data === null && loadError === null
   // 后端 tier_distribution 是 {tier: count} 对象，键来自 DB（trial/free/standard/pro）
   const dist = data?.tier_distribution ?? {}
   const total = Object.values(dist).reduce((s, c) => s + c, 0)
@@ -111,6 +121,21 @@ export function Overview() {
             </p>
           </div>
         </div>
+
+        {/* R8-I-13：加载失败明确展示 + 重试，不再无限骨架屏 */}
+        {loadError && (
+          <Card className='mb-4 rounded-3xl border-[#d70015]/30'>
+            <CardContent className='flex items-center justify-between px-5 py-4'>
+              <p className='text-sm text-[#d70015]'>总览加载失败：{loadError}</p>
+              <button
+                onClick={load}
+                className='rounded-2xl bg-muted px-4 py-2 text-sm font-medium hover:text-foreground'
+              >
+                重试
+              </button>
+            </CardContent>
+          </Card>
+        )}
 
         <div className='grid gap-4 sm:grid-cols-2 lg:grid-cols-4'>
           <KpiCard

@@ -59,9 +59,10 @@ const STATUS_LABEL: Record<string, string> = {
 function canRefund(r: PaymentRecord): boolean {
   return r.status === 'paid' || r.status === 'amount_mismatch' || r.status === 'unknown_plan'
 }
-/** 可关闭（不处理）的状态（后端仅允许 amount_mismatch/paid → resolved） */
+/** 可关闭（不处理）的状态：后端 close_payment 仅允许 amount_mismatch/unknown_plan → resolved；
+ * paid（已开通）必须走退款流程（400 use_refund_flow），前端不给 paid 渲染"关闭"入口 */
 function canClose(r: PaymentRecord): boolean {
-  return r.status === 'amount_mismatch' || r.status === 'paid'
+  return ['amount_mismatch', 'unknown_plan'].includes(r.status)
 }
 /** R7：已处理完的终态订单（已退款/已处理/已取消）不再给认领入口 */
 const CLAIM_HIDDEN_STATUSES = new Set(['refunded', 'resolved', 'cancelled'])
@@ -73,8 +74,22 @@ function fmtTierChange(r: PaymentRecord): string {
   return `${from} → ${to}`
 }
 
+/** R8-U-3：套餐列中文映射（tier_to 优先识别 standard/pro；unknown 或空 → '—'） */
+function fmtPlan(r: PaymentRecord): string {
+  if (r.tier_to === 'standard') return '标准版'
+  if (r.tier_to === 'pro') return 'Pro版'
+  const p = (r.plan ?? '').toLowerCase()
+  if (p.includes('standard')) return '标准版'
+  if (p.includes('pro')) return 'Pro版'
+  return '—'
+}
+
 export function Payments() {
   const [rows, setRows] = useState<PaymentRecord[] | null>(null)
+  // R8-I-14：全量订单（仅"只看待认领"时请求），收入合计按全站算、不随筛选变化
+  const [fullRows, setFullRows] = useState<PaymentRecord[] | null>(null)
+  // R8-I-13：加载失败单独记错误态，明确区分"加载失败"与"无数据"
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [unclaimedOnly, setUnclaimedOnly] = useState(false)
   const [claiming, setClaiming] = useState<PaymentRecord | null>(null)
   const [claimUserId, setClaimUserId] = useState('')
@@ -86,10 +101,23 @@ export function Payments() {
 
   const load = async (unclaimed: boolean) => {
     setRows(null)
+    setFullRows(null)
+    setLoadError(null)
     try {
-      setRows(await getPayments(unclaimed ? 'unclaimed' : ''))
-    } catch {
-      setRows([])
+      if (unclaimed) {
+        // R8-I-14：切"只看待认领"时 rows 是子集，收入合计仍按全量算（多一次请求）
+        const [sub, all] = await Promise.all([
+          getPayments('unclaimed'),
+          getPayments(''),
+        ])
+        setRows(sub)
+        setFullRows(all)
+      } else {
+        setRows(await getPayments(''))
+      }
+    } catch (e) {
+      // R8-I-13：失败不伪装成空数组，"暂无数据"只在真正无数据时出现
+      setLoadError(e instanceof Error ? e.message : '加载付费记录失败')
     }
   }
 
@@ -98,7 +126,10 @@ export function Payments() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [unclaimedOnly])
 
-  const total = rows?.reduce((s, r) => s + (r.status === 'paid' ? r.amount_cny : 0), 0) ?? 0
+  // R8-I-14："成功到账合计"按全站全量订单算，切"只看待认领"时不再跟着变
+  const totalSource = unclaimedOnly ? fullRows : rows
+  const total =
+    totalSource?.reduce((s, r) => s + (r.status === 'paid' ? r.amount_cny : 0), 0) ?? null
 
   async function confirmClaim() {
     if (!claiming) return
@@ -185,8 +216,10 @@ export function Payments() {
             </p>
           </div>
           <Card className='rounded-3xl px-5 py-3'>
-            <div className='text-xs text-muted-foreground'>成功到账合计</div>
-            <div className='font-mono text-2xl font-semibold'>¥{total.toLocaleString()}</div>
+            <div className='text-xs text-muted-foreground'>成功到账合计（全站）</div>
+            <div className='font-mono text-2xl font-semibold'>
+              {total === null ? '—' : `¥${total.toLocaleString()}`}
+            </div>
           </Card>
         </div>
 
@@ -211,7 +244,19 @@ export function Payments() {
           </CardHeader>
           <CardContent>
             {rows === null ? (
-              <Skeleton className='h-64 w-full rounded-2xl' />
+              loadError ? (
+                <div className='py-12 text-center'>
+                  <p className='text-sm text-[#d70015]'>加载失败：{loadError}</p>
+                  <button
+                    onClick={() => load(unclaimedOnly)}
+                    className='mt-3 rounded-2xl bg-muted px-4 py-2 text-sm font-medium hover:text-foreground'
+                  >
+                    重试
+                  </button>
+                </div>
+              ) : (
+                <Skeleton className='h-64 w-full rounded-2xl' />
+              )
             ) : (
               <Table>
                 <TableHeader>
@@ -249,9 +294,7 @@ export function Payments() {
                         >
                           ¥{r.amount_cny}
                         </TableCell>
-                        <TableCell className='font-mono text-[13px] text-muted-foreground'>
-                          {r.plan}
-                        </TableCell>
+                        <TableCell className='text-[13px]'>{fmtPlan(r)}</TableCell>
                         <TableCell>{fmtTierChange(r)}</TableCell>
                         <TableCell>
                           <Badge
@@ -271,8 +314,13 @@ export function Payments() {
                         </TableCell>
                         <TableCell className='text-right'>
                           <div className='flex justify-end gap-1.5'>
-                            {/* R7：已处理完的终态订单（已退款/已处理/已取消）不渲染认领入口 */}
-                            {r.user_id === null && !CLAIM_HIDDEN_STATUSES.has(r.status) && (
+                            {/* R7：已处理完的终态订单（已退款/已处理/已取消）不渲染认领入口；
+                                R8-I-10：后端 claim_payment 要求 tier_to ∈ (standard, pro)，否则 400 bad_tier，
+                                unknown_plan 订单 tier_to 非法也不给认领入口 */}
+                            {r.user_id === null &&
+                              !CLAIM_HIDDEN_STATUSES.has(r.status) &&
+                              r.tier_to !== null &&
+                              ['standard', 'pro'].includes(r.tier_to) && (
                               <button
                                 onClick={() => {
                                   setClaiming(r)

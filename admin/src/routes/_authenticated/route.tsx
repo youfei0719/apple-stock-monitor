@@ -10,7 +10,15 @@ import { USE_MOCK } from '@/lib/admin-api'
  * TOTP 分流：会话有效但未过 TOTP 二次验证（后端 code=totp_required）时，
  * 未绑定 TOTP 的新管理员 → /totp-setup 扫码绑定；
  * 已绑定的 → 回 /sign-in 重新走"密码 + TOTP"登录。
+ *
+ * R8-U-12：守卫结果同会话缓存——overview 一次通过后不再重复请求；
+ * 退出登录时由 AdminProfile 调 invalidateAdminGuardCache() 清除。
  */
+let guardPassed = false
+export function invalidateAdminGuardCache() {
+  guardPassed = false
+}
+
 export const Route = createFileRoute('/_authenticated')({
   beforeLoad: async ({ location }) => {
     const toSignIn = (reason?: string): never => {
@@ -23,6 +31,8 @@ export const Route = createFileRoute('/_authenticated')({
       if (sessionStorage.getItem('admin-authed') !== '1') toSignIn()
       return
     }
+    // R8-U-12：同会话内守卫已通过，直接放行，跳过重复的 /api/admin/overview 请求
+    if (guardPassed) return
     const fetchMe = () =>
       fetch('/api/me', { credentials: 'include' })
         .then((r) => (r.ok ? r.json() : null))
@@ -32,7 +42,10 @@ export const Route = createFileRoute('/_authenticated')({
     let forbidden = false
     try {
       const res = await fetch('/api/admin/overview', { credentials: 'include' })
-      if (res.ok) return
+      if (res.ok) {
+        guardPassed = true
+        return
+      }
       if (res.status === 403) {
         const body = await res.json().catch(() => ({}))
         if (body.code === 'totp_required') {

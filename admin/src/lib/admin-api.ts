@@ -40,8 +40,8 @@ export interface AdminUser {
   tier_expires_at: string | null
   is_admin: boolean
   totp_enabled: boolean
-  /** F3：后端 PATCH /api/admin/users/{id} 已支持 email_verified，但 list_users 暂未返回该字段
-   *（后端负责人补）。这里可选链防御：没返回时按钮按"未验证"处理。 */
+  /** F3：后端 GET /api/admin/users 已返回 email_verified（R8 核对 admin.py:163，旧注释"暂未返回"已过期）；
+   * 可选链保留，防御旧后端。没返回时按钮按"未验证"处理。 */
   email_verified?: boolean | null
   created_at: string
 }
@@ -131,7 +131,7 @@ function seededRand(seed: number) {
 }
 
 const MOCK_USERS: AdminUser[] = [
-  { id: 1, email: 'youfei0719@gmail.com', tier: 'pro', tier_expires_at: '2026-11-08T10:02:11Z', is_admin: true, totp_enabled: true, created_at: '2026-10-02T03:12:00Z' },
+  { id: 1, email: 'admin@example.com', tier: 'pro', tier_expires_at: '2026-11-08T10:02:11Z', is_admin: true, totp_enabled: true, created_at: '2026-10-02T03:12:00Z' },
   { id: 2, email: 'miffy.fan@163.com', tier: 'standard', tier_expires_at: '2026-11-08T11:44:02Z', is_admin: false, totp_enabled: false, created_at: '2026-10-03T09:40:00Z' },
   { id: 3, email: 'shenzhen.frank@outlook.com', tier: 'free', tier_expires_at: null, is_admin: false, totp_enabled: false, created_at: '2026-10-04T14:05:00Z' },
   { id: 4, email: 'kuromi_lover@qq.com', tier: 'trial', tier_expires_at: null, is_admin: false, totp_enabled: false, created_at: '2026-10-05T07:22:00Z' },
@@ -211,7 +211,7 @@ export async function adminLoginPassword(email: string, password: string): Promi
 export async function getMe(): Promise<MeOut> {
   if (USE_MOCK) {
     await sleep(200)
-    return { id: 1, email: 'youfei0719@gmail.com', tier: 'pro', quota: {}, totp_enabled: true }
+    return { id: 1, email: 'admin@example.com', tier: 'pro', quota: {}, totp_enabled: true }
   }
   return req('/api/me')
 }

@@ -84,6 +84,10 @@ function toLocalInput(iso: string | null): string {
 export function Members() {
   const [users, setUsers] = useState<AdminUser[] | null>(null)
   const [q, setQ] = useState('')
+  // R8-U-6：搜索输入先防抖，300ms 后再请求
+  const [debouncedQ, setDebouncedQ] = useState('')
+  // R8-I-13：加载失败单独记错误态，区分"加载失败"与"无数据"
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [tier, setTier] = useState<'all' | Tier>('all')
   const [pending, setPending] = useState<PendingChange | null>(null)
   const [changing, setChanging] = useState(false)
@@ -111,12 +115,25 @@ export function Members() {
     }
   }
 
+  // R8-U-6：搜索输入 300ms 防抖，避免每击键一次请求
   useEffect(() => {
+    const t = setTimeout(() => setDebouncedQ(q), 300)
+    return () => clearTimeout(t)
+  }, [q])
+
+  const load = (query: string, t: 'all' | Tier) => {
     setUsers(null)
-    getUsers(q, tier === 'all' ? '' : tier)
-      .then(setUsers)
-      .catch(() => setUsers([]))
-  }, [q, tier])
+    setLoadError(null)
+    getUsers(query, t === 'all' ? '' : t)
+      .then((u) => setUsers(u))
+      // R8-I-13：失败不伪装成空数组，"没有符合条件的会员"只在真正无数据时出现
+      .catch((e) => setLoadError(e instanceof Error ? e.message : '加载会员列表失败'))
+  }
+
+  useEffect(() => {
+    load(debouncedQ, tier)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedQ, tier])
 
   const rows = useMemo(() => users ?? [], [users])
 
@@ -194,12 +211,28 @@ export function Members() {
               </Select>
             </div>
             <CardDescription>
-              {users === null ? '加载中…' : `共 ${users.length} 位会员`}
+              {users === null
+                ? loadError
+                  ? '加载失败'
+                  : '加载中…'
+                : `共 ${users.length} 位会员`}
             </CardDescription>
           </CardHeader>
           <CardContent>
             {users === null ? (
-              <Skeleton className='h-64 w-full rounded-2xl' />
+              loadError ? (
+                <div className='py-12 text-center'>
+                  <p className='text-sm text-[#d70015]'>加载失败：{loadError}</p>
+                  <button
+                    onClick={() => load(debouncedQ, tier)}
+                    className='mt-3 rounded-2xl bg-muted px-4 py-2 text-sm font-medium hover:text-foreground'
+                  >
+                    重试
+                  </button>
+                </div>
+              ) : (
+                <Skeleton className='h-64 w-full rounded-2xl' />
+              )
             ) : (
               <Table>
                 <TableHeader>

@@ -30,18 +30,43 @@ import { AdminProfile } from '@/components/admin-profile'
 import { ThemeSwitch } from '@/components/theme-switch'
 import { getTraffic, type TrafficPoint, USE_MOCK } from '@/lib/admin-api'
 
+/** R8-U-7：后端缺天不返回，前端按 days 把缺的天补 0，避免折线断裂 */
+function fillZeroDays(data: TrafficPoint[], days: number): TrafficPoint[] {
+  const byDay = new Map(data.map((d) => [d.day, d]))
+  const out: TrafficPoint[] = []
+  const pad = (n: number) => String(n).padStart(2, '0')
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date()
+    d.setDate(d.getDate() - i)
+    const key = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+    out.push(byDay.get(key) ?? { day: key, pv: 0, uv: 0 })
+  }
+  return out
+}
+
 export function Traffic() {
   const [days, setDays] = useState('30')
   const [data, setData] = useState<TrafficPoint[] | null>(null)
+  // R8-I-13：加载失败单独记错误态，区分"加载失败"与"无数据"
+  const [loadError, setLoadError] = useState<string | null>(null)
+
+  const load = (d: string) => {
+    setData(null)
+    setLoadError(null)
+    getTraffic(Number(d))
+      .then((pts) => setData(fillZeroDays(pts, Number(d))))
+      // R8-I-13：失败不伪装成空数组
+      .catch((e) => setLoadError(e instanceof Error ? e.message : '加载流量数据失败'))
+  }
 
   useEffect(() => {
-    setData(null)
-    getTraffic(Number(days)).then(setData).catch(() => setData([]))
+    load(days)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [days])
 
-  const loading = data === null
-  const totalPv = data?.reduce((s, d) => s + d.pv, 0) ?? 0
-  const totalUv = data?.reduce((s, d) => s + d.uv, 0) ?? 0
+  const loading = data === null && loadError === null
+  const totalPv = data?.reduce((s, d) => s + d.pv, 0) ?? null
+  const totalUv = data?.reduce((s, d) => s + d.uv, 0) ?? null
 
   return (
     <>
@@ -80,7 +105,7 @@ export function Traffic() {
             </CardHeader>
             <CardContent>
               <div className='font-mono text-3xl font-semibold'>
-                {loading ? '—' : totalPv.toLocaleString()}
+                {totalPv === null ? '—' : totalPv.toLocaleString()}
               </div>
             </CardContent>
           </Card>
@@ -92,7 +117,7 @@ export function Traffic() {
             </CardHeader>
             <CardContent>
               <div className='font-mono text-3xl font-semibold'>
-                {loading ? '—' : totalUv.toLocaleString()}
+                {totalUv === null ? '—' : totalUv.toLocaleString()}
               </div>
             </CardContent>
           </Card>
@@ -106,6 +131,16 @@ export function Traffic() {
           <CardContent>
             {loading ? (
               <Skeleton className='h-80 w-full rounded-2xl' />
+            ) : data === null ? (
+              <div className='py-12 text-center'>
+                <p className='text-sm text-[#d70015]'>加载失败：{loadError ?? '未知错误'}</p>
+                <button
+                  onClick={() => load(days)}
+                  className='mt-3 rounded-2xl bg-muted px-4 py-2 text-sm font-medium hover:text-foreground'
+                >
+                  重试
+                </button>
+              </div>
             ) : (
               <ResponsiveContainer width='100%' height={360}>
                 <LineChart data={data} margin={{ left: 0, right: 8, top: 8 }}>
