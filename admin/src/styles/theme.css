@@ -1,0 +1,135 @@
+/*
+ * A·零售式明亮克制 主题（Apple 零售风）
+ * 设计语言来源：用户 glint-vault 收藏 Dashboard 设计系统卡片（BoardUI：
+ * KPI card / Data table / Status badge / 浮动圆角侧边栏，克制专业）
+ * 规则：Apple 蓝 #0071e3 主色、大量留白、大圆角卡片、浅色底
+ */
+
+:root {
+  --radius: 1rem; /* 大圆角 */
+
+  /* 浅色底：Apple 零售风 #f5f5f7，卡片纯白 */
+  --background: #f5f5f7;
+  --foreground: #1d1d1f;
+  --card: #ffffff;
+  --card-foreground: #1d1d1f;
+  --popover: #ffffff;
+  --popover-foreground: #1d1d1f;
+
+  /* 主色：Apple 蓝 */
+  --primary: #0071e3;
+  --primary-foreground: #ffffff;
+
+  --secondary: #e8e8ed;
+  --secondary-foreground: #1d1d1f;
+  --muted: #f5f5f7;
+  --muted-foreground: #6e6e73;
+  --accent: #e8e8ed;
+  --accent-foreground: #1d1d1f;
+  --destructive: #d70015;
+  --border: #d2d2d7;
+  --input: #d2d2d7;
+  --ring: #0071e3;
+
+  /* 图表：Apple 蓝为主，辅以克制的灰/绿/橙 */
+  --chart-1: #0071e3;
+  --chart-2: #86868b;
+  --chart-3: #34c759;
+  --chart-4: #ff9f0a;
+  --chart-5: #af52de;
+
+  --sidebar: #ffffff;
+  --sidebar-foreground: #1d1d1f;
+  --sidebar-primary: #0071e3;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #f5f5f7;
+  --sidebar-accent-foreground: #1d1d1f;
+  --sidebar-border: #e8e8ed;
+  --sidebar-ring: #0071e3;
+}
+
+.dark {
+  --background: #1d1d1f;
+  --foreground: #f5f5f7;
+  --card: #2d2d2f;
+  --card-foreground: #f5f5f7;
+  --popover: #2d2d2f;
+  --popover-foreground: #f5f5f7;
+  --primary: #2997ff;
+  --primary-foreground: #ffffff;
+  --secondary: #3a3a3c;
+  --secondary-foreground: #f5f5f7;
+  --muted: #2d2d2f;
+  --muted-foreground: #98989d;
+  --accent: #3a3a3c;
+  --accent-foreground: #f5f5f7;
+  --destructive: #ff453a;
+  --border: #3a3a3c;
+  --input: #3a3a3c;
+  --ring: #2997ff;
+  --chart-1: #2997ff;
+  --chart-2: #98989d;
+  --chart-3: #30d158;
+  --chart-4: #ffd60a;
+  --chart-5: #bf5af2;
+
+  --sidebar: #1d1d1f;
+  --sidebar-foreground: #f5f5f7;
+  --sidebar-primary: #2997ff;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #2d2d2f;
+  --sidebar-accent-foreground: #f5f5f7;
+  --sidebar-border: #2d2d2f;
+  --sidebar-ring: #2997ff;
+}
+
+@theme inline {
+  /* 正文字体：系统栈（Apple 生态优先） */
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', 'Segoe UI', sans-serif;
+  /* 数字/金额：Paper Mono（本地 @font-face，无外部 CDN） */
+  --font-mono:
+    'Paper Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-inter: var(--font-sans);
+  --font-manrope: var(--font-sans);
+
+  --radius-sm: calc(var(--radius) - 8px);
+  --radius-md: calc(var(--radius) - 4px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
