@@ -25,7 +25,9 @@ let memDeviceId: string | undefined;
 
 /** F-N6：绝不回退到固定 'dev-anon'——localStorage 被禁用时所有用户会串号，
  * 互相覆盖匿名任务与配额；降级链：localStorage → sessionStorage → 内存随机 id */
-export function getDeviceId(): string {
+/* R7-UI：去掉死导出——全库只有本文件 req() 内部使用（X-Device-Id 头），
+ * 无外部引用，改为模块内私有函数 */
+function getDeviceId(): string {
   try {
     let id = localStorage.getItem(DEVICE_KEY);
     if (!id) {
@@ -353,13 +355,20 @@ function withZ(iso: string | null): string | null {
 
 export const api = {
   register: (email: string, password: string) =>
-    req<{ id: number; email: string; tier: Tier; totp_enabled: boolean }>('/auth/register', {
+    req<{
+      id: number;
+      email: string;
+      tier: Tier;
+      totp_enabled: boolean;
+      /** R7：登录/注册时认领了匿名 device 任务会有提示文案（后端 auth.py _claim_notice） */
+      notice?: string | null;
+    }>('/auth/register', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     }),
-  // 登录成功：后端返回 {ok:true, totp_required:bool} + Set-Cookie(session_token)
+  // 登录成功：后端返回 {ok:true, totp_required:bool, notice?} + Set-Cookie(session_token)
   login: (email: string, password: string) =>
-    req<{ ok: boolean; totp_required: boolean }>('/auth/login', {
+    req<{ ok: boolean; totp_required: boolean; notice?: string | null }>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     }),

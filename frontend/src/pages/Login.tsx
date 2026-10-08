@@ -1,14 +1,20 @@
 import { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
+import { useApp } from '../components/App';
 import { Card, PageHeader, PrimaryButton } from '../components/ui';
 
 export default function Login() {
   const navigate = useNavigate();
   const location = useLocation();
-  // F-3：邮箱验证成功后跳到这里，带 {email, message:'验证成功，请登录'}
-  const flash = (location.state as { email?: string; message?: string } | null)?.message ?? null;
-  const initialEmail = (location.state as { email?: string } | null)?.email ?? '';
+  const { refreshMe } = useApp();
+  // F-3：邮箱验证成功后跳到这里，带 {email, message:'验证成功，请登录'}；
+  // R7：注册页链过来的 notice（匿名任务认领提示）也从 state 里接住，登录后优先用
+  // 登录接口自己的 notice，没有再用这个兜底
+  const locState = (location.state as { email?: string; message?: string; notice?: string | null } | null);
+  const flash = locState?.message ?? null;
+  const initialEmail = locState?.email ?? '';
+  const chainedNotice = locState?.notice ?? null;
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [email, setEmail] = useState(initialEmail);
   const [password, setPassword] = useState('');
@@ -34,11 +40,21 @@ export default function Login() {
           setError('管理员请前往后台登录完成 TOTP 验证');
           return;
         }
-        window.location.href = '/';
+        // R7：登录/注册认领了匿名 device 任务时后端返回 notice 文案，
+        // 经 location.state 带到首页展示一次（Home 读完即清，不重复弹）。
+        // 不用 window.location.href 全页刷新——refreshMe 刷新身份即可
+        await refreshMe().catch(() => {
+          /* /me 失败则首页按匿名态渲染，由 App 的任务错误态兜底 */
+        });
+        navigate('/', { state: { notice: res.notice ?? chainedNotice ?? null } });
       } else {
-        await api.register(email.trim(), password);
-        // 注册成功 → 跳邮箱验证页（6 位验证码）
-        navigate('/verify', { state: { email: email.trim() }, replace: true });
+        const res = await api.register(email.trim(), password);
+        // 注册成功 → 跳邮箱验证页（6 位验证码）；认领提示先带给验证页，
+        // 验证成功后链到登录页，最终由登录成功统一带到首页
+        navigate('/verify', {
+          state: { email: email.trim(), notice: res.notice ?? null },
+          replace: true,
+        });
       }
     } catch (e) {
       if (e instanceof ApiError && e.code === 'email_unverified') {

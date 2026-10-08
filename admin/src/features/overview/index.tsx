@@ -86,9 +86,14 @@ export function Overview() {
     .filter(([t]) => !NON_PAID_TIERS.has(t))
     .reduce((s, [, c]) => s + c, 0)
   // 待处理支付 KPI（P2）：后端 /api/admin/overview 返回；可选链防御旧后端
+  // R7 口径说明（对齐后端 admin.py overview）：unclaimed = user_id 为空 且
+  // status ∈ {paid, amount_mismatch, unknown_plan} 的订单数；
+  // amount_mismatch = 全局 status='amount_mismatch' 的订单数（不限 user_id，
+  // 含已认领但尚未处理的）。两者有重叠（未认领的金额异常订单同时计入两项），
+  // 故前端只展示分项、不加总——"待处理支付 X 笔"会把重叠部分重复计算。
   const pendingUnclaimed = data?.pending_payments?.unclaimed ?? 0
   const pendingMismatch = data?.pending_payments?.amount_mismatch ?? 0
-  const pendingTotal = pendingUnclaimed + pendingMismatch
+  const hasPending = pendingUnclaimed > 0 || pendingMismatch > 0
 
   return (
     <>
@@ -138,8 +143,9 @@ export function Overview() {
           />
         </div>
 
-        {/* 待处理支付 KPI（P2）：unclaimed=待认领坏账，amount_mismatch=金额异常；为 0 时不打扰 */}
-        {!loading && pendingTotal > 0 && (
+        {/* 待处理支付 KPI（P2）：unclaimed=待认领坏账，amount_mismatch=金额异常；为 0 时不打扰。
+            R7：两项有重叠（见上方口径注释），只展示分项不加总 */}
+        {!loading && hasPending && (
           <Card className='mt-4 rounded-3xl border-[#ff9f0a]/30'>
             <CardContent className='flex items-center justify-between px-5 py-4'>
               <div className='flex items-center gap-3'>
@@ -147,7 +153,7 @@ export function Overview() {
                   <Wallet className='h-4.5 w-4.5' />
                 </span>
                 <div>
-                  <p className='text-sm font-medium'>待处理支付 {pendingTotal} 笔</p>
+                  <p className='text-sm font-medium'>待处理支付</p>
                   <p className='text-xs text-muted-foreground'>
                     待认领 {pendingUnclaimed} · 金额异常 {pendingMismatch}
                   </p>

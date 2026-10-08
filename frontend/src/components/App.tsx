@@ -53,6 +53,13 @@ export default function App() {
   // R6-D5：App 层维护任务加载错误态（首屏 /me+tasks 加载失败 → 子页面渲染 ErrorState 而非误导成"还没有监控任务"）
   const [tasksError, setTasksError] = useState<string | null>(null);
 
+  // R7：登录成功后刷新 /me（代替 window.location.href 全页刷新），
+  // 配合 navigate('/', {state:{notice}}) 把认领提示带到首页只展示一次
+  const refreshMe = useCallback(async () => {
+    const m = await api.me();
+    setMe(m);
+  }, []);
+
   const refreshTasks = useCallback(async (status: TaskStatusFilter = 'all') => {
     // R6-D5：异常向上抛（调用方 Home.reload 的 catch 才能感知并渲染 ErrorState），
     // 不再吞掉所有异常误导成"还没有监控任务"
@@ -104,7 +111,11 @@ export default function App() {
   const hotTask = tasks.find(
     (t) => !t.paused && !isTaskExpired(t) && (t.latest?.available_count ?? 0) > 0,
   );
-  const activeCount = tasks.filter((t) => !t.paused && !isTaskExpired(t)).length;
+  // R7：口径与后端 GET /tasks?status=active 对齐（tasks.py：status=active 只剔除 _is_expired
+  // 为 True 的，而 _is_expired 在 task.paused 时直接返回 False——paused 任务同样出现在
+  // "监控中" tab 里）。前端 isTaskExpired 与后端 _is_expired 同形（paused 优先于 expired），
+  // 因此灵动岛计数 = paused || !expired，不再剔除 paused 任务
+  const activeCount = tasks.filter((t) => t.paused || !isTaskExpired(t)).length;
 
   if (me === undefined) {
     return (
@@ -151,7 +162,7 @@ export default function App() {
           </div>
         )}
       <main className="mx-auto max-w-lg pb-24">
-        <Outlet context={{ me, tasks, refreshTasks, tasksError }} />
+        <Outlet context={{ me, tasks, refreshTasks, tasksError, refreshMe }} />
         {location.pathname !== '/login' && location.pathname !== '/verify' && (
           <footer className="px-4 pt-2 pb-6 text-center text-[11px] text-faint">
             页面内所有时间为本地时间
@@ -169,6 +180,8 @@ export interface AppContext {
   refreshTasks: (status?: TaskStatusFilter) => Promise<void>;
   /** R6-D5：App 层维护的任务加载错误态（null = 无错误） */
   tasksError: string | null;
+  /** R7：重新拉取 /me（登录成功后刷新身份，代替全页刷新） */
+  refreshMe: () => Promise<void>;
 }
 
 export function useApp(): AppContext {

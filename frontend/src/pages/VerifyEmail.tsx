@@ -7,7 +7,8 @@ import { Card, PageHeader, PrimaryButton } from '../components/ui';
 export default function VerifyEmail() {
   const navigate = useNavigate();
   const location = useLocation();
-  const initialEmail = (location.state as { email?: string } | null)?.email ?? '';
+  const locState = (location.state as { email?: string; notice?: string | null } | null);
+  const initialEmail = locState?.email ?? '';
   const [email, setEmail] = useState(initialEmail);
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
@@ -29,8 +30,9 @@ export default function VerifyEmail() {
     try {
       await api.verifyEmail(email.trim(), code.trim());
       // F-3：后端验证成功不 Set-Cookie，跳首页会显示匿名态误导用户 → 跳登录页并提示
+      // R7：注册时的匿名任务认领提示（notice）链到登录页，登录成功后统一带到首页
       navigate('/login', {
-        state: { email: email.trim(), message: '验证成功，请登录' },
+        state: { email: email.trim(), message: '验证成功，请登录', notice: locState?.notice ?? null },
         replace: true,
       });
     } catch (e) {

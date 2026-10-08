@@ -18,7 +18,12 @@ export interface OverviewKpi {
   today_pushes: number
   revenue_cny: number
   active_tasks: number
-  /** 待处理支付（后端 GET /api/admin/overview 已返回；unclaimed=未认领，amount_mismatch=金额异常） */
+  /**
+   * 待处理支付（后端 GET /api/admin/overview 已返回；unclaimed=未认领
+   * （user_id 为空且 status∈{paid,amount_mismatch,unknown_plan}），
+   * amount_mismatch=全局金额异常数）。R7：两者有重叠（未认领的金额异常订单
+   * 同时计入两项），展示时只列分项、不加总。
+   */
   pending_payments?: { unclaimed: number; amount_mismatch: number }
 }
 
@@ -358,8 +363,12 @@ export interface PaymentActionOut {
   user?: { user_id: number; tier: { from: string; to: string } } | null
 }
 
-/** F1：标记退款——POST /api/admin/payments/{id}/refund（后端联动降回 free、记审计；页面层二次确认） */
-export async function refundPayment(paymentId: number): Promise<PaymentActionOut> {
+/**
+ * F1：标记退款——POST /api/admin/payments/{id}/refund（后端联动降回 free、记审计；页面层二次确认）。
+ * R7：force 参数——后端 R5-B-3：用户还有其他有效 paid 订单时默认 400
+ * （code=has_active_paid_orders），管理员二次确认后带 force=true 重调才真正降档。
+ */
+export async function refundPayment(paymentId: number, force = false): Promise<PaymentActionOut> {
   if (USE_MOCK) {
     await sleep(400)
     const p = MOCK_PAYMENTS.find((x) => x.id === paymentId)
@@ -371,14 +380,17 @@ export async function refundPayment(paymentId: number): Promise<PaymentActionOut
         action: 'payment.refund',
         target_type: 'payment',
         target_id: String(paymentId),
-        detail: { from: 'paid', to: 'refunded' },
+        detail: { from: 'paid', to: 'refunded', force },
         ip: '127.0.0.1',
         created_at: new Date().toISOString(),
       })
     }
     return { ok: true, payment_id: paymentId, payment_status: 'refunded', user: null }
   }
-  return req(`/api/admin/payments/${paymentId}/refund`, { method: 'POST' })
+  return req(`/api/admin/payments/${paymentId}/refund`, {
+    method: 'POST',
+    body: JSON.stringify({ force }),
+  })
 }
 
 /** F2：关闭金额异常/待认领订单（不处理）——POST /api/admin/payments/{id}/close，

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { api, summarizeTask, type Quota, type Task, type TaskStatusFilter } from '../lib/api';
 import { useApp } from '../components/App';
 import StockStateBadge from '../components/StockStateBadge';
@@ -187,10 +187,24 @@ const TABS: { id: TaskStatusFilter; label: string }[] = [
 
 export default function Home() {
   const { me, tasks, refreshTasks, tasksError } = useApp();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [tab, setTab] = useState<TaskStatusFilter>('active');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [quota, setQuota] = useState<Quota | null>(null);
+  // R7：登录/注册时认领了匿名 device 任务的提示文案（后端 auth.py _claim_notice，
+  // 登录页经 location.state 带过来）。读进本地 state 后立即 replace 掉路由 state，
+  // 只展示一次：刷新/后退不再重复弹
+  const [claimNotice, setClaimNotice] = useState<string | null>(
+    () => (location.state as { notice?: string | null } | null)?.notice ?? null,
+  );
+  useEffect(() => {
+    if ((location.state as { notice?: string | null } | null)?.notice) {
+      navigate(location.pathname, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const reload = async (t: TaskStatusFilter = tab) => {
     setLoading(true);
@@ -233,6 +247,18 @@ export default function Home() {
     <div>
       <PageHeader title="DING" subtitle="Apple 直营店自提库存监控" />
       <div className="px-4 pb-4">
+        {/* R7：匿名任务认领提示横幅（只展示一次，可手动关闭） */}
+        {claimNotice && (
+          <div className="mb-3 rounded-card-sm bg-white shadow-card px-4 py-3 flex items-start justify-between gap-3 rise-in">
+            <p className="text-[13px] text-ink">{claimNotice}</p>
+            <button
+              onClick={() => setClaimNotice(null)}
+              className="shrink-0 text-xs text-faint active:scale-95 transition"
+            >
+              关闭
+            </button>
+          </div>
+        )}
         <div className="flex gap-2 mb-4">
           {TABS.map((t) => (
             <button

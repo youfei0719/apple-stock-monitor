@@ -117,6 +117,9 @@ export default function History() {
       if (t === 'releases' && !releases) {
         try {
           setReleases(await api.releases(7));
+          // R7：刚付完钱回来成功拉到数据 → 同步清除"去开通"升级卡片标记，
+          // 否则 releasesForbidden 还卡在 true，付费用户仍看到升级卡
+          setReleasesForbidden(false);
         } catch (e) {
           // 无权限（tier_required）→ 渲染升级卡片而非报错页（断裂-18）
           if (e instanceof ApiError && e.code === 'tier_required') {

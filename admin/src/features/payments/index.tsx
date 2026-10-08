@@ -33,11 +33,13 @@ import { Main } from '@/components/layout/main'
 import { AdminProfile } from '@/components/admin-profile'
 import { ThemeSwitch } from '@/components/theme-switch'
 import {
+  AdminApiError,
   claimPayment,
   closePayment,
   fmtLocalTime,
   getPayments,
   refundPayment,
+  type PaymentActionOut,
   type PaymentRecord,
   type Tier,
   TIER_LABEL,
@@ -61,6 +63,8 @@ function canRefund(r: PaymentRecord): boolean {
 function canClose(r: PaymentRecord): boolean {
   return r.status === 'amount_mismatch' || r.status === 'paid'
 }
+/** R7：已处理完的终态订单（已退款/已处理/已取消）不再给认领入口 */
+const CLAIM_HIDDEN_STATUSES = new Set(['refunded', 'resolved', 'cancelled'])
 
 function fmtTierChange(r: PaymentRecord): string {
   const to = r.tier_to ? (TIER_LABEL[r.tier_to as Tier] ?? r.tier_to) : '—'
@@ -122,7 +126,20 @@ export function Payments() {
     if (!refunding) return
     setActionBusy(true)
     try {
-      const out = await refundPayment(refunding.id)
+      let out: PaymentActionOut
+      try {
+        out = await refundPayment(refunding.id)
+      } catch (e) {
+        // R7：后端 R5-B-3——该用户还有其他有效 paid 订单时 400 has_active_paid_orders；
+        // 二次确认后带 force=true 重调才会真正降档
+        if (e instanceof AdminApiError && e.code === 'has_active_paid_orders') {
+          const ok = window.confirm('该用户还有其他有效付费订单，确认仍要退款降级吗？')
+          if (!ok) return
+          out = await refundPayment(refunding.id, true)
+        } else {
+          throw e
+        }
+      }
       toast.success(
         `订单 ${refunding.order_id} 已标记退款${out.user ? `（用户 #${out.user.user_id} 降回免费版）` : ''}`,
       )
@@ -254,7 +271,8 @@ export function Payments() {
                         </TableCell>
                         <TableCell className='text-right'>
                           <div className='flex justify-end gap-1.5'>
-                            {r.user_id === null && (
+                            {/* R7：已处理完的终态订单（已退款/已处理/已取消）不渲染认领入口 */}
+                            {r.user_id === null && !CLAIM_HIDDEN_STATUSES.has(r.status) && (
                               <button
                                 onClick={() => {
                                   setClaiming(r)
