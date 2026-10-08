@@ -3,7 +3,7 @@
 匿名体验：无会话时可用 X-Device-Id 创建 1 个任务（不计配额）。
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Header, Query, Request
 from sqlalchemy import func, select, update
@@ -16,6 +16,7 @@ from app.core.db import get_db
 from app.core.logging import get_logger
 from app.core.ratelimit import check_rate_limit
 from app.core.tiers import effective_tier, effective_tier_of, tier_of
+from app.core.timeutil import as_naive_utc as _as_naive_utc
 from app.models.models import IdempotencyRecord, MonitorTask, Notification, StockState, User
 from app.schemas import TaskBatchIn, TaskCreateIn, TaskOut, TaskPatchIn
 
@@ -39,17 +40,8 @@ TASK_CREATE_LIMIT = 20
 TASK_CREATE_WINDOW_SEC = 3600
 
 
-def _as_naive_utc(dt: datetime | None) -> datetime | None:
-    """R7 断裂 后-D-1：pydantic 会把 "2026-12-01T00:00:00Z" 解析为 tz-aware
-    datetime，aware 与 naive 直接比较（expires_at < now / expires_at > cap）
-    会 TypeError→500。入库/比较前统一归一化为 naive UTC（aware 转 UTC 后
-    去 tzinfo，naive 保持原样）。"""
-    if dt is None:
-        return None
-    if dt.tzinfo is not None:
-        return dt.astimezone(timezone.utc).replace(tzinfo=None)
-    return dt
-
+# R8-B0-3：归一化实现已提升到 app.core.timeutil（公共模块），此处保留
+# _as_naive_utc 别名以兼容既有调用点与回归测试。
 
 def _clamp_expires(expires_at: datetime | None, anonymous: bool) -> datetime | None:
     """匿名任务强制 24h 过期：为空或超过 24h 时一律 clamp 到 now+24h。"""
@@ -198,13 +190,52 @@ def _channels_empty(channels: dict | None) -> bool:
     )
 
 
+# 后-D-2：渠道中文名映射（与 notify.py /notify/test 的 _names 口径一致，
+# 另补 wecom/dingtalk/feishu 三个群机器人平台）
+_CHANNEL_NAMES = {
+    "page": "站内",
+    "email": "邮件",
+    "bark": "Bark",
+    "sms": "短信",
+    "wecom": "企微",
+    "dingtalk": "钉钉",
+    "feishu": "飞书",
+}
+
+
 def _require_channels(channels: dict, user: User | None) -> None:
-    """R6-D4：非 trial 档任务必须配至少一个通知渠道——空渠道的到货边沿会
-    被静默消费（零通知零记录）。trial 走站内 page 触达，不要求外部渠道。"""
+    """后-D-2：按档位校验通知渠道——tiers.py 各档 channels 是唯一真源：
+    trial=["page"]，free/standard/pro=["email"]，没有任何档位支持
+    bark/webhook/sms。配了当前档位不支持的渠道 → 400 明示（配了但永远
+    不响是误导）。保留空渠道检查：非 trial 必须配至少一个渠道，否则空
+    渠道的到货边沿会被静默消费（零通知零记录），trial 走站内 page 触达
+    不要求外部渠道。顺序：先做分渠道校验，再做空检查。"""
+    tier = effective_tier_of(user)  # user 可为 None → trial
+    allowed = tier["channels"]
+    ch = channels or {}
+    configured: list[str] = []
+    if (ch.get("bark_key") or "").strip():
+        configured.append("bark")
+    if (ch.get("email") or "").strip():
+        configured.append("email")
+    for w in ch.get("webhooks") or []:
+        if isinstance(w, dict) and (w.get("url") or "").strip():
+            platform = w.get("platform")
+            if platform and platform not in configured:
+                configured.append(platform)
+    for c in configured:
+        if c not in allowed:
+            allowed_names = "、".join(_CHANNEL_NAMES.get(a, a) for a in allowed)
+            raise APIError(
+                400,
+                f"当前档位（{tier['name']}）不支持该渠道（{_CHANNEL_NAMES.get(c, c)}）；"
+                f"当前档位仅支持{allowed_names}通知",
+                "channel_not_supported",
+            )
     if _channels_empty(channels) and effective_tier(user) != "trial":
         raise APIError(
             400,
-            "请至少配置一个通知渠道（邮箱 / Bark / 群机器人），否则到货时无法通知你",
+            "请至少配置一个通知渠道（邮箱），否则到货时无法通知你",
             "channels_required",
         )
 

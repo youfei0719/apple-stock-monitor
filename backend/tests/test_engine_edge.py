@@ -1,7 +1,7 @@
 """引擎边沿触发单元测试：evaluate_transition 纯函数。"""
 
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

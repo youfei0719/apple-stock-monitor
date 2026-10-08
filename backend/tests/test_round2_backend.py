@@ -475,7 +475,6 @@ def test_channels_drop_empty_webhook_urls():
     assert ch.webhooks[0].platform == "wecom"
     # 非法 url 的行仍 422（过滤只管空行，不管格式错）
     import pytest as _pt
-
     from pydantic import ValidationError
 
     with _pt.raises(ValidationError):

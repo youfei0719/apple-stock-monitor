@@ -14,6 +14,7 @@ from app.api.routers.pay import apply_tier_grant
 from app.core.db import get_db
 from app.core.logging import get_logger
 from app.core.tiers import VALID_TIERS
+from app.core.timeutil import as_naive_utc
 from app.models.models import (
     ApiHit,
     AuditLog,
@@ -150,7 +151,10 @@ def list_users(
 ):
     query = select(User).order_by(desc(User.created_at)).limit(limit)
     if q:
-        query = query.where(User.email.like(f"%{q}%"))
+        # R8-I-8：转义 LIKE 通配符 % / _（及转义符自身），防用户输入改写匹配
+        # 语义（如搜 % 会匹配全部用户）；照抄 history.py R6-P2-20 口径
+        escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        query = query.where(User.email.like(f"%{escaped}%", escape="\\"))
     if tier:
         query = query.where(User.tier == tier)
     users = db.execute(query).scalars().all()
@@ -180,6 +184,13 @@ def patch_user(
     target = db.get(User, user_id)
     if not target:
         raise APIError(404, "用户不存在", "not_found")
+    # R8-B0-3（钱相关）：pydantic 把带时区的 ISO 字符串（如 +08:00）解析为
+    # tz-aware，SQLite DATETIME 方言写入时静默丢弃 tzinfo、不换算 UTC（实测
+    # 偏差 8 小时）。入口处统一归一化为 naive UTC；quota_reset_at 与
+    # tier_expires_at 由同一函数派生，一并归一化兜底。
+    for _f in ("tier_expires_at", "quota_reset_at"):
+        if hasattr(data, _f):
+            setattr(data, _f, as_naive_utc(getattr(data, _f)))
     changes = {}
     notices = []
     if data.tier is not None:
@@ -194,9 +205,12 @@ def patch_user(
             if data.tier_expires_at is None and (
                 target.tier_expires_at is None or target.tier_expires_at < datetime.utcnow()
             ):
+                # R8-I-8 附带：审计 from 记录旧值（可能是已过期时间戳），此前
+                # 硬编码 None 会把"旧值是过期时间戳"的场景记错
+                old_expires = target.tier_expires_at
                 target.tier_expires_at = datetime.utcnow() + timedelta(days=30)
                 changes["tier_expires_at"] = (
-                    None,
+                    old_expires.isoformat() if old_expires else None,
                     target.tier_expires_at.isoformat(),
                 )
                 notices.append("未传 tier_expires_at，已默认设为 +30 天")
@@ -364,6 +378,10 @@ def claim_payment(
     p = db.get(Payment, payment_id)
     if not p:
         raise APIError(404, "订单不存在", "not_found")
+    # R8-I-6：订单状态守卫——已退款（refunded）/已关闭（resolved）/其他终态
+    # 订单不可再认领，否则会开通出幽灵会员（refund/close 之后仍可 claim）
+    if p.status not in ("paid", "amount_mismatch", "unknown_plan"):
+        raise APIError(400, f"订单状态 {p.status} 不可认领", "bad_status")
     if p.user_id is not None:
         raise APIError(400, "订单已被认领", "already_claimed")
     user = db.get(User, data.user_id)

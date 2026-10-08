@@ -328,11 +328,13 @@ def test_p2_12_past_expires_at_400(db):
 def test_p2_10_idempotency_key_replays_first_result(db):
     headers = {"idempotency-key": "key-abc"}
     out1 = tasks_router.create_task(
-        _task_in(channels={"email": "a@b.c"}), _req(headers), None, db, "dev-idem"
+        # 后-D-2：匿名 trial 仅支持站内，email 渠道不再放行；本用例测幂等回放，
+        # 用空渠道（trial 允许）保持用例意图不变
+        _task_in(channels={}), _req(headers), None, db, "dev-idem"
     )
     # 同 key 不同 payload：直接返回首次结果，不建新任务（trial 上限 1 也不 403）
     out2 = tasks_router.create_task(
-        _task_in(name="other", channels={"email": "a@b.c"}), _req(headers), None, db, "dev-idem"
+        _task_in(name="other", channels={}), _req(headers), None, db, "dev-idem"
     )
     assert out2.id == out1.id
     assert (

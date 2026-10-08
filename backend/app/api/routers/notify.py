@@ -12,6 +12,7 @@ from app.core.db import get_db
 from app.core.tiers import effective_tier_of
 from app.models.models import MonitorTask, Notification, User
 from app.schemas import NotifyTestIn
+from app.services.lifecycle import _today_start, _utcnow
 from app.services.notifier import Notifier
 
 router = APIRouter(tags=["notify"])
@@ -61,7 +62,8 @@ def notify_test(
             400,
             f"当前档位（{tier_info['name']}）仅支持{allowed_names}通知；"
             "该测试只验证目标是否连通，不代表到货时会经此通道发送——"
-            "当前档位下到货提醒只走邮件/站内，如需 Bark / 群机器人到货提醒请升级档位",
+            "Bark / 群机器人到货提醒暂未开放（所有档位均不支持），"
+            "请使用当前档位支持的渠道进行测试",
             "channel_not_supported",
         )
     # R6-P2-9：email 测试目标必须是用户本人邮箱（管理员除外），防拿测试
@@ -69,7 +71,10 @@ def notify_test(
     if data.channel == "email" and not user.is_admin:
         if data.target.strip().lower() != (user.email or "").strip().lower():
             raise APIError(400, "测试邮箱必须是你账号绑定的邮箱", "bad_test_target")
-    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    # R8-I-7：每日限额按北京时间零点起算（复用 lifecycle._today_start，与
+    # 全库其他按天口径一致：overview/traffic、lifecycle 按天去重）。此前用
+    # UTC 零点，北京时间 0:00–8:00 的测试会被计入"昨天"。
+    today_start = _today_start(_utcnow())
     used_today = db.execute(
         select(func.count())
         .select_from(Notification)
