@@ -17,45 +17,9 @@ ENV_FILE=/opt/stockmon/.env
 DOMAIN=stock.glint.red
 
 # ===== R5-D-1/D-2：.env 提取器 =====
-# 提取 $ENV_FILE 中 KEY 的值：
-#   - 先去行尾注释再取值：`APP_ENV=prod  # 生产环境` → `prod`（R5-D-1）
-#   - 支持 `export KEY=...` 前缀写法（R5-D-2）；但注意：systemd EnvironmentFile
-#     会静默丢弃 export 行，所以校验阶段（R8-I-1）已把 export 前缀拦截报错，
-#     这里的支持只是容错，不代表生产 .env 里可以写 export
-#   - 值里含 # 时必须加引号（如 PASSWORD='a#b'）；引号包裹的值按引号边界取值
-#   - R6-P2-6：重复键取最后一个，与 `source` 语义一致（重复键以后者为准）
-#   - R6-P2-1：最终清理只去首尾（空白/CR/引号），值内空格原样保留
-#     （旧 tr -d " '\"\t\r" 会吃掉引号内合法空格，如 SMTP_FROM="StockMon <noreply@glint.red>"）
-env_val() {
-  local key="$1" line val rest
-  line=$(grep -E "^[[:space:]]*(export[[:space:]]+)?${key}=" "$ENV_FILE" | tail -n1) || return 0
-  [ -z "$line" ] && return 0
-  # 剥掉可选的 export 前缀与 KEY=（值里可能含 =，只剥第一个）
-  val=$(printf '%s\n' "$line" | sed -E 's/^[[:space:]]*(export[[:space:]]+)?[^=[:space:]]+=//')
-  val=$(printf '%s' "$val" | sed -E 's/^[[:space:]]+//;s/[[:space:]]+$//')
-  case "$val" in
-    \"*)
-      rest="${val#\"}"
-      val="${rest%%\"*}"
-      ;;
-    \'*)
-      rest="${val#\'}"
-      val="${rest%%\'*}"
-      ;;
-    *)
-      # 未加引号：先去行尾注释（空白+# 开头）再取值
-      val=$(printf '%s' "$val" | sed -E 's/[[:space:]]+#.*$//;s/[[:space:]]+$//')
-      ;;
-  esac
-  # R6-P2-1：CR 直接去掉（Windows 行尾残留），首尾空白与残留引号剥掉，
-  # 值内空格/tab 原样保留。
-  val=$(printf '%s' "$val" | tr -d '\r')
-  val="${val#"${val%%[![:space:]]*}"}"
-  val="${val%"${val##*[![:space:]]}"}"
-  val="${val#\"}"; val="${val%\"}"
-  val="${val#\'}"; val="${val%\'}"
-  printf '%s' "$val"
-}
+# R11-P2-10：实现抽到 deploy/lib.sh（与 backup.sh 共用），此处只 source，消两份拷贝漂移风险。
+# shellcheck disable=SC1091
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 # ===== R5-D-4：前置软件检查（缺哪个报哪个，一次列完再退出） =====
 MISSING_SW=""
@@ -121,29 +85,61 @@ if grep -nE '^[[:space:]]*export[[:space:]]' "$ENV_FILE" >/dev/null 2>&1; then
   echo "请去掉 export 前缀（直接写 KEY=value）后重新运行。"
   exit 1
 fi
-# ===== R10-P0-1：拦截行尾注释污染（fail-fast） =====
+# ===== R10-P0-1 / R11-P1-7：拦截行尾注释污染（fail-fast，扩展到所有 key） =====
 # systemd EnvironmentFile 不剥行尾注释：`APP_ENV=prod  # 生产` → 服务读到
 # "prod  # 生产" → is_prod 为 False → **生产跑 dev 语义**
 # （lifespan prod 硬门槛永久失效、生产 HTTPS cookie 丢 Secure 标志）。
 # 而 env_val 会剥、bash source 会剥 → 不拦截的话 deploy.sh 校验全绿但服务
 # 实际跑的是污染值。模板曾自带行尾注释（.env.example:15/16，R10 已移到独立行），
 # 老机器的手工 .env 很可能还留着，直接拦死。
-# 精确值校验：取这两个 key 的原始行值（含 # 直接报错退出；真实值里
-# APP_SECRET_KEY 是 hex、APP_ENV 是 dev|prod，永远不会合法地含 #）。
-for _k in APP_ENV APP_SECRET_KEY; do
-  _raw=$(grep -E "^[[:space:]]*${_k}=" "$ENV_FILE" | tail -n1 | sed -E "s/^[[:space:]]*${_k}=//") || true
-  case "$_raw" in
-    *\#*)
-      echo "ERROR: $ENV_FILE 中 ${_k} 的值含 '#'（行尾注释或值里带 #），已拦截："
-      echo "  ${_k}=${_raw}"
-      echo "systemd EnvironmentFile 不剥行尾注释，值会被污染"
-      echo "（如 APP_ENV 会读成 \"prod  # ...\" → is_prod 为 False，生产跑 dev 语义）。"
-      echo "请把行尾注释移到独立行、值本身不要含 #，再重新运行。"
-      exit 1
-      ;;
+# R11-P1-7：从"只拦 APP_ENV/APP_SECRET_KEY"扩展到所有 key——其它 key
+# （如 SMTP_PASSWORD=abc  # 注释）此前校验全绿但 systemd 读到污染值，
+# 运行时静默故障。引号感知：值里引号内的 # 合法（如 PASSWORD='a#b'，
+# env_val 按引号边界取值、systemd 读到的也是引号内原文），不误伤；
+# 引号外的 #（行尾注释或裸 #）一律拦截。
+_env_polluted=""
+_env_lineno=0
+while IFS= read -r _env_line || [ -n "$_env_line" ]; do
+  _env_lineno=$((_env_lineno + 1))
+  _env_s="${_env_line%$'\r'}"
+  # 跳过空行 / 纯空白行 / 整行注释 / 非赋值行（export 前缀行已在上游拦截）
+  case "$_env_s" in
+    ''|*[![:space:]]*) ;;
+    *) continue ;;
   esac
-done
-unset _k _raw
+  case "$_env_s" in
+    \#*|[[:space:]]\#*) continue ;;
+    *=*) ;;
+    *) continue ;;
+  esac
+  _env_key="${_env_s%%=*}"
+  _env_key="$(printf '%s' "$_env_key" | sed -E 's/^[[:space:]]+//;s/[[:space:]]+$//')"
+  # 值部分逐字符扫描：引号外的 # 即污染（引号内的 # 合法）
+  _env_val="${_env_s#*=}"
+  _env_q=""; _env_i=0; _env_n=${#_env_val}; _env_hit=0
+  while [ "$_env_i" -lt "$_env_n" ]; do
+    _env_c="${_env_val:$_env_i:1}"
+    _env_i=$((_env_i + 1))
+    if [ -n "$_env_q" ]; then
+      [ "$_env_c" = "$_env_q" ] && _env_q=""
+    else
+      case "$_env_c" in
+        "'"|'"') _env_q="$_env_c" ;;
+        '#') _env_hit=1 ;;
+      esac
+    fi
+  done
+  if [ "$_env_hit" = 1 ]; then
+    _env_polluted="${_env_polluted}  行 ${_env_lineno}：${_env_key}\n"
+  fi
+done < "$ENV_FILE"
+if [ -n "$_env_polluted" ]; then
+  echo "ERROR: $ENV_FILE 存在行尾注释污染（systemd EnvironmentFile 不剥行尾注释，服务会读到污染值）："
+  printf '%b' "$_env_polluted"
+  echo "请把行尾注释移到独立行；值本身若需含 # 请加引号（如 PASSWORD='a#b'），再重新运行。"
+  exit 1
+fi
+unset _env_polluted _env_lineno _env_line _env_s _env_key _env_val _env_q _env_i _env_n _env_c _env_hit
 # APP_ENV 精确值校验：模板只允许 dev|prod，其它值（手误如 production/staging）
 # 会静默跑 dev 语义，同样 fail-fast。
 if [ -n "$(env_val APP_ENV)" ] && [ "$(env_val APP_ENV)" != "dev" ] && [ "$(env_val APP_ENV)" != "prod" ]; then
@@ -335,6 +331,12 @@ fi
 
 # ===== 后端：venv / 依赖 / 检查（全部在 $APP_DIR 内做，与 systemd 一致） =====
 cd "$APP_DIR"
+# R11-P2-8：坏 venv 完整性探针——目录存在但解释器已坏（磁盘异常/手动误删）时
+# 直接删掉重建，否则 pip/ruff 会报莫名其妙的错
+if [ -d .venv ] && ! .venv/bin/python -c 'import sys' >/dev/null 2>&1; then
+  echo "[deploy] 检测到坏 venv（.venv/bin/python 不可用），删掉重建"
+  rm -rf .venv
+fi
 [ -d .venv ] || python3 -m venv .venv
 .venv/bin/pip install -q -r requirements.txt
 .venv/bin/ruff check app
@@ -382,7 +384,13 @@ cd "$APP_DIR" && .venv/bin/alembic upgrade head
 echo "[deploy] alembic migrate 完成"
 
 # --- 重启服务 ---
-systemctl restart stockmon-api stockmon-engine
+# R11-P2-9：restart 失败直接兜底打日志诊断再退出——此前 set -e 退出时
+# 只留一句命令失败，看不到 systemd 侧的真实错误
+systemctl restart stockmon-api stockmon-engine || {
+  echo "ERROR: systemctl restart stockmon-api stockmon-engine 失败，最近日志："
+  journalctl -u stockmon-api -u stockmon-engine --no-pager -n 50 || true
+  exit 1
+}
 # ===== R4-P1-D4：健康检查轮询最多 60 秒等引擎心跳就绪 =====
 # healthz 的 status:ok 是硬编码的；引擎的心跳由独立进程写进 DB，
 # sleep 3 就判大概率引擎还没启动，形同虚设。轮询等 engine=="running"。
@@ -390,7 +398,10 @@ HEALTH_OK=0
 HEALTHZ=""
 for _ in $(seq 1 60); do
   HEALTHZ=$(curl -sf http://127.0.0.1:8101/healthz 2>/dev/null || true)
-  if echo "$HEALTHZ" | grep -q '"status":"ok"' && echo "$HEALTHZ" | grep -q '"engine":"running"'; then
+  # R11-P2-7：JSON 空白容忍——healthz 若输出格式化 JSON（含空格/换行），
+  # 旧的 '"status":"ok"' 精确匹配会漏判
+  if echo "$HEALTHZ" | grep -qE '"status"[[:space:]]*:[[:space:]]*"ok"' \
+    && echo "$HEALTHZ" | grep -qE '"engine"[[:space:]]*:[[:space:]]*"running"'; then
     HEALTH_OK=1
     break
   fi

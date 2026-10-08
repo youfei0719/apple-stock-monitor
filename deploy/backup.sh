@@ -57,35 +57,10 @@ fail() {
 
 [ -f "$ENV_FILE" ] || fail "$ENV_FILE 不存在"
 
-# ===== R5-D-1/D-2：.env 提取器（与 deploy.sh 同逻辑：先去行尾注释再取值，支持 export 前缀） =====
-# R6-P2-6：重复键取最后一个（与 `source` 语义一致）；R6-P2-1：最终清理只去首尾
-# （空白/CR/引号），值内空格原样保留。
-env_val() {
-  local key="$1" line val rest
-  line=$(grep -E "^[[:space:]]*(export[[:space:]]+)?${key}=" "$ENV_FILE" | tail -n1) || return 0
-  [ -z "$line" ] && return 0
-  val=$(printf '%s\n' "$line" | sed -E 's/^[[:space:]]*(export[[:space:]]+)?[^=[:space:]]+=//')
-  val=$(printf '%s' "$val" | sed -E 's/^[[:space:]]+//;s/[[:space:]]+$//')
-  case "$val" in
-    \"*)
-      rest="${val#\"}"
-      val="${rest%%\"*}"
-      ;;
-    \'*)
-      rest="${val#\'}"
-      val="${rest%%\'*}"
-      ;;
-    *)
-      val=$(printf '%s' "$val" | sed -E 's/[[:space:]]+#.*$//;s/[[:space:]]+$//')
-      ;;
-  esac
-  val=$(printf '%s' "$val" | tr -d '\r')
-  val="${val#"${val%%[![:space:]]*}"}"
-  val="${val%"${val##*[![:space:]]}"}"
-  val="${val#\"}"; val="${val%\"}"
-  val="${val#\'}"; val="${val%\'}"
-  printf '%s' "$val"
-}
+# ===== R5-D-1/D-2：.env 提取器 =====
+# R11-P2-10：实现抽到 deploy/lib.sh（与 deploy.sh 共用），此处只 source，消两份拷贝漂移风险。
+# shellcheck disable=SC1091
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 # ===== P0-26：从 .env 的 DATABASE_URL 解析 sqlite 真实路径（只支持 sqlite） =====
 DB_URL=$(env_val DATABASE_URL)
