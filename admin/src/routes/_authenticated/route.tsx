@@ -13,16 +13,23 @@ import { USE_MOCK } from '@/lib/admin-api'
  */
 export const Route = createFileRoute('/_authenticated')({
   beforeLoad: async ({ location }) => {
-    const toSignIn = (): never => {
+    const toSignIn = (reason?: string): never => {
       throw redirect({
         to: '/sign-in',
-        search: { redirect: location.href },
+        search: { redirect: location.href, reason },
       })
     }
     if (USE_MOCK) {
       if (sessionStorage.getItem('admin-authed') !== '1') toSignIn()
       return
     }
+    const fetchMe = () =>
+      fetch('/api/me', { credentials: 'include' })
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null)
+    // 标记位在 try 外消费，避免 catch 吞掉 redirect（旧代码的坑）
+    let goTotpSetup = false
+    let forbidden = false
     try {
       const res = await fetch('/api/admin/overview', { credentials: 'include' })
       if (res.ok) return
@@ -30,18 +37,19 @@ export const Route = createFileRoute('/_authenticated')({
         const body = await res.json().catch(() => ({}))
         if (body.code === 'totp_required') {
           // 会话有效，仅缺 TOTP：查绑定状态决定去向
-          const me = await fetch('/api/me', { credentials: 'include' })
-            .then((r) => (r.ok ? r.json() : null))
-            .catch(() => null)
-          if (me && me.totp_enabled === false) {
-            throw redirect({ to: '/totp-setup' })
-          }
+          const me = await fetchMe()
+          if (me && me.totp_enabled === false) goTotpSetup = true
+        } else {
+          // P2：已登录但非管理员——不再静默踢回，给出明确提示
+          const me = await fetchMe()
+          if (me && me.email) forbidden = true
         }
       }
     } catch {
       // 网络异常等同未授权处理
     }
-    toSignIn()
+    if (goTotpSetup) throw redirect({ to: '/totp-setup' })
+    toSignIn(forbidden ? 'forbidden' : undefined)
   },
   component: AuthenticatedLayout,
 })

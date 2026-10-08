@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { NavLink, Outlet, useLocation, useNavigate, useOutletContext } from 'react-router-dom';
+import { Link, NavLink, Outlet, useLocation, useNavigate, useOutletContext } from 'react-router-dom';
 import { api, isTaskExpired, type Me, type Task, type TaskStatusFilter } from '../lib/api';
 import IslandStatus from './IslandStatus';
 
@@ -65,9 +65,15 @@ export default function App() {
         const m = await api.me();
         setMe(m);
         setTasks(await api.tasks());
-      } catch (e) {
+      } catch {
+        // F4：未登录不再强制跳 /login——匿名体验可用（localStorage device id + X-Device-Id，
+        // 后端 tasks.py 匿名链路支持；登录/注册时后端自动认领同 device 的任务）。
         setMe(null);
-        if (location.pathname !== '/login') navigate('/login', { replace: true });
+        try {
+          setTasks(await api.tasks());
+        } catch {
+          /* 匿名拉任务也失败则留空列表 */
+        }
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -100,6 +106,22 @@ export default function App() {
           onStockTap={hotTask ? () => navigate(`/tasks/${hotTask.id}`) : undefined}
         />
       )}
+      {/* F4：匿名体验横幅——trial 档仅限未登录匿名体验（后端 tiers.py），
+          注册/登录后同 device 的匿名任务自动迁移到账号下（auth.py _claim_device_tasks） */}
+      {me === null &&
+        location.pathname !== '/login' &&
+        location.pathname !== '/verify' && (
+          <div className="mx-auto max-w-lg px-4 pt-3">
+            <div className="rounded-card-sm bg-island text-white px-4 py-2.5 text-[13px] flex items-center justify-between gap-3 rise-in">
+              <span>
+                匿名体验中：可创建 1 个任务 · 每月 1 次推送
+              </span>
+              <Link to="/login" className="shrink-0 underline font-medium">
+                注册 / 登录
+              </Link>
+            </div>
+          </div>
+        )}
       <main className="mx-auto max-w-lg pb-24">
         <Outlet context={{ me, tasks, refreshTasks }} />
         {location.pathname !== '/login' && location.pathname !== '/verify' && (

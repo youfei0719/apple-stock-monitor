@@ -7,6 +7,28 @@
 const API_BASE: string =
   (import.meta.env.VITE_API_BASE as string | undefined) ?? '/api';
 
+/**
+ * 匿名体验设备标识（F4）：后端 X-Device-Id 匿名链路用（tasks.py：无会话时可创建 1 个任务，
+ * 配额按 device 逐月计数；auth.py 登录/注册时读同一 header 自动认领匿名任务）。
+ * 登录用户也带上该 header——无副作用，是任务迁移（claim）的关键。
+ */
+const DEVICE_KEY = 'stockmon.device_id';
+export function getDeviceId(): string {
+  try {
+    let id = localStorage.getItem(DEVICE_KEY);
+    if (!id) {
+      id =
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto
+          ? crypto.randomUUID()
+          : `dev-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      localStorage.setItem(DEVICE_KEY, id);
+    }
+    return id;
+  } catch {
+    return 'dev-anon';
+  }
+}
+
 export class ApiError extends Error {
   code?: string;
   status: number;
@@ -23,7 +45,11 @@ async function req<T>(path: string, init: RequestInit = {}, absolute = false): P
     // absolute=true 时跳过 API_BASE（如 /healthz 挂在站点根，不在 /api 下）
     res = await fetch(absolute ? path : `${API_BASE}${path}`, {
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json', ...(init.headers ?? {}) },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Device-Id': getDeviceId(),
+        ...(init.headers ?? {}),
+      },
       ...init,
     });
   } catch (e) {
@@ -292,13 +318,18 @@ export interface Payment {
   created_at: string;
 }
 
+/**
+ * 给无时区后缀的 ISO 时间补 Z（按 UTC 解析）。后端部分接口（如 /stats/poll）
+ * 返回 UTC 裸字符串，不补的话浏览器会按本地时间误读（北京用户差 8 小时）。
+ */
+function withZ(iso: string | null): string | null {
+  if (!iso) return iso;
+  return /[zZ]|[+-]\d{2}:?\d{2}$/.test(iso) ? iso : `${iso}Z`;
+}
+
 /* ---------------- 接口 ---------------- */
 
 export const api = {
-  // healthz 挂在站点根（/healthz），不在 /api 下
-  health: () =>
-    req<{ status: string; db: boolean; engine: string; version: string }>('/healthz', {}, true),
-
   register: (email: string, password: string) =>
     req<{ id: number; email: string; tier: Tier; totp_enabled: boolean }>('/auth/register', {
       method: 'POST',
@@ -347,7 +378,15 @@ export const api = {
 
   taskStates: (id: string | number) => req<StateRow[]>(`/tasks/${id}/states`),
 
-  stores: (refresh = 0) => req<StoreRef[]>(`/catalog/stores?refresh=${refresh}`),
+  // P0-5 双保险：refresh=1 时后端理论上返回纯数组，但若返回对象 {refreshing, stores}
+  //（历史形状错位曾导致白屏），这里防御性解包，保证永远返回数组
+  stores: async (refresh = 0): Promise<StoreRef[]> => {
+    const data = await req<StoreRef[] | { refreshing?: boolean; stores?: StoreRef[] }>(
+      `/catalog/stores?refresh=${refresh}`,
+    );
+    if (Array.isArray(data)) return data;
+    return data?.stores ?? [];
+  },
   products: (category: string) => req<Product[]>(`/catalog/products?category=${category}`),
 
   notifyTest: (channel: string, target: string) =>
@@ -385,7 +424,13 @@ export const api = {
   },
   analyticsOverview: () => req<Record<string, unknown>>('/analytics/overview'),
   guide: () => req<PurchaseGuide>('/guide/purchase'),
-  pollStats: () => req<PollStats>('/stats/poll'),
+  // F6：/stats/poll 的 last_poll_at 是 UTC 裸字符串（无 Z 后缀），前端解析时必须按 UTC 处理。
+  // 后缀缺失时补 Z；若已有 Z 或 ±hh:mm 偏移则不动。再由各页转本地展示（页脚承诺"页面内所有时间为本地时间"）。
+  pollStats: () =>
+    req<PollStats>('/stats/poll').then((s) => ({
+      ...s,
+      last_poll_at: withZ(s.last_poll_at),
+    })),
 
   quota: () => req<Quota>('/quota'),
   plans: () => req<Plan[]>('/plans'),

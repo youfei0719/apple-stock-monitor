@@ -28,10 +28,21 @@ import {
   getAudit,
   getLogTail,
   setPeakMode,
+  fmtLocalTime,
   type SystemStatus,
   type AuditEntry,
   USE_MOCK,
 } from '@/lib/admin-api'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 
 function StatCard({
   title,
@@ -65,10 +76,7 @@ function StatCard({
   )
 }
 
-function fmtTime(iso: string | null | undefined): string {
-  if (!iso) return '—'
-  return iso.slice(0, 19).replace('T', ' ')
-}
+
 
 function fmtDetail(detail: unknown): string {
   if (detail == null) return '—'
@@ -85,6 +93,8 @@ export function System() {
   const [logs, setLogs] = useState<string[] | null>(null)
   const [audit, setAudit] = useState<AuditEntry[] | null>(null)
   const [peakBusy, setPeakBusy] = useState(false)
+  // P2：高峰模式开关二次确认
+  const [peakPending, setPeakPending] = useState<boolean | null>(null)
 
   useEffect(() => {
     getSystem().then(setSys).catch(() => setSys(null))
@@ -96,12 +106,14 @@ export function System() {
     setPeakBusy(true)
     try {
       const s = await setPeakMode(enabled)
-      setSys((prev) => (prev ? { ...prev, peak_mode: s.peak_mode ?? enabled } : prev))
+      // F7：setPeakMode 实际返回 {ok, peak_mode}（不是 SystemStatus）
+      setSys((prev) => (prev ? { ...prev, peak_mode: s.peak_mode } : prev))
       toast.success(enabled ? '已开启高峰模式' : '已关闭高峰模式')
     } catch (e) {
       toast.error(e instanceof Error ? e.message : '切换失败')
     } finally {
       setPeakBusy(false)
+      setPeakPending(null)
     }
   }
 
@@ -126,7 +138,7 @@ export function System() {
         <div className='mb-6'>
           <h1 className='text-2xl font-bold tracking-tight'>系统状态</h1>
           <p className='text-sm text-muted-foreground'>
-            引擎 / Apple 冷却 / 日志 / 管理员审计
+            引擎 / Apple 冷却 / 日志 / 管理员审计 · 时间均为本地时间
             {USE_MOCK && '（mock 数据，待后端联调）'}
           </p>
         </div>
@@ -152,7 +164,7 @@ export function System() {
                 </Badge>
               )}
               <p className='mt-2 font-mono text-xs text-muted-foreground'>
-                上次心跳 {fmtTime(engine?.last_heartbeat)} UTC
+                上次心跳 {fmtLocalTime(engine?.last_heartbeat)}（本地时间）
               </p>
               {engine?.last_error && (
                 <p className='mt-1 font-mono text-xs text-[#d70015]'>
@@ -202,11 +214,44 @@ export function System() {
             <Switch
               checked={sys?.peak_mode === true}
               disabled={loading || peakBusy}
-              onCheckedChange={togglePeakMode}
+              // P2：高峰模式影响全站轮询策略，开关前二次确认
+              onCheckedChange={(v) => setPeakPending(v)}
               aria-label='高峰模式开关'
             />
           </CardHeader>
         </Card>
+
+        {/* P2：高峰模式二次确认 */}
+        <AlertDialog open={peakPending !== null} onOpenChange={(o) => !o && setPeakPending(null)}>
+          <AlertDialogContent className='rounded-3xl'>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                确认{peakPending ? '开启' : '关闭'}高峰模式？
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                {peakPending ? (
+                  <>
+                    开启后：trial / free 轮询间隔拉长、catalog 后台刷新暂停、pro 任务优先。
+                    适用于新品发售等全站流量高峰。
+                  </>
+                ) : (
+                  <>关闭后各档位恢复正常轮询间隔。</>
+                )}
+                该操作会写入管理员审计日志。
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel className='rounded-2xl'>取消</AlertDialogCancel>
+              <AlertDialogAction
+                className='rounded-2xl bg-[#ff9f0a] hover:bg-[#ff9f0a]/90 text-white'
+                onClick={() => peakPending !== null && togglePeakMode(peakPending)}
+                disabled={peakBusy}
+              >
+                {peakBusy ? '处理中…' : `确认${peakPending ? '开启' : '关闭'}`}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
         <div className='mt-4 grid gap-4 lg:grid-cols-2'>
           <Card className='rounded-3xl'>
@@ -276,7 +321,7 @@ export function System() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>时间</TableHead>
+                    <TableHead>时间（本地时间）</TableHead>
                     <TableHead className='font-mono'>管理员 ID</TableHead>
                     <TableHead>操作</TableHead>
                     <TableHead>对象</TableHead>
@@ -288,7 +333,7 @@ export function System() {
                   {audit.map((a) => (
                     <TableRow key={a.id}>
                       <TableCell className='font-mono text-[13px] text-muted-foreground'>
-                        {fmtTime(a.created_at)}
+                        {fmtLocalTime(a.created_at)}
                       </TableCell>
                       <TableCell className='font-mono text-[13px]'>{a.admin_id}</TableCell>
                       <TableCell>

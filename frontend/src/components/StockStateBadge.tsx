@@ -1,8 +1,8 @@
 import type { StockState } from '../lib/api';
 
 /**
- * 六态库存徽章
- * 六态：available / unavailable / unknown / verifying / cooling / paused
+ * 七态库存徽章
+ * 七态：available / unavailable / unknown / verifying / cooling / paused / expired
  * 设计要求：未知 ≠ 无货，必须有明确视觉区分
  *  - unknown：琥珀色 + 虚线边框「数据缺失」语义
  *  - unavailable：灰色实心「确认无货」

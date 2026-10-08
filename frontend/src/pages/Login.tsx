@@ -49,12 +49,8 @@ export default function Login() {
       await api.resendCode(email.trim());
       navigate('/verify', { state: { email: email.trim() } });
     } catch (e) {
-      // 后端若没有重发接口（404），提示重新注册获取验证码
-      if (e instanceof ApiError && e.status === 404) {
-        setError('暂无重发入口：请切换到「注册」重新注册获取新验证码');
-      } else {
-        setError(e instanceof Error ? e.message : '重发失败');
-      }
+      // 后端 POST /auth/resend-code 已实现（契约回归通过），404 分支为死代码已删除
+      setError(e instanceof Error ? e.message : '重发失败');
     } finally {
       setResending(false);
     }
@@ -130,7 +126,7 @@ export default function Login() {
           </div>
         </Card>
         <p className="mt-4 text-center text-xs text-faint">
-          注册即开通体验会员 · 连续 5 次登录失败将锁定 IP 15 分钟
+          注册即开通免费版（匿名体验的任务会自动迁移过来）· 连续 5 次登录失败将锁定 IP 15 分钟
         </p>
       </div>
     </div>

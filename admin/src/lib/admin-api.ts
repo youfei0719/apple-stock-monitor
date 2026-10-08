@@ -18,6 +18,8 @@ export interface OverviewKpi {
   today_pushes: number
   revenue_cny: number
   active_tasks: number
+  /** 待处理支付（后端 GET /api/admin/overview 已返回；unclaimed=未认领，amount_mismatch=金额异常） */
+  pending_payments?: { unclaimed: number; amount_mismatch: number }
 }
 
 export interface TrafficPoint {
@@ -33,6 +35,9 @@ export interface AdminUser {
   tier_expires_at: string | null
   is_admin: boolean
   totp_enabled: boolean
+  /** F3：后端 PATCH /api/admin/users/{id} 已支持 email_verified，但 list_users 暂未返回该字段
+   *（后端负责人补）。这里可选链防御：没返回时按钮按"未验证"处理。 */
+  email_verified?: boolean | null
   created_at: string
 }
 
@@ -301,6 +306,33 @@ export async function updateUserTier(
   await req(`/api/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify(body) })
 }
 
+/** F3：手动标记邮箱已验证——PATCH /api/admin/users/{id} {email_verified: true}
+ *（SMTP 故障兜底；后端记审计。后端 list_users 暂未返回该字段，页面用可选链防御。） */
+export async function verifyUserEmail(id: number): Promise<void> {
+  if (USE_MOCK) {
+    await sleep(400)
+    const u = MOCK_USERS.find((x) => x.id === id)
+    if (u) {
+      u.email_verified = true
+      MOCK_AUDIT.unshift({
+        id: Date.now(),
+        admin_id: 1,
+        action: 'user.verify_email',
+        target_type: 'user',
+        target_id: String(id),
+        detail: { email_verified: true },
+        ip: '127.0.0.1',
+        created_at: new Date().toISOString(),
+      })
+    }
+    return
+  }
+  await req(`/api/admin/users/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ email_verified: true }),
+  })
+}
+
 /** 付费记录；claimStatus='unclaimed' 时只看待认领坏账 */
 export async function getPayments(
   claimStatus: '' | 'unclaimed' = '',
@@ -315,6 +347,62 @@ export async function getPayments(
   if (claimStatus) params.set('claim_status', claimStatus)
   const q = params.toString()
   return req(`/api/admin/payments${q ? `?${q}` : ''}`)
+}
+
+/** 认领坏账：把未认领订单绑定到用户（写操作，后端记 audit） */
+export interface PaymentActionOut {
+  ok: boolean
+  payment_id: number
+  payment_status: string
+  pending_count?: number
+  user?: { user_id: number; tier: { from: string; to: string } } | null
+}
+
+/** F1：标记退款——POST /api/admin/payments/{id}/refund（后端联动降回 free、记审计；页面层二次确认） */
+export async function refundPayment(paymentId: number): Promise<PaymentActionOut> {
+  if (USE_MOCK) {
+    await sleep(400)
+    const p = MOCK_PAYMENTS.find((x) => x.id === paymentId)
+    if (p) {
+      p.status = 'refunded'
+      MOCK_AUDIT.unshift({
+        id: Date.now(),
+        admin_id: 1,
+        action: 'payment.refund',
+        target_type: 'payment',
+        target_id: String(paymentId),
+        detail: { from: 'paid', to: 'refunded' },
+        ip: '127.0.0.1',
+        created_at: new Date().toISOString(),
+      })
+    }
+    return { ok: true, payment_id: paymentId, payment_status: 'refunded', user: null }
+  }
+  return req(`/api/admin/payments/${paymentId}/refund`, { method: 'POST' })
+}
+
+/** F2：关闭金额异常/待认领订单（不处理）——POST /api/admin/payments/{id}/close，
+ * status 置 resolved（从待处理队列移除），不绑定用户、不开通档位（页面层二次确认） */
+export async function closePayment(paymentId: number): Promise<PaymentActionOut> {
+  if (USE_MOCK) {
+    await sleep(400)
+    const p = MOCK_PAYMENTS.find((x) => x.id === paymentId)
+    if (p) {
+      p.status = 'resolved'
+      MOCK_AUDIT.unshift({
+        id: Date.now(),
+        admin_id: 1,
+        action: 'payment.close',
+        target_type: 'payment',
+        target_id: String(paymentId),
+        detail: { from: 'amount_mismatch', to: 'resolved' },
+        ip: '127.0.0.1',
+        created_at: new Date().toISOString(),
+      })
+    }
+    return { ok: true, payment_id: paymentId, payment_status: 'resolved' }
+  }
+  return req(`/api/admin/payments/${paymentId}/close`, { method: 'POST' })
 }
 
 /** 认领坏账：把未认领订单绑定到用户（写操作，后端记 audit） */
@@ -364,14 +452,19 @@ export async function getSystem(): Promise<SystemStatus> {
   return req('/api/admin/system')
 }
 
-/** 高峰模式开关（写操作，后端记 audit） */
-export async function setPeakMode(enabled: boolean): Promise<SystemStatus> {
+/** 高峰模式开关返回体（F7：后端实际返回 {ok, peak_mode}，不是 SystemStatus） */
+export interface PeakModeOut {
+  ok: boolean
+  peak_mode: boolean
+}
+
+/** 高峰模式开关（写操作，后端记 audit；页面层二次确认） */
+export async function setPeakMode(enabled: boolean): Promise<PeakModeOut> {
   if (USE_MOCK) {
     await sleep(400)
-    const s = await getSystem()
-    return { ...s, peak_mode: enabled }
+    return { ok: true, peak_mode: enabled }
   }
-  return req<SystemStatus>('/api/admin/system/peak-mode', {
+  return req<PeakModeOut>('/api/admin/system/peak-mode', {
     method: 'POST',
     body: JSON.stringify({ enabled }),
   })
@@ -401,4 +494,16 @@ export const TIER_LABEL: Record<Tier, string> = {
   free: '免费版',
   standard: '标准会员',
   pro: 'Pro 会员',
+}
+
+/**
+ * P2 时区：后端所有时间都是 UTC ISO8601（带 Z）。后台统一转浏览器本地时间展示，
+ * 与前台「页面内所有时间为本地时间」承诺一致；各页在表头/页注标注「本地时间」。
+ */
+export function fmtLocalTime(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }

@@ -52,7 +52,7 @@ const COOLDOWN_SEC = 60 // 前端侧演示冷却（真实锁定由后端执行�
  * 校验全部在后端；前端只做失败计数与限流提示（防爆破 UX），不存任何密钥。
  */
 export function SignIn() {
-  const { redirect } = useSearch({ from: '/(auth)/sign-in' })
+  const { redirect, reason } = useSearch({ from: '/(auth)/sign-in' })
   const navigate = useNavigate()
   const [step, setStep] = useState<1 | 2>(1)
   const [isLoading, setIsLoading] = useState(false)
@@ -155,6 +155,16 @@ export function SignIn() {
           </CardDescription>
         </CardHeader>
         <CardContent>
+          {reason === 'forbidden' && (
+            <div className='mb-4 flex items-start gap-2 rounded-2xl bg-[#d70015]/10 px-4 py-3 text-sm text-[#d70015]'>
+              <AlertTriangle className='mt-0.5 h-4 w-4 shrink-0' />
+              <div>
+                该账号无管理员权限。
+                <br />
+                请使用管理员账号登录，或联系管理员开通。
+              </div>
+            </div>
+          )}
           {(failCount > 0 || locked) && (
             <div
               className={`mb-4 flex items-start gap-2 rounded-2xl px-4 py-3 text-sm ${

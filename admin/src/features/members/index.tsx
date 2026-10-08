@@ -40,8 +40,10 @@ import { Main } from '@/components/layout/main'
 import { AdminProfile } from '@/components/admin-profile'
 import { ThemeSwitch } from '@/components/theme-switch'
 import {
+  fmtLocalTime,
   getUsers,
   updateUserTier,
+  verifyUserEmail,
   type AdminUser,
   type Tier,
   TIER_LABEL,
@@ -77,10 +79,7 @@ function toLocalInput(iso: string | null): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-function fmtTime(iso: string | null): string {
-  if (!iso) return '—'
-  return iso.slice(0, 16).replace('T', ' ')
-}
+
 
 export function Members() {
   const [users, setUsers] = useState<AdminUser[] | null>(null)
@@ -89,6 +88,28 @@ export function Members() {
   const [pending, setPending] = useState<PendingChange | null>(null)
   const [changing, setChanging] = useState(false)
   const [expiresAt, setExpiresAt] = useState('')
+  // F3：手动标记邮箱已验证（SMTP 故障兜底）
+  const [verifying, setVerifying] = useState<AdminUser | null>(null)
+  const [verifyBusy, setVerifyBusy] = useState(false)
+
+  async function confirmVerifyEmail() {
+    if (!verifying) return
+    setVerifyBusy(true)
+    try {
+      await verifyUserEmail(verifying.id)
+      setUsers((prev) =>
+        prev?.map((u) =>
+          u.id === verifying.id ? { ...u, email_verified: true } : u,
+        ) ?? null,
+      )
+      toast.success(`已将 ${verifying.email} 标记为邮箱已验证（已记审计）`)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '标记失败')
+    } finally {
+      setVerifyBusy(false)
+      setVerifying(null)
+    }
+  }
 
   useEffect(() => {
     setUsers(null)
@@ -119,7 +140,7 @@ export function Members() {
         ) ?? null,
       )
       toast.success(
-        `已将 ${pending.user.email} 改为${TIER_LABEL[pending.tier]}${iso ? `（到期 ${fmtTime(iso)}）` : ''}（已记审计）`,
+        `已将 ${pending.user.email} 改为${TIER_LABEL[pending.tier]}${iso ? `（到期 ${fmtLocalTime(iso)}）` : ''}（已记审计）`,
       )
     } catch (e) {
       toast.error(e instanceof Error ? e.message : '改级失败')
@@ -187,8 +208,9 @@ export function Members() {
                     <TableHead>等级</TableHead>
                     <TableHead>管理员</TableHead>
                     <TableHead>TOTP</TableHead>
-                    <TableHead>等级到期</TableHead>
-                    <TableHead>注册时间</TableHead>
+                    <TableHead>邮箱验证</TableHead>
+                    <TableHead>等级到期（本地时间）</TableHead>
+                    <TableHead>注册时间（本地时间）</TableHead>
                     <TableHead className='text-right'>操作</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -215,11 +237,24 @@ export function Members() {
                           <span className='text-muted-foreground'>未绑定</span>
                         )}
                       </TableCell>
+                      <TableCell>
+                        {u.email_verified ? (
+                          <Badge className='rounded-full bg-[#34c759]/10 text-[#1f8a3d]'>已验证</Badge>
+                        ) : (
+                          <button
+                            onClick={() => setVerifying(u)}
+                            className='rounded-2xl bg-[#ff9f0a]/10 px-3 py-1 text-[12px] font-medium text-[#b26a00] hover:bg-[#ff9f0a]/20'
+                            title='SMTP 故障兜底：手动标记该用户邮箱已验证，后端记审计'
+                          >
+                            标记已验证
+                          </button>
+                        )}
+                      </TableCell>
                       <TableCell className='font-mono text-[13px] text-muted-foreground'>
-                        {fmtTime(u.tier_expires_at)}
+                        {fmtLocalTime(u.tier_expires_at)}
                       </TableCell>
                       <TableCell className='text-muted-foreground'>
-                        {fmtTime(u.created_at)}
+                        {fmtLocalTime(u.created_at)}
                       </TableCell>
                       <TableCell className='text-right'>
                         <Select
@@ -279,7 +314,7 @@ export function Members() {
                 className='rounded-2xl font-mono'
               />
               <p className='mt-1.5 text-xs text-muted-foreground'>
-                当前到期：{fmtTime(pending?.user.tier_expires_at ?? null)}
+                当前到期：{fmtLocalTime(pending?.user.tier_expires_at ?? null)}
               </p>
             </div>
           </AlertDialogHeader>
@@ -291,6 +326,29 @@ export function Members() {
               disabled={changing}
             >
               {changing ? '处理中…' : '确认改级'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* F3：手动标记邮箱已验证二次确认（SMTP 故障兜底，后端记审计） */}
+      <AlertDialog open={verifying !== null} onOpenChange={(o) => !o && setVerifying(null)}>
+        <AlertDialogContent className='rounded-3xl'>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认标记邮箱已验证？</AlertDialogTitle>
+            <AlertDialogDescription>
+              将 <span className='font-medium text-foreground'>{verifying?.email}</span>{' '}
+              标记为邮箱已验证。该操作仅用于 SMTP 故障时的兜底，会写入管理员审计日志。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className='rounded-2xl'>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className='rounded-2xl bg-[#0071e3] hover:bg-[#0071e3]/90'
+              onClick={confirmVerifyEmail}
+              disabled={verifyBusy}
+            >
+              {verifyBusy ? '处理中…' : '确认标记'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
