@@ -93,3 +93,18 @@ state ∈ `available | unavailable | unknown | verifying | cooling | paused`
 
 ## 限流
 - 公开接口：60 req/min/IP；登录接口：5 次失败锁 IP 15 分钟；目录刷新：1 次/小时。
+
+## 补充接口（round4 补齐：认证/任务详情/续期）
+
+- `POST /api/auth/resend-code` `{email}` → 200 `{ok:true}`；重发 6 位邮箱验证码（10 分钟有效，邮箱大小写归一化）。
+  - 限流：同一邮箱每小时最多 3 次 → 429 `{code:"rate_limited"}`。
+  - 邮箱未注册 → 404 `{code:"not_found"}`；已验证过 → `{ok:true, already:true}`（不再发信）；邮件发送失败 → 500 `{code:"email_failed"}`。
+  - 典型用途：注册后没收到验证码、验证码过期（过期文案见 R4-P1-D6，引导用户点"重新发送"而非重新注册）。
+
+- `GET /api/tasks/{id}` → 200 Task（与 `POST /api/tasks` 返回同形，含 `channels`、`latest` 状态摘要，见"监控任务"节）。
+  - 鉴权：登录用户只能看自己的；未登录时按 `X-Device-Id` 匹配自己的匿名任务，否则 403 `{code:"forbidden"}`；任务不存在 404 `{code:"not_found"}`。
+
+- `POST /api/tasks/{id}/renew` → 200 Task（同形）。
+  - 一键续期：`expires_at = now + 30 天`。只延长时间，不改 `paused`/配额状态。
+  - 匿名 trial 任务受 24h 上限钳制（`expires_at` 会被 clamp 到 now+24h）。
+  - 注意：提前续期时**不保留**剩余天数（renew 语义 = 从现在起 30 天）。

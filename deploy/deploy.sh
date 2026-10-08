@@ -22,6 +22,27 @@ if [ -z "$SECRET_VAL" ] || [ "$SECRET_VAL" = "change-me-64hex" ]; then
   exit 1
 fi
 echo "[deploy] .env 校验通过"
+
+# ===== R4-P0-7：prod 硬门槛预检（早于任何重启/安装步骤） =====
+# main.py lifespan 在 APP_ENV=prod 时要求以下 6 个变量缺一不可，缺则 API 直接
+# RuntimeError 拒绝启动；这里提前报错退出，避免部署到最后才发现服务起不来。
+APP_ENV_VAL=$(sed -n 's/^APP_ENV=//p' "$ENV_FILE" | head -n1 | tr -d " '\"\t\r")
+if [ "$APP_ENV_VAL" = "prod" ]; then
+  MISSING_PROD=""
+  for var in AFDIAN_TOKEN AFDIAN_PLAN_STANDARD AFDIAN_PLAN_PRO SMTP_HOST SMTP_USER SMTP_PASSWORD; do
+    V=$(sed -n "s/^$var=//p" "$ENV_FILE" | head -n1 | tr -d " '\"\t\r")
+    [ -z "$V" ] && MISSING_PROD="$MISSING_PROD $var"
+  done
+  if [ -n "$MISSING_PROD" ]; then
+    echo "ERROR: prod 模式下 $ENV_FILE 缺少必需配置:$MISSING_PROD"
+    echo "（API 在 prod 启动时会直接 RuntimeError 拒绝启动，请补齐后再部署）"
+    exit 1
+  fi
+  echo "[deploy] prod 硬门槛预检通过"
+else
+  echo "[deploy] APP_ENV=$APP_ENV_VAL（非 prod），跳过 prod 硬门槛预检"
+fi
+
 # D8：TRUSTED_PROXIES 空则登录限流按 IP 维度会把所有用户算成 127.0.0.1
 # （nginx 反代场景）。缺省不致命，只 warning。
 TP_VAL=$(sed -n 's/^TRUSTED_PROXIES=//p' "$ENV_FILE" | head -n1 | tr -d " '\"\t\r")
@@ -117,6 +138,13 @@ rsync -a --delete \
   "$REPO/backend/" "$APP_DIR/"
 echo "[deploy] 后端已同步 $REPO/backend/ -> $APP_DIR/"
 
+# P2：ruff.toml 在仓库根，rsync 不覆盖它；不拷的话 `ruff check app` 在 $APP_DIR
+# 里按默认规则跑（line-length=100 等配置不生效）。同步一份过去。
+if [ -f "$REPO/ruff.toml" ]; then
+  cp "$REPO/ruff.toml" "$APP_DIR/ruff.toml"
+  echo "[deploy] ruff.toml 已同步到 $APP_DIR/"
+fi
+
 # ===== 后端：venv / 依赖 / 检查（全部在 $APP_DIR 内做，与 systemd 一致） =====
 cd "$APP_DIR"
 [ -d .venv ] || python3 -m venv .venv
@@ -151,6 +179,28 @@ find /opt/stockmon/frontend/dist /opt/stockmon/admin/dist -type f -exec chmod 64
 
 # --- 重启服务 ---
 systemctl restart stockmon-api stockmon-engine
-sleep 3
-curl -sf http://127.0.0.1:8101/healthz | grep -q '"status":"ok"' \
-  && echo "DEPLOY OK" || { echo "DEPLOY FAILED: healthz"; exit 1; }
+# ===== R4-P1-D4：健康检查轮询最多 60 秒等引擎心跳就绪 =====
+# healthz 的 status:ok 是硬编码的；引擎的心跳由独立进程写进 DB，
+# sleep 3 就判大概率引擎还没启动，形同虚设。轮询等 engine=="running"。
+HEALTH_OK=0
+HEALTHZ=""
+for _ in $(seq 1 60); do
+  HEALTHZ=$(curl -sf http://127.0.0.1:8101/healthz 2>/dev/null || true)
+  if echo "$HEALTHZ" | grep -q '"status":"ok"' && echo "$HEALTHZ" | grep -q '"engine":"running"'; then
+    HEALTH_OK=1
+    break
+  fi
+  sleep 1
+done
+if [ "$HEALTH_OK" = "1" ]; then
+  echo "DEPLOY OK"
+else
+  echo "DEPLOY FAILED: 60 秒内 healthz 未报告 engine=running"
+  echo "--- healthz 最后一次输出 ---"
+  echo "${HEALTHZ:-<无响应>}"
+  echo "--- stockmon-engine 日志尾部 ---"
+  journalctl -u stockmon-engine -n 30 --no-pager || true
+  echo "--- stockmon-api 日志尾部 ---"
+  journalctl -u stockmon-api -n 30 --no-pager || true
+  exit 1
+fi
