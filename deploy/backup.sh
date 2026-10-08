@@ -26,7 +26,18 @@ esac
 
 [ -f "$SRC" ] || { echo "[$DAY] backup FAIL: 数据库文件不存在: $SRC" >&2; exit 1; }
 
-sqlite3 "$SRC" ".backup '$DST_DIR/app-$DAY.db'"
+# ===== R4-P1-D7：备份连接加 busy_timeout（3:10 可能与引擎写锁撞车） =====
+# .backup 失败时 sqlite3 进程可能仍退出 0，所以产物必须做非空 + 完整性检查，
+# 失败写日志并以非零退出，让 cron 能感知（不能静默"备份成功"）。
+sqlite3 "$SRC" "PRAGMA busy_timeout=15000;" ".backup '$DST_DIR/app-$DAY.db'"
+if [ ! -s "$DST_DIR/app-$DAY.db" ]; then
+  echo "[$DAY] backup FAIL: 备份产物为空或缺失: $DST_DIR/app-$DAY.db（可能与引擎写锁撞车，busy_timeout=15s 仍超时）" >&2
+  exit 1
+fi
+if ! sqlite3 "$DST_DIR/app-$DAY.db" "PRAGMA quick_check;" | grep -q '^ok'; then
+  echo "[$DAY] backup FAIL: 备份文件完整性校验未通过: $DST_DIR/app-$DAY.db" >&2
+  exit 1
+fi
 chmod 600 "$DST_DIR/app-$DAY.db"
 
 # .env 一起备份：丢 .env = 全员会话失效 + 密钥/第三方 token 丢失
