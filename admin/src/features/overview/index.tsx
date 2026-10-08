@@ -15,10 +15,10 @@ import { AdminProfile } from '@/components/admin-profile'
 import { ThemeSwitch } from '@/components/theme-switch'
 import {
   getOverview,
+  isAuthExpired,
   type OverviewKpi,
   type Tier,
   TIER_LABEL,
-  USE_MOCK,
 } from '@/lib/admin-api'
 
 const TIER_COLORS: Record<Tier, string> = {
@@ -80,7 +80,11 @@ export function Overview() {
     setLoadError(null)
     getOverview()
       .then((d) => setData(d))
-      .catch((e) => setLoadError(e instanceof Error ? e.message : '加载总览失败'))
+      .catch((e) => {
+        // R10-P2-8：会话过期已跳转登录页，静默吞掉
+        if (isAuthExpired(e)) return
+        setLoadError(e instanceof Error ? e.message : '加载总览失败')
+      })
   }
 
   useEffect(() => {
@@ -117,7 +121,7 @@ export function Overview() {
           <div>
             <h1 className='text-2xl font-bold tracking-tight'>总览</h1>
             <p className='text-sm text-muted-foreground'>
-              今日运营关键指标 {USE_MOCK && '（mock 数据，待后端联调）'}
+              今日运营关键指标
             </p>
           </div>
         </div>
@@ -148,7 +152,11 @@ export function Overview() {
           <KpiCard
             title='付费会员'
             value={data ? paid.toLocaleString() : '—'}
-            sub='标准 + Pro 合计（不含体验/免费）'
+            // R10-I6：tier_distribution 是 DB 原始 tier 口径——到期后要等 sweep 才降为 free，
+            // 窗口期内已过期用户仍被计入（与全库 effective_tier 口径矛盾）。
+            // 后端暂无按有效档位统计的接口（admin.py /overview 未返回），真修法需后端加接口；
+            // 当前先诚实标注"含已到期未降档"，避免把过期用户当付费会员数
+            sub='标准 + Pro 合计（不含体验/免费；含已到期未降档）'
             icon={Activity}
             loading={loading}
           />
@@ -197,7 +205,8 @@ export function Overview() {
         <Card className='mt-4 rounded-3xl'>
           <CardHeader>
             <CardTitle>会员分布</CardTitle>
-            <CardDescription>按 tier 划分的用户构成</CardDescription>
+            {/* R10-I6：同付费会员 KPI——DB 原始 tier 口径，含已到期未降档 */}
+            <CardDescription>按 tier 划分的用户构成（含已到期未降档）</CardDescription>
           </CardHeader>
           <CardContent>
             {loading ? (

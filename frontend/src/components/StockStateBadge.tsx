@@ -48,11 +48,10 @@ const META: Record<StockState, { label: string; cls: string; dot: string }> = {
 
 export default function StockStateBadge({
   state,
-  withDot = true,
   size = 'md',
 }: {
   state: StockState;
-  withDot?: boolean;
+  // R10-死代码1：withDot prop 零调用方，已删除
   size?: 'sm' | 'md';
 }) {
   const m = META[state] ?? META.unknown;
@@ -62,7 +61,7 @@ export default function StockStateBadge({
         size === 'sm' ? 'px-2 py-0.5 text-[11px]' : 'px-2.5 py-1 text-xs'
       } ${m.cls}`}
     >
-      {withDot && <span className={`w-1.5 h-1.5 rounded-full ${m.dot}`} />}
+      <span className={`w-1.5 h-1.5 rounded-full ${m.dot}`} />
       <span className={state === 'available' || state === 'verifying' ? 'mono' : ''}>
         {m.label}
       </span>

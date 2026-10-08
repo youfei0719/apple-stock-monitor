@@ -28,9 +28,9 @@ import {
   getAudit,
   setPeakMode,
   fmtLocalTime,
+  isAuthExpired,
   type SystemStatus,
   type AuditEntry,
-  USE_MOCK,
 } from '@/lib/admin-api'
 import {
   AlertDialog,
@@ -112,11 +112,18 @@ export function System() {
     setSysError(null)
     getSystem()
       .then((s) => setSys(s))
-      .catch((e) => setSysError(e instanceof Error ? e.message : '加载系统状态失败'))
+      .catch((e) => {
+        // R10-P2-8：会话过期已跳转登录页，静默吞掉
+        if (isAuthExpired(e)) return
+        setSysError(e instanceof Error ? e.message : '加载系统状态失败')
+      })
     setAuditError(null)
     getAudit()
       .then((a) => setAudit(a))
-      .catch((e) => setAuditError(e instanceof Error ? e.message : '加载审计日志失败'))
+      .catch((e) => {
+        if (isAuthExpired(e)) return
+        setAuditError(e instanceof Error ? e.message : '加载审计日志失败')
+      })
   }
 
   useEffect(() => {
@@ -132,6 +139,8 @@ export function System() {
       setSys((prev) => (prev ? { ...prev, peak_mode: s.peak_mode } : prev))
       toast.success(enabled ? '已开启高峰模式' : '已关闭高峰模式')
     } catch (e) {
+      // R10-P2-8：会话过期已跳转登录页，静默吞掉
+      if (isAuthExpired(e)) return
       toast.error(e instanceof Error ? e.message : '切换失败')
     } finally {
       setPeakBusy(false)
@@ -163,7 +172,6 @@ export function System() {
           <h1 className='text-2xl font-bold tracking-tight'>系统状态</h1>
           <p className='text-sm text-muted-foreground'>
             引擎 / Apple 冷却 / 日志 / 管理员审计 · 时间均为北京时间
-            {USE_MOCK && '（mock 数据，待后端联调）'}
           </p>
         </div>
 

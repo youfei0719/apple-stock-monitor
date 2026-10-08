@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { api, summarizeTask, type StateRow, type StoreRef, type Task, type TaskChannels } from '../lib/api';
+import { api, cleanChannels, summarizeTask, type StateRow, type StoreRef, type Task, type TaskChannels } from '../lib/api';
 import { useApp } from '../components/App';
 import StockStateBadge from '../components/StockStateBadge';
 import NotifyChannels from '../components/NotifyChannels';
@@ -64,7 +64,9 @@ export default function TaskDetail() {
     setSaveMsg(null);
     setSaveOk(null);
     try {
-      const t = await api.updateTask(id, { channels });
+      // R10-I4：提交前过滤空 webhook 行（与 AddMonitor 共用 lib.cleanChannels），
+      // 空 url 后端 WebhookIn.url min_length=1 会 422
+      const t = await api.updateTask(id, { channels: cleanChannels(channels) });
       setTask(t);
       setSaveMsg('通知渠道已保存');
       setSaveOk(true);

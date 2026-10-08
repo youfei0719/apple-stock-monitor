@@ -213,6 +213,12 @@ function ChangePasswordCard() {
       setOk(false);
       return;
     }
+    // R10-P2-4：改密加前端密码长度预校验（后端 min_length=8），别等后端 422 英文直出
+    if (newPw.length < 8) {
+      setMsg('新密码至少 8 位');
+      setOk(false);
+      return;
+    }
     setBusy(true);
     try {
       // R9-I10：改密走 api.changePassword（统一 req()），不再组件内直调 fetch
@@ -329,10 +335,14 @@ export default function Me() {
         setQuota(null);
         setQuotaErr(e instanceof Error ? e.message : '加载失败');
       });
-    api
-      .payments()
-      .then(setPayments)
-      .catch((e) => setPaymentsErr(e instanceof Error ? e.message : '加载失败'));
+    // R10-死代码3：匿名进"我的"时不调 api.payments()——必吃 401，多一次无用请求
+    // （匿名页只渲染注册引导，付费记录根本用不上）
+    if (me !== null) {
+      api
+        .payments()
+        .then(setPayments)
+        .catch((e) => setPaymentsErr(e instanceof Error ? e.message : '加载失败'));
+    }
     api
       .siteConfig()
       .then((cfg) => {

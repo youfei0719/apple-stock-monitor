@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api, ApiError, type Product, type Quota, type StoreRef, type Task, type TaskChannels } from '../lib/api';
+import { api, ApiError, cleanChannels, type Product, type Quota, type StoreRef, type Task, type TaskChannels } from '../lib/api';
 import { useApp } from '../components/App';
 import NotifyChannels from '../components/NotifyChannels';
 import { Card, EmptyState, ErrorState, LoadingState, PageHeader, PrimaryButton } from '../components/ui';
@@ -24,8 +24,15 @@ export default function AddMonitor() {
   const { refreshTasks, me, tasks } = useApp();
   // UI-3：提交前按 tasks_limit 预检上限（登录用户拉 /quota；匿名按 trial 1 个算）
   const [quota, setQuota] = useState<Quota | null>(null);
+  // R10-死代码4：UI-3 预检的 tasksUsed 回退不能用 tab 过滤后的 tasks（useApp 的 tasks
+  // 随 Home tab 变化，低频不准）——这里单独拉一次全量计数
+  const [allTaskCount, setAllTaskCount] = useState<number | null>(null);
   useEffect(() => {
     if (me) api.quota().then(setQuota).catch(() => setQuota(null));
+    api
+      .tasks('all')
+      .then((t) => setAllTaskCount(t.length))
+      .catch(() => setAllTaskCount(null));
   }, [me]);
   const isAnon = me === null;
 
@@ -152,7 +159,10 @@ export default function AddMonitor() {
     // UI-3：提交前先按 tasks_limit 提示上限，别等提交时吃 403
     const combos = partNumbers.length * store_numbers.length;
     const tasksLimit = isAnon ? 1 : quota?.tasks_limit;
-    const tasksUsed = isAnon ? tasks.length : (quota?.tasks_used ?? tasks.length);
+    // R10-死代码4：回退用全量计数（allTaskCount），不用 tab 过滤后的 tasks.length
+    const tasksUsed = isAnon
+      ? (allTaskCount ?? tasks.length)
+      : (quota?.tasks_used ?? allTaskCount ?? tasks.length);
     if (combos > 0 && tasksLimit !== undefined && tasksUsed + combos > tasksLimit) {
       setSubmitErr(
         `将超出任务上限（${tasksLimit} 个）：已有 ${tasksUsed} 个，本次需生成 ${combos} 个，请减少机型或门店选择`,
@@ -165,14 +175,9 @@ export default function AddMonitor() {
       // （后端 /tasks/batch 要求登录，匿名调 batch 会 401）
       const nameTpl = nameTemplate.trim() || '{part_number} × {store_number}';
       const repeatSec = mode === 'confirmed' && repeatInterval.trim() && Number.isFinite(ri) ? ri : null;
-      // 空 webhook URL 后端会 422（min_length=1），提前过滤掉未填写的行
-      const cleanChannels: TaskChannels = {
-        ...(channels.bark_key?.trim() ? { bark_key: channels.bark_key.trim() } : {}),
-        ...(channels.email?.trim() ? { email: channels.email.trim() } : {}),
-        ...(channels.webhooks ?? []).filter((w) => w.url.trim()).length > 0
-          ? { webhooks: (channels.webhooks ?? []).filter((w) => w.url.trim()) }
-          : {},
-      };
+      // R10-I4：空 webhook URL 后端会 422（min_length=1），提前过滤掉未填写的行
+      // （与 TaskDetail.saveChannels 共用 lib.cleanChannels）
+      const clean = cleanChannels(channels);
       if (isAnon) {
         const storeByNumber = new Map((stores ?? []).map((s) => [s.number, s]));
         const productByPn = new Map((products ?? []).map((p) => [p.part_number, p]));
@@ -193,7 +198,7 @@ export default function AddMonitor() {
                 stores: [{ number: sn, name: info?.name ?? '', city: info?.city ?? '' }],
                 mode,
                 repeat_interval_sec: repeatSec,
-                channels: cleanChannels,
+                channels: clean,
               });
               createdCount++;
             }
@@ -215,7 +220,7 @@ export default function AddMonitor() {
           name_template: nameTpl,
           category,
           mode,
-          channels: cleanChannels,
+          channels: clean,
         });
         const patch: Partial<Task> = {};
         if (group.trim()) patch.group = group.trim();

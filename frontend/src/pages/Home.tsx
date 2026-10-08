@@ -26,12 +26,16 @@ function TaskCard({
   onChanged,
   trialExhausted,
   anonymous,
+  onRenewNotice,
 }: {
   task: Task;
   onChanged: () => void;
   trialExhausted: boolean;
   /** F-N5：匿名 trial 任务后端续期钳制到 24h，文案别写死 +30 天 */
   anonymous: boolean;
+  /** R10-P2-3："已过期" tab 续期成功后卡片随 tab 切换卸载，行内 notices 会丢失——
+   * 经首页横幅（location.state.notice，AddMonitor 同模式）展示一次 */
+  onRenewNotice: (msg: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
   // R6-U3：续期失败用行内错误文案（参考 TaskDetail 的 renewMsg 模式），不再弹原生 alert；
@@ -83,8 +87,9 @@ function TaskCard({
       const t = await api.renewTask(task.id);
       const notices = t.notices ?? [];
       if (notices.length > 0) {
-        setRenewMsg(notices.join('；'));
-        setRenewOk(true);
+        // R10-P2-3：续期后任务从"已过期" tab 消失、卡片卸载，行内 renewMsg 会丢失；
+        // 走首页横幅（location.state.notice）展示一次，与 AddMonitor 的 PATCH 失败模式一致
+        onRenewNotice(notices.join('；'));
       }
       await onChanged();
     } catch (e) {
@@ -257,7 +262,7 @@ const TABS: { id: TaskStatusFilter; label: string }[] = [
 ];
 
 export default function Home() {
-  const { me, tasks, refreshTasks, tasksError } = useApp();
+  const { me, tasks, refreshTasks, tasksError, sessionExpired } = useApp();
   const location = useLocation();
   const navigate = useNavigate();
   const [tab, setTab] = useState<TaskStatusFilter>('active');
@@ -270,12 +275,16 @@ export default function Home() {
   const [claimNotice, setClaimNotice] = useState<string | null>(
     () => (location.state as { notice?: string | null } | null)?.notice ?? null,
   );
+  // R10-P2-3：TaskCard"已过期" tab 一键续期成功后也经 location.state.notice 带横幅——
+  // 监听 state 变化（不只首屏），读到即展示并 replace 清掉
   useEffect(() => {
-    if ((location.state as { notice?: string | null } | null)?.notice) {
+    const n = (location.state as { notice?: string | null } | null)?.notice;
+    if (n) {
+      setClaimNotice(n);
       navigate(location.pathname, { replace: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [location.state]);
 
   const reload = async (t: TaskStatusFilter = tab) => {
     setLoading(true);
@@ -343,6 +352,17 @@ export default function Home() {
             </button>
           ))}
         </div>
+        {/* R10-I2：页内接口 401（会话页内过期）→ 明确给"重新登录"引导，
+            不只显示"请求失败（401）"；App 顶栏横幅在 tasksError 非空时隐藏，
+            这里补上 */}
+        {sessionExpired && (
+          <div className="mb-3 rounded-card-sm bg-island text-white px-4 py-2.5 text-[13px] flex items-center justify-between gap-3 rise-in">
+            <span>登录已过期，请重新登录</span>
+            <Link to="/login" className="shrink-0 underline font-medium">
+              重新登录
+            </Link>
+          </div>
+        )}
         {loadError && <ErrorState message={loadError} onRetry={() => reload()} />}
         {!loadError && loading && tasks.length === 0 && <LoadingState rows={3} />}
         {!loadError && !loading && tasks.length === 0 && (
@@ -370,6 +390,9 @@ export default function Home() {
                 onChanged={() => reload()}
                 trialExhausted={trialExhausted}
                 anonymous={me === null}
+                onRenewNotice={(msg) =>
+                  navigate(location.pathname, { state: { notice: msg } })
+                }
               />
             ))}
           </div>

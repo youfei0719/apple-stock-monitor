@@ -33,6 +33,12 @@ export default function Login() {
       setError('请填写邮箱和密码');
       return;
     }
+    // R10-P2-4：注册加前端密码长度预校验（后端 min_length=8），别等后端 422 英文直出；
+    // 登录不预校验（老密码可能短于 8 位，交给后端判）
+    if (mode === 'register' && password.length < 8) {
+      setError('密码至少 8 位');
+      return;
+    }
     setBusy(true);
     try {
       if (mode === 'login') {
@@ -120,6 +126,8 @@ export default function Login() {
               onChange={(e) => setEmail(e.target.value)}
               placeholder="邮箱"
               autoComplete="email"
+              // R10-P2-5：邮箱框回车也提交（以前只有密码框绑了 Enter）
+              onKeyDown={(e) => e.key === 'Enter' && submit()}
               className="w-full px-4 py-3 rounded-card-sm bg-bg text-[15px] outline-none placeholder:text-faint"
             />
             <input

@@ -44,10 +44,11 @@ import {
   getUsers,
   updateUserTier,
   verifyUserEmail,
+  isAuthExpired,
+  USERS_QUERY_LIMIT,
   type AdminUser,
   type Tier,
   TIER_LABEL,
-  USE_MOCK,
 } from '@/lib/admin-api'
 
 const TIER_BADGE: Record<Tier, string> = {
@@ -108,6 +109,7 @@ export function Members() {
       )
       toast.success(`已将 ${verifying.email} 标记为邮箱已验证（已记审计）`)
     } catch (e) {
+      if (isAuthExpired(e)) return
       toast.error(e instanceof Error ? e.message : '标记失败')
     } finally {
       setVerifyBusy(false)
@@ -124,10 +126,16 @@ export function Members() {
   const load = (query: string, t: 'all' | Tier) => {
     setUsers(null)
     setLoadError(null)
-    getUsers(query, t === 'all' ? '' : t)
+    // R10-I5：后端 /api/admin/users 无 offset 参数（只支持 limit≤200），真分页等后端补；
+    // 先传 limit=200 + 截断提示，避免超 50 人静默截断
+    getUsers(query, t === 'all' ? '' : t, USERS_QUERY_LIMIT)
       .then((u) => setUsers(u))
-      // R8-I-13：失败不伪装成空数组，"没有符合条件的会员"只在真正无数据时出现
-      .catch((e) => setLoadError(e instanceof Error ? e.message : '加载会员列表失败'))
+      // R8-I-13：失败不伪装成空数组，"没有符合条件的会员"只在真正无数据时出现；
+      // R10-P2-8：会话过期已跳转登录页，静默吞掉
+      .catch((e) => {
+        if (isAuthExpired(e)) return
+        setLoadError(e instanceof Error ? e.message : '加载会员列表失败')
+      })
   }
 
   useEffect(() => {
@@ -165,6 +173,7 @@ export function Members() {
         `已将 ${pending.user.email} 改为${TIER_LABEL[pending.tier]}${actualExp ? `（到期 ${fmtLocalTime(actualExp)}）` : ''}${notices}（已记审计）`,
       )
     } catch (e) {
+      if (isAuthExpired(e)) return
       toast.error(e instanceof Error ? e.message : '改级失败')
     } finally {
       setChanging(false)
@@ -184,7 +193,6 @@ export function Members() {
           <h1 className='text-2xl font-bold tracking-tight'>会员</h1>
           <p className='text-sm text-muted-foreground'>
             会员列表 / 搜索 / 按 tier 筛选 / 改级
-            {USE_MOCK && '（mock 数据，待后端联调）'}
           </p>
         </div>
 
@@ -221,6 +229,12 @@ export function Members() {
                   ? '加载失败'
                   : '加载中…'
                 : `共 ${users.length} 位会员`}
+              {/* R10-I5：单次查询上限 200 条，达到上限时提示截断（后端暂无 offset，真分页待补） */}
+              {users !== null && users.length >= USERS_QUERY_LIMIT && (
+                <span className='text-[#b26a00]'>
+                  {' '}已达单次查询上限 {USERS_QUERY_LIMIT} 条，可能有更多会员未显示
+                </span>
+              )}
             </CardDescription>
           </CardHeader>
           <CardContent>

@@ -122,6 +122,21 @@ export class AdminApiError extends Error {
   }
 }
 
+/**
+ * R10-P2-8：会话页内过期（401）跳转登录页后抛出的专用错误。
+ * req() 已发起整页跳转，调用方静默吞掉即可——不再 toast"请求失败（401）"一闪。
+ */
+export class AuthExpiredError extends AdminApiError {
+  constructor() {
+    super('登录已过期，请重新登录', 'AUTH_EXPIRED', 401)
+  }
+}
+
+/** R10-P2-8：判断是否为会话过期错误（调用方静默吞掉，不 toast/不记错误态） */
+export function isAuthExpired(e: unknown): boolean {
+  return e instanceof AuthExpiredError
+}
+
 // ------------------------------ 真实请求 ------------------------------
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -142,6 +157,9 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
       /* 路由模块加载失败不影响跳转 */
     }
     window.location.href = '/admin/sign-in'
+    // R10-P2-8：跳转后抛专用错误，调用方静默吞掉（isAuthExpired），
+    // 不再走后面的通用 AdminApiError → toast"请求失败（401）"一闪
+    throw new AuthExpiredError()
   }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
@@ -194,13 +212,23 @@ export async function getTraffic(days = 30): Promise<TrafficPoint[]> {
   return req(`/api/admin/traffic?days=${days}`)
 }
 
-/** 会员列表 */
-export async function getUsers(q = '', tier: Tier | '' = ''): Promise<AdminUser[]> {
+/** 会员列表
+ * R10-I5：后端 GET /api/admin/users 只支持 limit（默认 50，最大 200），无 offset——
+ * 真分页要等后端加 offset 参数；当前传 limit=200 + 截断提示兜底。 */
+export async function getUsers(
+  q = '',
+  tier: Tier | '' = '',
+  limit = 200,
+): Promise<AdminUser[]> {
   const params = new URLSearchParams()
   if (q) params.set('q', q)
   if (tier) params.set('tier', tier)
+  params.set('limit', String(limit))
   return req(`/api/admin/users?${params}`)
 }
+
+/** 单次查询上限（与后端 list_users le=200 对齐）；members 页据此做截断提示 */
+export const USERS_QUERY_LIMIT = 200
 
 /** PATCH /api/admin/users/{id} 返回体。
  * R9-I12：后端改级默认 +30 天并在 notices 里提示（如"未传 tier_expires_at，已默认设为 +30 天"），
@@ -271,9 +299,24 @@ export async function closePayment(paymentId: number): Promise<PaymentActionOut>
   return req(`/api/admin/payments/${paymentId}/close`, { method: 'POST' })
 }
 
+/** R10-I1：认领坏账返回体（对齐后端 admin.py claim_payment）。
+ * 旧代码返回 void，把 notices（如"自动恢复 N 个因档位超限被暂停的监控任务"）丢了；
+ * 现仿 UpdateUserTierOut 返回完整响应体，页面层 toast 拼接 notices。 */
+export interface ClaimPaymentOut {
+  ok: boolean
+  payment_id: number
+  user_id: number
+  tier: string
+  pending_tier?: string | null
+  tier_expires_at: string | null
+  payment_status: string
+  notices?: string[]
+  pending_count?: number
+}
+
 /** 认领坏账：把未认领订单绑定到用户（写操作，后端记 audit） */
-export async function claimPayment(paymentId: number, userId: number): Promise<void> {
-  await req(`/api/admin/payments/${paymentId}/claim`, {
+export async function claimPayment(paymentId: number, userId: number): Promise<ClaimPaymentOut> {
+  return req<ClaimPaymentOut>(`/api/admin/payments/${paymentId}/claim`, {
     method: 'POST',
     body: JSON.stringify({ user_id: userId }),
   })

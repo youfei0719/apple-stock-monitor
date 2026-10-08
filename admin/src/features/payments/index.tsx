@@ -43,7 +43,7 @@ import {
   type PaymentRecord,
   type Tier,
   TIER_LABEL,
-  USE_MOCK,
+  isAuthExpired,
 } from '@/lib/admin-api'
 
 const STATUS_LABEL: Record<string, string> = {
@@ -100,6 +100,8 @@ export function Payments() {
   const [actionBusy, setActionBusy] = useState(false)
   // R9-U1：force 退款二次确认（has_active_paid_orders）走应用内 AlertDialog，不用 window.confirm
   const [forceConfirm, setForceConfirm] = useState(false)
+  // R10-P2-1：force 弹窗展示用的订单快照（弹 force 弹窗时退款弹窗已关闭，refunding 为 null）
+  const [forceOrder, setForceOrder] = useState<PaymentRecord | null>(null)
 
   const load = async (unclaimed: boolean) => {
     setRows(null)
@@ -118,7 +120,9 @@ export function Payments() {
         setRows(await getPayments(''))
       }
     } catch (e) {
-      // R8-I-13：失败不伪装成空数组，"暂无数据"只在真正无数据时出现
+      // R8-I-13：失败不伪装成空数组，"暂无数据"只在真正无数据时出现；
+      // R10-P2-8：会话过期已跳转登录页，静默吞掉
+      if (isAuthExpired(e)) return
       setLoadError(e instanceof Error ? e.message : '加载付费记录失败')
     }
   }
@@ -142,12 +146,16 @@ export function Payments() {
     }
     setClaimBusy(true)
     try {
-      await claimPayment(claiming.id, userId)
-      toast.success(`已将订单 ${claiming.order_id} 认领给用户 #${userId}`)
+      const out = await claimPayment(claiming.id, userId)
+      // R10-I1：后端认领返回 notices（如"自动恢复 N 个因档位超限被暂停的监控任务"），
+      // toast 一并展示，不再只报固定文案
+      const notices = (out.notices ?? []).length > 0 ? `（${(out.notices ?? []).join('；')}）` : ''
+      toast.success(`已将订单 ${claiming.order_id} 认领给用户 #${userId}${notices}`)
       setClaiming(null)
       setClaimUserId('')
       await load(unclaimedOnly)
     } catch (e) {
+      if (isAuthExpired(e)) return
       toast.error(e instanceof Error ? e.message : '认领失败')
     } finally {
       setClaimBusy(false)
@@ -156,27 +164,35 @@ export function Payments() {
 
   /** F1：标记退款——后端联动把用户降回 free、revenue 只计 paid 自动排除、记审计 */
   async function confirmRefund(force = false) {
-    if (!refunding) return
+    // R10-P2-1：force 路径走 forceOrder 快照（退款弹窗已关闭，refunding 为 null）
+    const target = force ? forceOrder : refunding
+    if (!target) return
     setActionBusy(true)
     try {
       let out: PaymentActionOut
       try {
-        out = await refundPayment(refunding.id, force)
+        out = await refundPayment(target.id, force)
       } catch (e) {
         // R7：后端 R5-B-3——该用户还有其他有效 paid 订单时 400 has_active_paid_orders；
         // R9-U1：force 二次确认改用应用内 AlertDialog（R8-U-8 规范），不用 window.confirm
         if (!force && e instanceof AdminApiError && e.code === 'has_active_paid_orders') {
+          // R10-P2-1：弹 force 弹窗前先关掉退款弹窗，避免两个 AlertDialog 同时 open 叠加；
+          // 订单信息另存 forceOrder 快照（refunding 已置 null）
+          setForceOrder(target)
+          setRefunding(null)
           setForceConfirm(true)
           return
         }
         throw e
       }
       toast.success(
-        `订单 ${refunding.order_id} 已标记退款${out.user ? `（用户 #${out.user.user_id} 降回免费版）` : ''}`,
+        `订单 ${target.order_id} 已标记退款${out.user ? `（用户 #${out.user.user_id} 降回免费版）` : ''}`,
       )
       setRefunding(null)
+      setForceOrder(null)
       await load(unclaimedOnly)
     } catch (e) {
+      if (isAuthExpired(e)) return
       toast.error(e instanceof Error ? e.message : '标记退款失败')
     } finally {
       setActionBusy(false)
@@ -193,6 +209,7 @@ export function Payments() {
       setClosing(null)
       await load(unclaimedOnly)
     } catch (e) {
+      if (isAuthExpired(e)) return
       toast.error(e instanceof Error ? e.message : '关闭订单失败')
     } finally {
       setActionBusy(false)
@@ -212,7 +229,6 @@ export function Payments() {
             <h1 className='text-2xl font-bold tracking-tight'>付费</h1>
             <p className='text-sm text-muted-foreground'>
               爱发电付费记录（webhook 自动开通）
-              {USE_MOCK && '（mock 数据，待后端联调）'}
             </p>
           </div>
           <Card className='rounded-3xl px-5 py-3'>
@@ -436,13 +452,14 @@ export function Payments() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* R9-U1：force 退款二次确认（has_active_paid_orders）——应用内弹窗，替代 window.confirm */}
+      {/* R9-U1：force 退款二次确认（has_active_paid_orders）——应用内弹窗，替代 window.confirm；
+          R10-P2-1：与退款弹窗互斥（open 时退款弹窗已关闭），订单信息走 forceOrder 快照 */}
       <AlertDialog open={forceConfirm} onOpenChange={setForceConfirm}>
         <AlertDialogContent className='rounded-3xl'>
           <AlertDialogHeader>
             <AlertDialogTitle>仍要强制退款降级？</AlertDialogTitle>
             <AlertDialogDescription>
-              订单 <span className='font-mono text-foreground'>{refunding?.order_id}</span>
+              订单 <span className='font-mono text-foreground'>{forceOrder?.order_id}</span>
               的用户还有其他有效付费订单。强制退款会把该用户直接降回免费版
               （其他有效订单不受影响）。该操作会写入管理员审计日志。
             </AlertDialogDescription>

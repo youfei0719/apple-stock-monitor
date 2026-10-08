@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, type NotificationRecord, type TaskChannels, type WebhookChannel } from '../lib/api';
+import { api, ApiError, type NotificationRecord, type TaskChannels, type WebhookChannel } from '../lib/api';
 import { useApp } from './App';
 import { Card, EmptyState, LoadingState } from './ui';
 
@@ -51,7 +51,16 @@ function useTest() {
         [key]: { ok, msg: res.error || res.message || (ok ? '测试消息已发送' : '发送失败') },
       }));
     } catch (e) {
-      setResults((r) => ({ ...r, [key]: { ok: false, msg: e instanceof Error ? e.message : '测试失败' } }));
+      // R10-P2-6：档位不支持被拒（code=channel_not_supported）时统一文案
+      // "该通道当前档位不支持，测试未执行"——不再直出后端那句自相矛盾的
+      // "该测试只验证目标是否连通，不代表到货时会经此通道发送"
+      const msg =
+        e instanceof ApiError && e.code === 'channel_not_supported'
+          ? '该通道当前档位不支持，测试未执行'
+          : e instanceof Error
+            ? e.message
+            : '测试失败';
+      setResults((r) => ({ ...r, [key]: { ok: false, msg } }));
     } finally {
       setBusy(null);
     }
@@ -213,6 +222,9 @@ export default function NotifyChannels({
 
   // F-2：通知渠道文案按档位动态。trial 只开放站内（page）；free/standard/pro 只开放邮件。
   // /quota 要求登录，匿名直接按 trial 渲染。
+  // R10-I3（用户已拍板按档位校验直接 400）：后端对所有档位配 bark/webhook 直接 400，
+  // tiers.py 无任何档位含 bark——"可配置""测试通过 ≠ 到货会发"是假话。Bark / 群机器人
+  // 输入框直接禁用并注明"暂未开放"。
   const [tier, setTier] = useState<string | null>(null);
   useEffect(() => {
     if (me === null) {
@@ -227,8 +239,8 @@ export default function NotifyChannels({
   const channelNote =
     tier === 'trial'
       ? // UI-5：trial 档"仅支持站内通知"补充"（在 App 内查看）"
-        '体验版仅支持站内通知（在 App 内查看）；Bark / 邮件 / 群机器人可配置但到货不会发送（测试通过 ≠ 到货会发）。'
-      : '当前档位仅支持邮件推送；Bark / 群机器人可配置但到货不会发送（测试通过 ≠ 到货会发）。';
+        '体验版仅支持站内通知（在 App 内查看）；Bark / 群机器人暂未开放（所有档位均不支持）。'
+      : '当前档位仅支持邮件推送；Bark / 群机器人暂未开放（所有档位均不支持）。';
 
   const set = (patch: Partial<TaskChannels>) => onChange({ ...value, ...patch });
 
@@ -266,18 +278,20 @@ export default function NotifyChannels({
           </p>
         )}
 
-        {/* Bark */}
+        {/* Bark——R10-I3：后端所有档位直接 400，输入框禁用并注明"暂未开放" */}
         <div>
           <div className="flex gap-2">
             <input
               value={value.bark_key ?? ''}
               onChange={(e) => set({ bark_key: e.target.value })}
-              placeholder="Bark Key（可配置；当前档位到货不发送）"
-              className={`${inputCls} mono`}
+              placeholder="Bark Key（暂未开放）"
+              disabled
+              title="Bark 通知暂未开放（所有档位均不支持），填写后提交会被拒绝"
+              className={`${inputCls} mono opacity-60`}
             />
             <TestButton
               busy={busy === 'bark'}
-              disabled={anonymous}
+              disabled
               onClick={() => run('bark', 'bark', value.bark_key ?? '')}
             />
           </div>
@@ -303,7 +317,8 @@ export default function NotifyChannels({
           <TestResult r={results.email} />
         </div>
 
-        {/* 群机器人 webhook */}
+        {/* 群机器人 webhook——R10-I3：后端所有档位直接 400，禁用并注明"暂未开放"；
+            已保存的旧行保留删除按钮以便清理（保存时仍会被后端拒绝） */}
         <div>
           {(value.webhooks ?? []).map((w, i) => (
             <div key={i} className="mb-2.5">
@@ -311,7 +326,9 @@ export default function NotifyChannels({
                 <select
                   value={w.platform}
                   onChange={(e) => setWebhook(i, { platform: e.target.value })}
-                  className="shrink-0 px-2.5 py-2.5 rounded-card-sm bg-bg text-sm outline-none"
+                  disabled
+                  title="群机器人通知暂未开放（所有档位均不支持）"
+                  className="shrink-0 px-2.5 py-2.5 rounded-card-sm bg-bg text-sm outline-none opacity-60"
                 >
                   {PLATFORMS.map((p) => (
                     <option key={p.id} value={p.id}>
@@ -322,12 +339,14 @@ export default function NotifyChannels({
                 <input
                   value={w.url}
                   onChange={(e) => setWebhook(i, { url: e.target.value })}
-                  placeholder="群机器人 webhook URL（可配置；当前档位到货不发送）"
-                  className={`${inputCls} mono`}
+                  placeholder="群机器人 webhook URL（暂未开放）"
+                  disabled
+                  title="群机器人通知暂未开放（所有档位均不支持），填写后提交会被拒绝"
+                  className={`${inputCls} mono opacity-60`}
                 />
                 <TestButton
                   busy={busy === `wh${i}`}
-                  disabled={anonymous}
+                  disabled
                   onClick={() => run(`wh${i}`, w.platform, w.url)}
                 />
                 <button
@@ -343,9 +362,11 @@ export default function NotifyChannels({
           ))}
           <button
             onClick={addWebhook}
-            className="w-full py-2.5 rounded-card-sm border border-dashed border-line text-[13px] text-sub active:scale-[0.99] transition"
+            disabled
+            title="群机器人通知暂未开放（所有档位均不支持）"
+            className="w-full py-2.5 rounded-card-sm border border-dashed border-line text-[13px] text-faint transition disabled:opacity-50"
           >
-            ＋ 添加群机器人（企业微信 / 钉钉 / 飞书）
+            ＋ 添加群机器人（企业微信 / 钉钉 / 飞书）· 暂未开放
           </button>
         </div>
       </Card>

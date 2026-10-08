@@ -29,6 +29,7 @@ import {
   totpSetup,
   totpVerify,
   AdminApiError,
+  isAuthExpired,
   type TotpSetupOut,
 } from '@/lib/admin-api'
 
@@ -79,6 +80,8 @@ export function TotpSetup() {
       sessionStorage.setItem('admin-authed', '1')
       navigate({ to: '/', replace: true })
     } catch (e) {
+      // R10-P2-8：会话过期已跳转登录页，静默吞掉
+      if (isAuthExpired(e)) return
       toast.error(e instanceof AdminApiError ? e.message : '验证码错误，请重试')
     } finally {
       setVerifying(false)

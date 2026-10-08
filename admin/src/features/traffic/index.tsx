@@ -28,7 +28,7 @@ import { Header } from '@/components/layout/header'
 import { Main } from '@/components/layout/main'
 import { AdminProfile } from '@/components/admin-profile'
 import { ThemeSwitch } from '@/components/theme-switch'
-import { getTraffic, type TrafficPoint, USE_MOCK } from '@/lib/admin-api'
+import { getTraffic, isAuthExpired, type TrafficPoint } from '@/lib/admin-api'
 
 /** R8-U-7：后端缺天不返回，前端按 days 把缺的天补 0，避免折线断裂。
  * R9-U2：补零日期键必须用北京时间（后端 day 键是北京时间）——
@@ -63,8 +63,11 @@ export function Traffic() {
     setLoadError(null)
     getTraffic(Number(d))
       .then((pts) => setData(fillZeroDays(pts, Number(d))))
-      // R8-I-13：失败不伪装成空数组
-      .catch((e) => setLoadError(e instanceof Error ? e.message : '加载流量数据失败'))
+      // R8-I-13：失败不伪装成空数组；R10-P2-8：会话过期已跳转登录页，静默吞掉
+      .catch((e) => {
+        if (isAuthExpired(e)) return
+        setLoadError(e instanceof Error ? e.message : '加载流量数据失败')
+      })
   }
 
   useEffect(() => {
@@ -89,7 +92,6 @@ export function Traffic() {
             <h1 className='text-2xl font-bold tracking-tight'>流量</h1>
             <p className='text-sm text-muted-foreground'>
               访问流量趋势（PV / UV，按日）
-              {USE_MOCK && '（mock 数据，待后端联调）'}
             </p>
           </div>
           <Select value={days} onValueChange={setDays}>
@@ -120,7 +122,8 @@ export function Traffic() {
           <Card className='rounded-3xl'>
             <CardHeader className='pb-2'>
               <CardTitle className='text-sm font-medium text-muted-foreground'>
-                累计 UV
+                {/* R10-P2-7：按日去重 UV 直接加总不是区间去重 UV，改名"各日 UV 之和"避免误导 */}
+                各日 UV 之和
               </CardTitle>
             </CardHeader>
             <CardContent>

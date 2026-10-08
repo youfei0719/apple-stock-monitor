@@ -126,6 +126,21 @@ export interface TaskChannels {
   email?: string;
 }
 
+/**
+ * R10-I4：提交前过滤渠道空值（空 webhook 行后端 WebhookIn.url min_length=1 会 422，
+ * 空 bark_key/email 后端也可能拒绝）——AddMonitor 与 TaskDetail 共用，
+ * 别各写一份造成两处不一致。
+ */
+export function cleanChannels(channels: TaskChannels): TaskChannels {
+  return {
+    ...(channels.bark_key?.trim() ? { bark_key: channels.bark_key.trim() } : {}),
+    ...(channels.email?.trim() ? { email: channels.email.trim() } : {}),
+    ...(channels.webhooks ?? []).filter((w) => w.url.trim()).length > 0
+      ? { webhooks: (channels.webhooks ?? []).filter((w) => w.url.trim()) }
+      : {},
+  };
+}
+
 export interface TaskLatestRow {
   state: StockState;
   pickup_display?: string | null;
