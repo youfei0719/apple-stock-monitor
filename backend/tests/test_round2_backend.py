@@ -67,7 +67,9 @@ class FakeNotifier:
     def __init__(self, db):
         self.db = db
 
-    def dispatch(self, user_id, task_id, channels, title, body, link, kind="stock_alert"):
+    def dispatch(
+        self, user_id, task_id, channels, title, body, link, kind="stock_alert", commit=True
+    ):
         rows = []
         targets = []
         if isinstance(channels, dict):
@@ -162,8 +164,9 @@ def test_fire_counts_sent_and_snapshots_part_number(db, eng, monkeypatch):
     FakeNotifier.mode = "sent"
     u = _user(db, tier="standard", days_left=5)
     t = _task(db, user=u)
-    sent = eng._fire(db, t, "R484", "MJYC4CH/A", None)
+    sent, no_channel = eng._fire(db, t, "R484", "MJYC4CH/A", None)
     assert sent == 1
+    assert no_channel is False
     n = db.execute(select(Notification)).scalar_one()
     assert n.part_number == "MJYC4CH/A"
     assert n.status == "sent"
@@ -176,8 +179,9 @@ def test_fire_immediate_retry_success_counts_once(db, eng, monkeypatch):
     monkeypatch.setattr(Engine, "_resend_record", lambda self, n: True)
     u = _user(db, tier="standard", days_left=5)
     t = _task(db, user=u)
-    sent = eng._fire(db, t, "R484", "MJYC4CH/A", None)
+    sent, no_channel = eng._fire(db, t, "R484", "MJYC4CH/A", None)
     assert sent == 1  # 立即重试成功计 1 次，不重复扣
+    assert no_channel is False
     n = db.execute(select(Notification)).scalar_one()
     assert n.status == "sent"
     assert n.retry_count == 1
@@ -193,8 +197,9 @@ def test_fire_all_failed_increments_and_autopauses_at_10(db, eng, monkeypatch):
     t.consecutive_failures = 9
     db.add(t)
     db.commit()
-    sent = eng._fire(db, t, "R484", "MJYC4CH/A", None)
+    sent, no_channel = eng._fire(db, t, "R484", "MJYC4CH/A", None)
     assert sent == 0
+    assert no_channel is False  # 发送尝试过（全失败），不是零渠道
     db.refresh(t)
     assert t.consecutive_failures == 10
     assert t.paused is True
@@ -328,14 +333,14 @@ def test_claim_device_tasks(db):
     t = _task(db, user=None, device_id="devZ")
     u = _user(db, email="new@example.com")
     n = auth_router._claim_device_tasks(db, _FakeRequest("devZ"), u)
-    assert n == 1
+    assert n["claimed"] == 1
     db.commit()  # 真实流程中 register/login 随后 commit
     db.refresh(t)
     assert t.user_id == u.id
     assert t.device_id is None  # N10：认领后清空 device_id，防重复认领/脏数据
     # 无 device 头：不迁移
     t2 = _task(db, user=None, device_id="devW", name="t2")
-    assert auth_router._claim_device_tasks(db, _FakeRequest(None), u) == 0
+    assert auth_router._claim_device_tasks(db, _FakeRequest(None), u)["claimed"] == 0
     db.refresh(t2)
     assert t2.user_id is None
 

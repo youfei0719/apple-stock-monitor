@@ -1,6 +1,7 @@
 """认证 / 用户：注册、登录（含失败锁 IP）、登出、me、改密、TOTP、邮箱验证。"""
 
 import hashlib
+import hmac
 import secrets
 from datetime import datetime, timedelta
 
@@ -52,6 +53,57 @@ settings = get_settings()
 EMAIL_CODE_TTL_MIN = 10
 EMAIL_CODE_KEY_PREFIX = "email_code:"
 
+# ---- 尝试次数锁定（R6-P2-7/P2-8）：5 次失败锁定 15 分钟 ----
+ATTEMPT_FAIL_LIMIT = 5
+ATTEMPT_LOCK_MINUTES = 15
+
+
+def _attempt_key(prefix: str, ident: str) -> str:
+    return f"{prefix}:{ident}"
+
+
+def _check_attempt_lock(db: Session, prefix: str, ident: str, what: str) -> None:
+    """检查是否被锁定；锁定中则 429。"""
+    row = db.execute(
+        select(SystemConfig).where(SystemConfig.key == _attempt_key(prefix, ident))
+    ).scalar_one_or_none()
+    if row:
+        locked_until = (row.value or {}).get("locked_until")
+        if locked_until:
+            try:
+                until = datetime.fromisoformat(str(locked_until).rstrip("Z"))
+            except ValueError:
+                until = None
+            if until is not None and datetime.utcnow() < until:
+                raise APIError(429, f"{what}尝试次数过多，请 15 分钟后再试", "attempt_locked")
+
+
+def _record_attempt_fail(db: Session, prefix: str, ident: str) -> None:
+    """记一次失败；达到上限则锁定。"""
+    key = _attempt_key(prefix, ident)
+    row = db.execute(select(SystemConfig).where(SystemConfig.key == key)).scalar_one_or_none()
+    fails = int((row.value or {}).get("fails", 0)) + 1 if row else 1
+    value = {"fails": fails}
+    if fails >= ATTEMPT_FAIL_LIMIT:
+        value["locked_until"] = (
+            datetime.utcnow() + timedelta(minutes=ATTEMPT_LOCK_MINUTES)
+        ).isoformat() + "Z"
+    if row:
+        row.value = value
+        db.add(row)
+    else:
+        db.add(SystemConfig(key=key, value=value))
+    db.commit()
+
+
+def _clear_attempt_lock(db: Session, prefix: str, ident: str) -> None:
+    row = db.execute(
+        select(SystemConfig).where(SystemConfig.key == _attempt_key(prefix, ident))
+    ).scalar_one_or_none()
+    if row:
+        db.delete(row)
+        db.commit()
+
 
 class VerifyEmailIn(BaseModel):
     email: EmailStr
@@ -100,15 +152,37 @@ def _send_verification_code(db: Session, user: User) -> bool:
         return False
 
 
-def _claim_device_tasks(db: Session, request: Request, user: User) -> int:
+def _strip_channel_secrets(channels: dict | None) -> tuple[dict, bool]:
+    """R6-I4：剥离渠道密钥。X-Device-Id 是客户端可伪造的值，不能凭它过户
+    含密钥的任务——bark_key / email / webhook URL 全部清空，webhooks 置空
+    数组。返回 (新 channels, 是否剥离过密钥)。"""
+    ch = dict(channels or {})
+    had_secrets = False
+    for k in ("bark_key", "email", "sms_to"):
+        if ch.pop(k, None):
+            had_secrets = True
+    webhooks = ch.get("webhooks") or []
+    if webhooks:
+        had_secrets = True
+    ch["webhooks"] = []
+    return ch, had_secrets
+
+
+def _claim_device_tasks(db: Session, request: Request, user: User) -> dict:
     """登录/注册成功后，把同 X-Device-Id 的匿名任务迁移绑定到新登录用户（断裂-10）。
 
     R5-F-N4：认领时同步把这些任务下 user_id 为空的通知一并过户——否则历史
     /通知仍挂在匿名名下，用户在「历史」里看不到认领前发出的到货通知。
+    R6-I4：认领时剥离渠道密钥（见 _strip_channel_secrets），返回提示让用户
+    重新配置。
+    R6-I9：因配额耗尽自动暂停的任务（paused_reason == "quota_exhausted"）
+    自动恢复——用户已注册/登录，有新的配额周期可用；其他原因暂停的不动。
+
+    返回 {"claimed": n, "secrets_stripped": m, "resumed": k}。
     """
     device_id = request.headers.get("x-device-id")
     if not device_id:
-        return 0
+        return {"claimed": 0, "secrets_stripped": 0, "resumed": 0}
     rows = (
         db.execute(
             select(MonitorTask).where(
@@ -118,10 +192,19 @@ def _claim_device_tasks(db: Session, request: Request, user: User) -> int:
         .scalars()
         .all()
     )
+    secrets_stripped = 0
+    resumed = 0
     for t in rows:
         t.user_id = user.id
         # N10：迁移后清空 device_id，避免同 device_id 重复认领/脏数据残留
         t.device_id = None
+        t.channels, had = _strip_channel_secrets(t.channels)
+        if had:
+            secrets_stripped += 1
+        if t.paused and getattr(t, "paused_reason", None) == "quota_exhausted":
+            t.paused = False
+            t.paused_reason = None
+            resumed += 1
         db.add(t)
     if rows:
         db.execute(
@@ -133,7 +216,19 @@ def _claim_device_tasks(db: Session, request: Request, user: User) -> int:
             .values(user_id=user.id)
         )
         log.info("device_tasks_claimed", user_id=user.id, device_id=device_id, count=len(rows))
-    return len(rows)
+    return {"claimed": len(rows), "secrets_stripped": secrets_stripped, "resumed": resumed}
+
+
+def _claim_notice(info: dict) -> str | None:
+    """把认领结果拼成给用户的提示文案（R6-I4/I9）。"""
+    parts = []
+    if info["claimed"]:
+        parts.append(f"已认领 {info['claimed']} 个匿名任务")
+    if info["secrets_stripped"]:
+        parts.append("认领任务的通知渠道密钥已清空，请重新配置通知渠道")
+    if info["resumed"]:
+        parts.append(f"{info['resumed']} 个因配额耗尽暂停的任务已自动恢复")
+    return "；".join(parts) if parts else None
 
 
 @router.post("/register", response_model=UserOut, status_code=201)
@@ -167,33 +262,52 @@ def register(data: RegisterIn, request: Request, db: Session = Depends(get_db)):
     claimed = _claim_device_tasks(db, request, user)
     db.commit()
     email_sent = _send_verification_code(db, user)
-    log.info("user_registered", user_id=user.id, claimed_tasks=claimed, email_sent=email_sent)
-    return UserOut(id=user.id, email=user.email, tier=user.tier, totp_enabled=user.totp_enabled)
+    log.info(
+        "user_registered",
+        user_id=user.id,
+        claimed_tasks=claimed["claimed"],
+        email_sent=email_sent,
+    )
+    return UserOut(
+        id=user.id,
+        email=user.email,
+        tier=user.tier,
+        totp_enabled=user.totp_enabled,
+        notice=_claim_notice(claimed),
+    )
 
 
 @router.post("/verify-email")
 def verify_email(data: VerifyEmailIn, db: Session = Depends(get_db)):
     """邮箱验证：校验 6 位验证码（10 分钟有效），通过后置 email_verified=True。"""
     email = data.email.strip().lower()
+    # R6-P2-7：按 email 记失败次数，5 次锁定 15 分钟（防验证码低速爆破）
+    _check_attempt_lock(db, "verify_email_fail", email, "验证码")
     user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
     if not user:
         # R4-P2 防用户枚举：未知邮箱与"验证码错误"返回完全相同的 400，
         # 不可通过 404/400 差异探测邮箱是否注册
+        _record_attempt_fail(db, "verify_email_fail", email)
         raise APIError(400, "验证码错误", "bad_code")
     if user.email_verified:
         return {"ok": True, "already": True}
     key = _email_code_key(user.email)
     row = db.execute(select(SystemConfig).where(SystemConfig.key == key)).scalar_one_or_none()
-    if not row or (row.value or {}).get("code") != data.code:
+    # R6-P2-18：常量时间比较，防时序侧信道
+    stored = (row.value or {}).get("code") if row else None
+    if not row or not hmac.compare_digest(str(stored or ""), data.code):
+        _record_attempt_fail(db, "verify_email_fail", email)
         raise APIError(400, "验证码错误", "bad_code")
     expires_at = datetime.fromisoformat((row.value or {}).get("expires_at", "").rstrip("Z"))
     if datetime.utcnow() > expires_at:
         # R4-P1-D6：过期文案指引"重新发送"，而不是"重新注册"
         # （该邮箱已注册，重新注册必 400 email_taken，用户会撞墙）
+        _record_attempt_fail(db, "verify_email_fail", email)
         raise APIError(400, "验证码已过期，请点击重新发送获取新验证码", "code_expired")
     user.email_verified = True
     db.add(user)
     db.delete(row)
+    _clear_attempt_lock(db, "verify_email_fail", email)
     db.commit()
     log.info("email_verified", user_id=user.id)
     return {"ok": True}
@@ -208,6 +322,9 @@ def resend_code(data: ResendCodeIn, request: Request, db: Session = Depends(get_
     """重发邮箱验证码（每小时每邮箱限 3 次）。"""
     email = data.email.strip().lower()
     if not check_rate_limit(f"resend_code:{email}", limit=3, window_sec=3600):
+        raise APIError(429, "发送过于频繁，请稍后再试", "rate_limited")
+    # R6-P2-9：IP 维度总量限流（每小时 20 次），防用大量邮箱地址刷邮件
+    if not check_rate_limit(f"resend_code_ip:{_client_ip(request)}", limit=20, window_sec=3600):
         raise APIError(429, "发送过于频繁，请稍后再试", "rate_limited")
     user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
     if not user:
@@ -252,8 +369,12 @@ def login(data: LoginIn, request: Request, response: Response, db: Session = Dep
     claimed = _claim_device_tasks(db, request, user)
     db.commit()
     _set_session_cookie(response, token)
-    log.info("login_ok", user_id=user.id, ip=ip, claimed_tasks=claimed)
-    return {"ok": True, "totp_required": bool(user.is_admin and settings.ADMIN_TOTP_REQUIRED)}
+    log.info("login_ok", user_id=user.id, ip=ip, claimed_tasks=claimed["claimed"])
+    return {
+        "ok": True,
+        "totp_required": bool(user.is_admin and settings.ADMIN_TOTP_REQUIRED),
+        "notice": _claim_notice(claimed),
+    }
 
 
 @router.post("/logout", status_code=204)
@@ -360,8 +481,12 @@ def totp_verify(
     db: Session = Depends(get_db),
     session_token: str | None = Cookie(default=None),
 ):
+    # R6-P2-8：按用户记 TOTP 失败次数，5 次锁定 15 分钟（防低速爆破）
+    _check_attempt_lock(db, "totp_fail", str(user.id), "TOTP 验证码")
     if not user.totp_secret or not verify_totp(user.totp_secret, data.code):
+        _record_attempt_fail(db, "totp_fail", str(user.id))
         raise APIError(400, "验证码错误", "bad_totp")
+    _clear_attempt_lock(db, "totp_fail", str(user.id))
     user.totp_enabled = True
     db.add(user)
     s = get_session(request, db, session_token)

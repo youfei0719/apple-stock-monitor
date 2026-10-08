@@ -131,6 +131,9 @@ def _do_refresh_stores() -> None:
                         }
             except AppleRateLimitError as e:
                 log.warning("catalog_refresh_rate_limited", anchor=anchor, error=str(e))
+                # R6-P2-11：被 Apple 限流放弃时把占位时间清零——占位写的是
+                # "已刷新"时间，若留着会烧掉 1 小时冷却（实际什么都没刷到）
+                set_config(db, REFRESH_AT_KEY, {"at": 0})
                 return  # 被 Apple 限流：本轮放弃，下次再刷
             except AppleError as e:
                 errors += 1

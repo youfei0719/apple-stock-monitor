@@ -69,9 +69,12 @@ def overview(
     by_part: dict[str, int] = {}
     by_day: dict[str, int] = {}
     for n, t in rows:
-        pn = t.part_number if t else "未知"
+        # R6-I7：part_number 取通知快照列（任务删除后 join 不到 MonitorTask，
+        # 只有快照能给出型号；与 history.py 同口径）
+        pn = n.part_number or (t.part_number if t else "") or "未知"
         by_part[pn] = by_part.get(pn, 0) + 1
-        day = n.created_at.strftime("%Y-%m-%d")
+        # R6-I8："按天"口径统一北京时间（与 admin overview 一致）
+        day = (n.created_at + timedelta(hours=8)).strftime("%Y-%m-%d")
         by_day[day] = by_day.get(day, 0) + 1
     return {
         "days": days,

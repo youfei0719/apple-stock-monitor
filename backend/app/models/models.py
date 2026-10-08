@@ -86,6 +86,9 @@ class MonitorTask(Base):
     repeat_interval_sec: Mapped[int | None] = mapped_column(Integer, nullable=True)
     channels: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     paused: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # 暂停原因（R6-I9）：quota_exhausted / notify_failures / zombie / tier_limit /
+    # manual；认领 device 任务时只有 quota_exhausted 会自动恢复
+    paused_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # 连续通知失败次数；全通道失败+1、全成功清零；>=10 自动暂停（不断裂-6）
     consecutive_failures: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -131,6 +134,12 @@ class StockState(Base):
 
 class Notification(Base):
     __tablename__ = "notifications"
+    # R6-P2-14：(status, retry_at) 供 _retry_pending_notifications 查询；
+    # (kind, created_at) 供 lifecycle 按天去重查询
+    __table_args__ = (
+        Index("ix_notifications_status_retry_at", "status", "retry_at"),
+        Index("ix_notifications_kind_created_at", "kind", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int | None] = mapped_column(
@@ -224,3 +233,20 @@ class ApiHit(Base):
     path: Mapped[str] = mapped_column(String(256), index=True, nullable=False)
     ip_hash: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+
+
+class IdempotencyRecord(Base):
+    """客户端幂等键（R6-P2-10）：任务创建接口接受 Idempotency-Key 请求头。
+
+    (scope, key) 唯一，scope="u:<user_id>" / "d:<device_id>"；
+    重复 key 直接返回首次创建的任务，不再走创建流程。
+    """
+
+    __tablename__ = "idempotency_records"
+    __table_args__ = (UniqueConstraint("scope", "key", name="uq_idempotency_scope_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    scope: Mapped[str] = mapped_column(String(128), nullable=False)
+    key: Mapped[str] = mapped_column(String(128), nullable=False)
+    task_ids: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)

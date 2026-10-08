@@ -59,7 +59,7 @@ def _beijing_date(dt: datetime | None) -> str:
 
 
 def converge_task_limit(
-    db: Session, user: User, tasks: list[MonitorTask] | None = None
+    db: Session, user: User, tasks: list[MonitorTask] | None = None, reason: str | None = None
 ) -> list[MonitorTask]:
     """按用户当前档位的任务上限暂停超限任务（复用 membership_sweep 的 keep_limit 口径）。
 
@@ -91,6 +91,9 @@ def converge_task_limit(
     paused = active[keep_limit:]
     for t in paused:
         t.paused = True
+        # R6-I9：暂停原因落库（认领时只有 quota_exhausted 会自动恢复）
+        if reason is not None:
+            t.paused_reason = reason
         db.add(t)
     if paused:
         log.info("tasks_converged", user_id=user.id, tier=effective_tier(user), paused=len(paused))
@@ -193,6 +196,9 @@ def membership_sweep(db: Session) -> dict:
             .options(selectinload(User.tasks))
             .where(
                 User.tier.in_(["standard", "pro"]),
+                # R6-D3：bootstrap 管理员永不参与降级 sweep（双保险；
+                # bootstrap 侧已给 +10 年到期）
+                User.is_admin.is_(False),
                 or_(User.tier_expires_at < now, User.tier_expires_at.is_(None)),
             )
         )
@@ -243,7 +249,7 @@ def membership_sweep(db: Session) -> dict:
         # D7：按切换后档位的任务上限保留最近更新的 N 个任务，暂停超出部分
         # （pending_tier=standard 的用户切换后仍是 10 个限额，不是一刀切到 3 个）
         new_info = TIERS.get(u.tier, TIERS["free"])
-        paused_tasks = converge_task_limit(db, u, tasks=u.tasks)
+        paused_tasks = converge_task_limit(db, u, tasks=u.tasks, reason="tier_limit")
         stats["tasks_paused"] += len(paused_tasks)
         paused_names = [t.name for t in paused_tasks]
         pause_note = (
@@ -435,6 +441,8 @@ def zombie_sweep(db: Session) -> dict:
         )
         if target >= 90 and auto_retire:
             t.paused = True
+            # R6-I9：暂停原因落库
+            t.paused_reason = "zombie"
             db.add(t)
             body += "已按「自动结束」开关自动暂停，可在任务详情重新开启。"
             stats["auto_paused"] += 1
@@ -464,16 +472,50 @@ def zombie_sweep(db: Session) -> dict:
 # api_hits 保留策略（R4-P1-B4）：删除 90 天前的访问统计行，防止表无限增长 +
 # 与引擎争 SQLite 写锁。
 # 调度方式：并入 run_lifecycle_sweep（engine 每 ~5 分钟跑一轮 sweep），无需独立 cron。
+# R6-P2-15：prune 每天最多执行一次（sweep 高频跑，重复全表 delete 是浪费）。
 API_HITS_RETENTION_DAYS = 90
+API_HITS_PRUNE_KEY = "api_hits_pruned_at"
+NOTIFICATIONS_RETENTION_DAYS = 90
+NOTIFICATIONS_PRUNE_KEY = "notifications_pruned_at"
+
+
+def _pruned_today(db: Session, key: str) -> bool:
+    """今天是否已执行过该 prune（R6-P2-15：每天一次）。"""
+    return _get_kv(db, key).get("date") == _utcnow().strftime("%Y-%m-%d")
+
+
+def _mark_pruned(db: Session, key: str) -> None:
+    _set_kv(db, key, {"date": _utcnow().strftime("%Y-%m-%d")})
 
 
 def prune_api_hits(db: Session, retention_days: int = API_HITS_RETENTION_DAYS) -> dict:
     """删除 retention_days 天前的 api_hits 行。幂等、可重入。"""
+    if _pruned_today(db, API_HITS_PRUNE_KEY):
+        return {"pruned": 0, "skipped": "daily"}
     cutoff = _utcnow() - timedelta(days=retention_days)
     n = db.query(ApiHit).filter(ApiHit.created_at < cutoff).delete(synchronize_session=False)
+    _mark_pruned(db, API_HITS_PRUNE_KEY)
     db.commit()
     if n:
         log.info("api_hits_pruned", deleted=n, retention_days=retention_days)
+    return {"pruned": n}
+
+
+def prune_notifications(db: Session, retention_days: int = NOTIFICATIONS_RETENTION_DAYS) -> dict:
+    """R6-P2-14：notifications 保留 retention_days 天，删更早的行（审计/重试
+    用的旧行一并清理）。幂等、可重入，每天最多执行一次。"""
+    if _pruned_today(db, NOTIFICATIONS_PRUNE_KEY):
+        return {"pruned": 0, "skipped": "daily"}
+    cutoff = _utcnow() - timedelta(days=retention_days)
+    n = (
+        db.query(Notification)
+        .filter(Notification.created_at < cutoff)
+        .delete(synchronize_session=False)
+    )
+    _mark_pruned(db, NOTIFICATIONS_PRUNE_KEY)
+    db.commit()
+    if n:
+        log.info("notifications_pruned", deleted=n, retention_days=retention_days)
     return {"pruned": n}
 
 
@@ -489,6 +531,8 @@ def run_lifecycle_sweep(db: Session) -> dict:
         ("task_expiry", task_expiry_sweep),
         ("zombie", zombie_sweep),
         ("api_hits_retention", prune_api_hits),
+        # R6-P2-14：notifications 保留期清理（90 天）
+        ("notifications_retention", prune_notifications),
     ):
         try:
             out[name] = fn(db)
@@ -506,4 +550,5 @@ __all__ = [
     "zombie_sweep",
     "converge_task_limit",
     "prune_api_hits",
+    "prune_notifications",
 ]

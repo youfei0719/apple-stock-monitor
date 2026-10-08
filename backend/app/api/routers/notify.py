@@ -34,8 +34,9 @@ def _mask_target(channel: str, target: str) -> str:
 
     email 是用户自己的邮箱，保留明文供展示；其他通道的 target 可能是
     敏感密钥/URL，统一掩码。
+    R6-P2-19：page 通道 target 为 device_id，同样掩码，不明文返回。
     """
-    if channel in ("bark", "wecom", "dingtalk", "feishu") and target:
+    if channel in ("bark", "wecom", "dingtalk", "feishu", "page") and target:
         return (target[:6] + "***") if len(target) > 6 else "***"
     return target
 
@@ -62,6 +63,11 @@ def notify_test(
             "Bark / 群机器人可配置，但到货不会发送（测试通过≠到货会发）",
             "channel_not_supported",
         )
+    # R6-P2-9：email 测试目标必须是用户本人邮箱（管理员除外），防拿测试
+    # 接口往任意邮箱发垃圾邮件
+    if data.channel == "email" and not user.is_admin:
+        if data.target.strip().lower() != (user.email or "").strip().lower():
+            raise APIError(400, "测试邮箱必须是你账号绑定的邮箱", "bad_test_target")
     today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     used_today = db.execute(
         select(func.count())

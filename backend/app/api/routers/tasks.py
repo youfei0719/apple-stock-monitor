@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Header, Query, Request
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import _client_ip, get_current_user, get_optional_user
@@ -14,8 +15,8 @@ from app.api.errors import APIError
 from app.core.db import get_db
 from app.core.logging import get_logger
 from app.core.ratelimit import check_rate_limit
-from app.core.tiers import effective_tier_of, tier_of
-from app.models.models import MonitorTask, Notification, StockState, User
+from app.core.tiers import effective_tier, effective_tier_of, tier_of
+from app.models.models import IdempotencyRecord, MonitorTask, Notification, StockState, User
 from app.schemas import TaskBatchIn, TaskCreateIn, TaskOut, TaskPatchIn
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -163,6 +164,113 @@ def _validate_task_in(data: TaskCreateIn) -> None:
         raise APIError(400, "category 非法", "bad_category")
 
 
+def _validate_expires_at(expires_at: datetime | None) -> None:
+    """R6-P2-12：expires_at 早于当前时间直接 400（过期任务建了也无意义）。"""
+    if expires_at is not None and expires_at < datetime.utcnow():
+        raise APIError(400, "expires_at 不能早于当前时间", "bad_expires_at")
+
+
+def _channels_empty(channels: dict | None) -> bool:
+    """渠道是否全空：无 bark_key/email 且 webhooks 为空。"""
+    ch = channels or {}
+    if (ch.get("bark_key") or "").strip() or (ch.get("email") or "").strip():
+        return False
+    webhooks = ch.get("webhooks") or []
+    return not any(
+        isinstance(w, dict) and (w.get("url") or "").strip() for w in webhooks
+    )
+
+
+def _require_channels(channels: dict, user: User | None) -> None:
+    """R6-D4：非 trial 档任务必须配至少一个通知渠道——空渠道的到货边沿会
+    被静默消费（零通知零记录）。trial 走站内 page 触达，不要求外部渠道。"""
+    if _channels_empty(channels) and effective_tier(user) != "trial":
+        raise APIError(
+            400,
+            "请至少配置一个通知渠道（邮箱 / Bark / 群机器人），否则到货时无法通知你",
+            "channels_required",
+        )
+
+
+# ---- 幂等键（R6-P2-10） ----
+IDEMPOTENCY_KEY_HEADER = "idempotency-key"
+IDEMPOTENCY_KEY_MAXLEN = 128
+# 占住 key 后超过此时长仍未写回结果：视为首个请求创建失败，允许接管
+IDEMPOTENCY_CLAIM_TTL_MIN = 10
+
+
+def _idempotency_scope(user: User | None, device_id: str | None) -> str:
+    return f"u:{user.id}" if user else f"d:{device_id}"
+
+
+def _lookup_idempotency(db: Session, scope: str, key: str) -> IdempotencyRecord | None:
+    return db.execute(
+        select(IdempotencyRecord).where(
+            IdempotencyRecord.scope == scope, IdempotencyRecord.key == key
+        )
+    ).scalar_one_or_none()
+
+
+def _claim_idempotency_key(
+    db: Session, scope: str, key: str
+) -> tuple[IdempotencyRecord, bool]:
+    """占住幂等键。返回 (record, 是否由本次请求占住)。
+
+    并发同 key 撞唯一约束时 IntegrityError → 回滚后取现存记录（不抛 500）。
+    首个请求占住 key 后若超过 IDEMPOTENCY_CLAIM_TTL_MIN 仍未写回结果
+    （创建中途失败/崩溃），本次请求接管该 key；仍在创建中则返回 (记录, False)，
+    调用方按 409 idempotency_in_progress 处理。
+    """
+    rec = IdempotencyRecord(scope=scope, key=key, task_ids=[])
+    db.add(rec)
+    try:
+        db.flush()
+        return rec, True
+    except IntegrityError:
+        db.rollback()
+        rec = _lookup_idempotency(db, scope, key)
+        if (
+            rec is not None
+            and not rec.task_ids
+            and rec.created_at is not None
+            and datetime.utcnow() - rec.created_at
+            > timedelta(minutes=IDEMPOTENCY_CLAIM_TTL_MIN)
+        ):
+            db.delete(rec)
+            db.flush()
+            new_rec = IdempotencyRecord(scope=scope, key=key, task_ids=[])
+            db.add(new_rec)
+            db.flush()
+            log.warning("idempotency_claim_takeover", scope=scope)
+            return new_rec, True
+        return rec, False
+
+
+def _idempotent_replay(
+    db: Session,
+    user: User | None,
+    device_id: str | None,
+    scope: str,
+    key: str,
+) -> list[TaskOut] | None:
+    """重复 key：直接返回首次创建的任务（R6-P2-10）。无记录返回 None。"""
+    rec = _lookup_idempotency(db, scope, key)
+    if not rec or not rec.task_ids:
+        return None
+    out = []
+    for tid in rec.task_ids:
+        task = db.get(MonitorTask, tid)
+        if task is None:
+            return None  # 首次结果的任务已被删除：按新请求处理
+        # scope 已隔离归属（u: / d: 前缀），这里只做兜底一致性检查
+        if user and task.user_id != user.id:
+            return None
+        if not user and not (task.user_id is None and task.device_id == device_id):
+            return None
+        out.append(_task_out(task, db))
+    return out
+
+
 @router.get("", response_model=list[TaskOut])
 def list_tasks(
     status: str = Query(default="all", description="active=监控中, expired=已过期, all=全部"),
@@ -207,18 +315,40 @@ def create_task(
         f"task_create:{ip}", limit=TASK_CREATE_LIMIT, window_sec=TASK_CREATE_WINDOW_SEC
     ):
         raise APIError(429, "创建任务过于频繁，请稍后再试", "rate_limited")
+    # R6-P2-10：幂等键——重复 key 直接返回首次创建的任务（网络重试/重复提交
+    # 不再 check-then-insert 建出重复任务）
+    idem_key = (request.headers.get(IDEMPOTENCY_KEY_HEADER) or "").strip()[
+        :IDEMPOTENCY_KEY_MAXLEN
+    ]
+    scope = _idempotency_scope(user, x_device_id)
+    if idem_key:
+        replayed = _idempotent_replay(db, user, x_device_id, scope, idem_key)
+        if replayed:
+            return replayed[0]
     _validate_task_in(data)
+    _validate_expires_at(data.expires_at)
     _check_task_limit(db, user, x_device_id)
     stores = [s.model_dump() for s in data.stores]
     part_number = data.part_number.strip().upper()
     # N7：门店号归一化（strip+upper）后再查重/入库，大小写或空格不一致不产生重复任务
     store_numbers = [s["number"].strip().upper() for s in stores]
+    channels = data.channels.model_dump(exclude_none=True)
+    _require_channels(channels, user)
     # 断裂-8：重复任务冲突检测
     conflict = _find_conflict(
         db, user.id if user else None, x_device_id, part_number, store_numbers
     )
     if conflict:
         raise _conflict_error(conflict)
+    idem_rec = None
+    if idem_key:
+        idem_rec, owned = _claim_idempotency_key(db, scope, idem_key)
+        if not owned:
+            # 并发同 key：首个请求已占住——有结果直接返回，否则说明还在创建中
+            replayed = _idempotent_replay(db, user, x_device_id, scope, idem_key)
+            if replayed:
+                return replayed[0]
+            raise APIError(409, "相同的幂等键正在处理中，请稍后重试", "idempotency_in_progress")
     task_kwargs: dict = dict(
         user_id=user.id if user else None,
         device_id=None if user else x_device_id,
@@ -233,7 +363,7 @@ def create_task(
         stores=stores,
         mode=data.mode,
         repeat_interval_sec=data.repeat_interval_sec,
-        channels=data.channels.model_dump(exclude_none=True),
+        channels=channels,
         expires_at=_clamp_expires(data.expires_at, anonymous=user is None),
         auto_retire=data.auto_retire,
     )
@@ -241,6 +371,10 @@ def create_task(
     db.add(task)
     db.commit()
     db.refresh(task)
+    if idem_rec is not None:
+        idem_rec.task_ids = [task.id]
+        db.add(idem_rec)
+        db.commit()
     log.info("task_created", task_id=task.id, user_id=user.id if user else None)
     return _task_out(task, db)
 
@@ -248,10 +382,20 @@ def create_task(
 @router.post("/batch", response_model=list[TaskOut], status_code=201)
 def batch_create(
     data: TaskBatchIn,
+    request: Request,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """门店 × 型号批量生成任务。"""
+    # R6-P2-10：幂等键——重复 key 直接返回首次批量创建的任务
+    idem_key = (request.headers.get(IDEMPOTENCY_KEY_HEADER) or "").strip()[
+        :IDEMPOTENCY_KEY_MAXLEN
+    ]
+    scope = _idempotency_scope(user, None)
+    if idem_key:
+        replayed = _idempotent_replay(db, user, None, scope, idem_key)
+        if replayed:
+            return replayed
     # R4-P1-B6：复用 _validate_task_in 校验 mode + category（此前只判 mode，
     # category 非法会直接入库）
     _validate_task_in(data)
@@ -278,6 +422,16 @@ def batch_create(
         if conflict:
             raise _conflict_error(conflict)
     channels = data.channels.model_dump(exclude_none=True)
+    # R6-D4：非 trial 档任务必须配通知渠道
+    _require_channels(channels, user)
+    idem_rec = None
+    if idem_key:
+        idem_rec, owned = _claim_idempotency_key(db, scope, idem_key)
+        if not owned:
+            replayed = _idempotent_replay(db, user, None, scope, idem_key)
+            if replayed:
+                return replayed
+            raise APIError(409, "相同的幂等键正在处理中，请稍后重试", "idempotency_in_progress")
     created = []
     for pn, sn in combos_norm:
         name = data.name_template.replace("{part_number}", pn).replace("{store_number}", sn)
@@ -296,6 +450,10 @@ def batch_create(
     db.commit()
     for t in created:
         db.refresh(t)
+    if idem_rec is not None:
+        idem_rec.task_ids = [t.id for t in created]
+        db.add(idem_rec)
+        db.commit()
     log.info("task_batch_created", user_id=user.id, count=len(created))
     return [_task_out(t, db) for t in created]
 
@@ -324,6 +482,15 @@ def patch_task(
     # 虽未落库但对象状态已脏）
     if data.mode is not None and data.mode not in ("instant", "confirmed"):
         raise APIError(400, "mode 必须为 instant 或 confirmed", "bad_mode")
+    if data.expires_at is not None:
+        # R6-P2-12：拒绝过去时间
+        _validate_expires_at(data.expires_at)
+    if data.channels is not None:
+        # R6-D4：非 trial 档任务不允许把渠道清空（空渠道的到货边沿会被静默消费）
+        _require_channels(data.channels.model_dump(exclude_none=True), user)
+    if data.paused is not None:
+        # R6-I9：手动暂停/恢复同步暂停原因——恢复时清空原因，避免脏原因残留
+        task.paused_reason = "manual" if data.paused else None
     fields = ("name", "group", "paused", "mode", "repeat_interval_sec")
     for field in fields:
         v = getattr(data, field)

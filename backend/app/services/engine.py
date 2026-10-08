@@ -20,7 +20,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import get_settings
 from app.core.db import SessionLocal
-from app.core.logging import get_logger
+from app.core.logging import configure_logging, get_logger
 from app.core.tiers import effective_tier, effective_tier_of
 from app.models.models import MonitorTask, Notification, QuotaUsage, StockState, SystemConfig
 from app.services.apple_client import AppleClient, AppleError, AppleRateLimitError
@@ -231,7 +231,14 @@ class Engine:
                 return
             groups = self._group_tasks(tasks)
             for (city, parts), group_tasks in groups.items():
-                self._poll_group(db, city, parts, group_tasks)
+                # R6-D1：同 tick 内若已进入冷却（本 tick 前一个分组刚被限流），
+                # 其余分组不再打 Apple——否则退避被架空。
+                if self._in_cooldown(db):
+                    log.info("tick_stop_on_cooldown", city=city)
+                    break
+                if self._poll_group(db, city, parts, group_tasks):
+                    # R6-D1：本分组被 Apple 限流 → 停止本轮其余分组
+                    break
         finally:
             db.close()
 
@@ -352,7 +359,11 @@ class Engine:
         return groups
 
     # ---- 单组轮询 ----
-    def _poll_group(self, db, city: str, parts: tuple[str, ...], tasks: list[MonitorTask]) -> None:
+    def _poll_group(
+        self, db, city: str, parts: tuple[str, ...], tasks: list[MonitorTask]
+    ) -> bool:
+        """轮询一组任务。返回 True 表示本组被 Apple 限流（已进入冷却），
+        调用方应停止本轮其余分组，不再打 Apple（R6-D1）。"""
         store_numbers: list[str] = []
         for t in tasks:
             for s in t.store_numbers or []:
@@ -383,7 +394,9 @@ class Engine:
                 self.last_error = str(e)
                 self._enter_cooldown(db, tasks, chunk)
                 log.warning("engine_rate_limited", error=str(e))
-                return  # 本轮其余 chunk 全部跳过
+                # R6-D1：返回 True 告诉 tick 停止本轮其余分组（之前只跳过本组
+                # 的剩余 chunk，同 tick 其他分组仍会继续打 Apple，退避被架空）
+                return True
             except AppleError as e:
                 self.rounds_total += 1
                 self.last_error = str(e)
@@ -393,6 +406,7 @@ class Engine:
                     t.last_polled_at = datetime.utcnow()
                     t.last_poll_ok = False
                 db.commit()
+        return False
 
     def _process_task(self, db, task: MonitorTask, parts, chunk, lookup) -> None:
         now = datetime.utcnow()
@@ -427,15 +441,35 @@ class Engine:
                 if notify:
                     # 配额口径：按实际发送成功的通知条数扣减（断裂-5）
                     if self._check_quota(db, task):
-                        sent = self._fire(db, task, store, part, r)
+                        sent, no_channel = self._fire(db, task, store, part, r)
                         self._consume_quota(db, task, sent)
+                        if no_channel:
+                            # R6-D4：零渠道/全 skipped → 记一条 skipped 审计行，
+                            # 且不推进 last_event_at（边沿不被消费，下轮仍会
+                            # 触发，避免静默丢失）
+                            self._record_skipped(
+                                db,
+                                task,
+                                store,
+                                part,
+                                channel="no_channel",
+                                error="no_channels_configured",
+                                title="未配置通知渠道，到货提醒未发送",
+                            )
+                        else:
+                            row.last_event_at = now
+                        db.add(row)
+                        # R6-P2-21：通知行 + 配额扣减同一事务一次提交——崩溃时
+                        # 要么都没落库、要么都落库，保证不漏扣配额
+                        db.commit()
                         self._maybe_quota_warning(db, task)
-                        row.last_event_at = now
                     else:
                         self._record_skipped(db, task, store, part)
                         # 配额耗尽：自动暂停 + 发耗尽通知（不扣配额，断裂-4/断裂-9）
                         if not task.paused:
                             task.paused = True
+                            # R6-I9：暂停原因落库，供认领时区分自动恢复
+                            task.paused_reason = "quota_exhausted"
                             db.add(task)
                             db.commit()
                             self._send_quota_exhausted(db, task)
@@ -624,13 +658,22 @@ class Engine:
         db.commit()
 
     # ---- 通知触发 ----
-    def _fire(self, db, task: MonitorTask, store: str, part: str, r) -> int:
-        """发送到货通知，返回实际发送成功的通知条数（断裂-5：按成功扣减）。
+    def _fire(self, db, task: MonitorTask, store: str, part: str, r) -> tuple[int, bool]:
+        """发送到货通知。
 
-        - 每条 channel 发送成功计 1 次；失败回滚不扣。
+        返回 (实际发送成功条数, no_channel)：
+        - sent：断裂-5 按成功扣减的依据。
+        - no_channel：True 表示零渠道/全 skipped（没有任何发送尝试）——
+          调用方此时记一条 skipped 审计行且不推进 last_event_at（R6-D4）；
+          发送尝试过但全失败时为 False（重试机制接管，last_event_at 照常推进）。
+
         - 失败 tick 内立即重试 1 次；仍失败记 retry_at 由后续 tick 重发（最多 3 次）。
         - 发通知时把 part_number 写入 Notification 快照字段（不自洽-4）。
         - consecutive_failures：全通道失败+1、全成功清零；>=10 自动暂停（断裂-6）。
+        - R6-P2-21：本函数不单独 commit（dispatch 用 commit=False）；通知行与
+          配额扣减由调用方 _process_task 在同一事务一次提交，崩溃不漏扣。
+          例外：自动暂停分支的 _send_system_notice 自带 commit——该分支 sent
+          恒为 0（全失败才暂停），不涉及配额扣减，无漏扣风险。
         """
         store_name = next(
             (s.get("name", store) for s in (task.stores or []) if s.get("number") == store), store
@@ -642,7 +685,7 @@ class Engine:
         link = build_product_link(task.category, part)
         log.info("stock_event", task_id=task.id, store=store, part=part)
         records = Notifier(db).dispatch(
-            task.user_id, task.id, task.channels or {}, title, body, link
+            task.user_id, task.id, task.channels or {}, title, body, link, commit=False
         )
         now = datetime.utcnow()
         for n in records:
@@ -663,6 +706,9 @@ class Engine:
                     )
                 db.add(n)
         sent = sum(1 for n in records if n.status == "sent")
+        # R6-D4：零渠道（records 为空）或全部被档位拦截为 skipped → 没有任何
+        # 发送尝试，调用方记 skipped 审计行且不推进 last_event_at
+        no_channel = not records or all(n.status == "skipped" for n in records)
         if records:
             n_failed = sum(1 for n in records if n.status == "failed")
             if n_failed == len(records):
@@ -673,13 +719,15 @@ class Engine:
             db.add(task)
             if task.consecutive_failures >= 10 and not task.paused:
                 task.paused = True
+                # R6-I9：暂停原因落库，供认领时区分自动恢复
+                task.paused_reason = "notify_failures"
                 db.add(task)
                 log.warning(
                     "task_auto_paused",
                     task_id=task.id,
                     consecutive_failures=task.consecutive_failures,
                 )
-                db.commit()
+                # 系统通知自带 commit；本分支 sent 恒为 0，不涉及配额
                 self._send_system_notice(
                     db,
                     task,
@@ -688,8 +736,8 @@ class Engine:
                     f"任务「{task.name}」连续 10 次通知发送失败，已自动暂停。"
                     "请检查通知渠道配置（Bark key / 邮箱 / webhook）后手动恢复任务。",
                 )
-        db.commit()
-        return sent
+        db.flush()
+        return sent, no_channel
 
     # ---- 失败通知定时重试（断裂-5） ----
     @staticmethod
@@ -758,6 +806,7 @@ class Engine:
         part: str,
         channel: str = "quota",
         error: str = "quota_exceeded",
+        title: str | None = None,
     ) -> None:
         db.add(
             Notification(
@@ -766,7 +815,8 @@ class Engine:
                 kind="stock_alert",
                 channel=channel,
                 target="",
-                title="已跳过推送" if channel == "budget" else "配额耗尽，已跳过推送",
+                title=title
+                or ("已跳过推送" if channel == "budget" else "配额耗尽，已跳过推送"),
                 body=f"task={task.id} store={store} part={part}",
                 link="",
                 part_number=part or None,
@@ -811,6 +861,9 @@ async def _amain() -> None:
     防止有人在 shell 手动 `python -m app.services.engine` 绕过开关启动
     第二个引擎（双引擎重复轮询/重复通知）。
     """
+    # R6-I6：独立引擎进程必须初始化日志（文件落到 logs/app.log），否则
+    # admin 的 log_tail 看不到引擎日志
+    configure_logging()
     if not get_settings().ENGINE_ENABLED:
         print("ENGINE_ENABLED=false：拒绝启动监控引擎。")
         print("引擎只能由独立进程 stockmon-engine.service（ENGINE_ENABLED=true）运行；")

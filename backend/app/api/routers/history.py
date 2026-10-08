@@ -49,7 +49,11 @@ def events(
             )
         )
     if store:
-        q = q.where(Notification.body.like(f"%{store}%"))
+        # R6-P2-20：转义 LIKE 通配符 % / _（及转义符自身），防用户输入改写匹配语义
+        escaped = (
+            store.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        )
+        q = q.where(Notification.body.like(f"%{escaped}%", escape="\\"))
     q = q.limit(limit)
     out = []
     for n, t in db.execute(q).all():
@@ -86,9 +90,11 @@ def releases(
     # R5-B-N2：按快照列聚合——任务删除后 join 不到 MonitorTask，
     # coalesce 保证已删任务的通知仍按原型号归组
     pn_col = func.coalesce(Notification.part_number, MonitorTask.part_number)
+    # R6-I8："按天"口径统一北京时间（与 admin overview 一致）
+    day_col = func.date(Notification.created_at, "+8 hours")
     rows = db.execute(
         select(
-            func.date(Notification.created_at).label("day"),
+            day_col.label("day"),
             pn_col.label("part_number"),
             func.count().label("events"),
         )
@@ -97,7 +103,7 @@ def releases(
         .where(Notification.kind == "stock_alert")
         .where(Notification.status == "sent")
         .where(Notification.created_at >= _since(days))
-        .group_by(func.date(Notification.created_at), pn_col)
+        .group_by(day_col, pn_col)
         .order_by(desc("day"))
     ).all()
     return [{"day": str(r.day), "part_number": r.part_number, "events": r.events} for r in rows]

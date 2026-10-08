@@ -1,7 +1,10 @@
 """FastAPI 入口：挂载路由、健康检查、限流中间件、引擎生命周期。"""
 
 import hashlib
+import threading
+import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -91,6 +94,9 @@ def _bootstrap_admin():
         user.password_hash = hash_password(password)
         user.is_admin = True
         user.tier = "pro"
+        # R6-D3：bootstrap 管理员给远未来到期（+10 年）——否则 5 分钟内就被
+        # membership_sweep 按"付费到期"降回 free；sweep 侧同时排除管理员（双保险）
+        user.tier_expires_at = datetime.utcnow() + timedelta(days=3650)
         db.commit()
         # R5-B-N4：管理员邮箱不明文打日志，只记 sha256 前 8 位（可关联不泄露）
         email_hash = hashlib.sha256(email.encode()).hexdigest()[:8]
@@ -130,22 +136,54 @@ async def rate_limit_and_track(request: Request, call_next):
             return JSONResponse(
                 status_code=429, content={"detail": "请求过于频繁", "code": "rate_limited"}
             )
-        # 轻量访问统计（后台流量看板用）；失败不影响主流程
-        try:
-            db = SessionLocal()
-            try:
-                db.add(
-                    ApiHit(
-                        path=path[:256],
-                        ip_hash=hashlib.sha256(ip.encode()).hexdigest()[:32],
-                    )
-                )
-                db.commit()
-            finally:
-                db.close()
-        except Exception as e:
-            log.warning("api_hit_write_failed", error=str(e))
+        # 轻量访问统计（后台流量看板用）；失败不影响主流程。
+        # R6-P2-15：内存批量刷盘——每请求一次 INSERT+commit 写放大太大；
+        # 缓冲 200 条或 60 秒刷一次，重启丢少量统计可接受（统计非关键数据）。
+        _buffer_api_hit(path[:256], hashlib.sha256(ip.encode()).hexdigest()[:32])
     return await call_next(request)
+
+
+# ---- api_hits 内存批量刷盘（R6-P2-15） ----
+_api_hit_buffer: list[tuple[str, str]] = []
+_api_hit_lock = threading.Lock()
+_api_hit_last_flush = 0.0
+API_HIT_BATCH_SIZE = 200
+API_HIT_FLUSH_SEC = 60
+
+
+def _buffer_api_hit(path: str, ip_hash: str) -> None:
+    global _api_hit_last_flush
+    do_flush = False
+    with _api_hit_lock:
+        _api_hit_buffer.append((path, ip_hash))
+        if len(_api_hit_buffer) >= API_HIT_BATCH_SIZE or (
+            _api_hit_buffer and time.time() - _api_hit_last_flush >= API_HIT_FLUSH_SEC
+        ):
+            do_flush = True
+    if do_flush:
+        _flush_api_hits()
+
+
+def _flush_api_hits() -> None:
+    """把缓冲的 api_hits 批量入库。"""
+    global _api_hit_last_flush
+    with _api_hit_lock:
+        batch = _api_hit_buffer
+        _api_hit_buffer.clear()
+        _api_hit_last_flush = time.time()
+    if not batch:
+        return
+    try:
+        db = SessionLocal()
+        try:
+            db.bulk_insert_mappings(
+                ApiHit, [{"path": p, "ip_hash": h} for p, h in batch]
+            )
+            db.commit()
+        finally:
+            db.close()
+    except Exception as e:
+        log.warning("api_hit_flush_failed", error=str(e), dropped=len(batch))
 
 
 @app.get("/healthz")

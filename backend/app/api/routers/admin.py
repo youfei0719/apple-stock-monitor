@@ -128,12 +128,13 @@ def traffic(
     since = datetime.utcnow() - timedelta(days=days)
     rows = db.execute(
         select(
-            func.date(ApiHit.created_at).label("day"),
+            # R6-I8："按天"口径统一北京时间（与 overview 的 today_pushes 一致）
+            func.date(ApiHit.created_at, "+8 hours").label("day"),
             func.count().label("pv"),
             func.count(func.distinct(ApiHit.ip_hash)).label("uv"),
         )
         .where(ApiHit.created_at >= since)
-        .group_by(func.date(ApiHit.created_at))
+        .group_by(func.date(ApiHit.created_at, "+8 hours"))
         .order_by("day")
     ).all()
     return [{"day": str(r.day), "pv": r.pv, "uv": r.uv} for r in rows]
@@ -218,6 +219,17 @@ def patch_user(
             data.tier_expires_at.isoformat(),
         )
         target.tier_expires_at = data.tier_expires_at
+    if data.tier is not None:
+        # R6-I5：改档同步配额锚点——付费档 quota_reset_at 与 tier_expires_at
+        # 对齐（与 apply_tier_grant 口径一致，购买日+30天滚动）；手动降回
+        # free/trial 则按退款语义从此刻起算新的 30 天周期
+        if data.tier in ("standard", "pro"):
+            if target.tier_expires_at is not None:
+                target.quota_reset_at = target.tier_expires_at
+                changes["quota_reset_at"] = target.quota_reset_at.isoformat()
+        else:
+            target.quota_reset_at = datetime.utcnow() + timedelta(days=30)
+            changes["quota_reset_at"] = target.quota_reset_at.isoformat()
     if data.is_admin is not None:
         changes["is_admin"] = (target.is_admin, data.is_admin)
         target.is_admin = data.is_admin
@@ -501,7 +513,7 @@ def refund_payment(
             db.add(user)
             # R4-P1-B8：tier 已是 free，membership_sweep 会跳过，pro 的 30 个任务
             # 会继续轮询；这里立即执行一次任务数收敛（free 上限）
-            converged = converge_task_limit(db, user)
+            converged = converge_task_limit(db, user, reason="tier_limit")
             user_info = {
                 "user_id": user.id,
                 "tier": {"from": old[0], "to": "free"},

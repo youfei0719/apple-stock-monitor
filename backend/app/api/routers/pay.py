@@ -16,7 +16,7 @@ docs/reviews/reconciliation-plan.md（首版只留文档，未实现）。
 import hashlib
 import hmac
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import desc, select, text
@@ -85,9 +85,12 @@ def apply_tier_grant(db: Session, user: User, tier_to: str) -> str:
     返回 "granted"（升级/续费立即生效）或 "downgrade_pending"（降级到期生效，
     只写 pending_tier，到期 sweep 再切换；不自洽-1）。
     配额锚点与会员周期对齐（购买日+30天滚动）。
+
+    R6-D2：续费走原子 UPDATE——到期时间 = max(当前到期, now) + 30 天，
+    一条 SQL 完成读-改-写。并发 webhook（不同订单）同时给同一用户续费时，
+    不再出现"先读后写"的 lost-update（60 天变 30 天）。
     """
     now = datetime.utcnow()
-    base = user.tier_expires_at if user.tier_expires_at and user.tier_expires_at > now else now
     if TIER_RANK.get(tier_to, 0) < TIER_RANK.get(effective_tier(user), 0):
         user.pending_tier = tier_to
         db.add(user)
@@ -98,11 +101,22 @@ def apply_tier_grant(db: Session, user: User, tier_to: str) -> str:
             pending_tier=tier_to,
         )
         return "downgrade_pending"
-    user.tier = tier_to
-    user.tier_expires_at = base + timedelta(days=30)
-    user.quota_reset_at = base + timedelta(days=30)
-    user.pending_tier = None
-    db.add(user)
+    # now_s 与 SQLite 列内格式一致（"YYYY-MM-DD HH:MM:SS"，字典序可比）。
+    # 注意：SQLite 多参数 max() 遇到 NULL 直接返回 NULL（不是忽略），所以先
+    # coalesce(tier_expires_at, :now) 把首次购买的 NULL 转成 now 再取 max。
+    now_s = now.strftime("%Y-%m-%d %H:%M:%S")
+    db.execute(
+        text(
+            "UPDATE users SET tier = :tier, "
+            "tier_expires_at = datetime(max(coalesce(tier_expires_at, :now), :now), '+30 days'), "
+            "quota_reset_at = datetime(max(coalesce(tier_expires_at, :now), :now), '+30 days'), "
+            "pending_tier = NULL "
+            "WHERE id = :id"
+        ),
+        {"tier": tier_to, "now": now_s, "id": user.id},
+    )
+    # 原子 UPDATE 绕过 ORM：refresh 把内存对象与行同步，供调用方/日志使用
+    db.refresh(user)
     log.info(
         "tier_granted",
         user_id=user.id,

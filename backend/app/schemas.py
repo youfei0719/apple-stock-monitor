@@ -3,7 +3,15 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 
 # ---------- auth ----------
@@ -22,6 +30,8 @@ class UserOut(BaseModel):
     email: str
     tier: str
     totp_enabled: bool
+    # R6-I4/I9：注册时认领 device 任务的提示（如"密钥已清空请重新配置"）
+    notice: str | None = None
 
 
 class MeOut(BaseModel):
@@ -147,6 +157,16 @@ class TaskOut(BaseModel):
     auto_retire: bool = True  # DB 列缺失时按 True 处理（见 tasks.py）
     created_at: datetime
     latest: dict = Field(default_factory=dict)  # 最新状态摘要
+
+    @field_serializer("expires_at", "created_at")
+    def _ser_naive_dt_z(self, v: datetime | None) -> str | None:
+        """R6-P2-13：naive UTC 时间统一带 Z 后缀，与手写端口
+        .isoformat()+"Z" 惯例一致。"""
+        if v is None:
+            return None
+        if v.tzinfo is None:
+            return v.isoformat() + "Z"
+        return v.isoformat()
 
 
 # ---------- notify ----------

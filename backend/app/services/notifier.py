@@ -96,6 +96,7 @@ class Notifier:
         status,
         error=None,
         part_number=None,
+        commit=True,
     ) -> Notification:
         n = Notification(
             user_id=user_id,
@@ -111,7 +112,9 @@ class Notifier:
             part_number=part_number,
         )
         self.db.add(n)
-        self.db.commit()
+        if commit:
+            # R6-P2-21：引擎 _fire 用 commit=False，通知行与配额扣减同一事务提交
+            self.db.commit()
         return n
 
     def dispatch(
@@ -124,6 +127,7 @@ class Notifier:
         link: str,
         kind: str = "stock_alert",
         user=None,
+        commit: bool = True,
     ) -> list[Notification]:
         """按任务渠道配置逐个发送，每条写库。返回通知记录列表。
 
@@ -133,6 +137,8 @@ class Notifier:
         （体验 1 次/月真实生效）；外部渠道仍逐个记 skipped 备查。
         免费/标准/Pro 目前只开放 email，bark/webhook 等未在档位 channels
         内的直接记 skipped，不发送。
+
+        commit=False 时只 add 不 commit（R6-P2-21：引擎 _fire 批量提交用）。
         """
         if user is None and user_id is not None:
             user = self.db.get(User, user_id)
@@ -156,8 +162,8 @@ class Notifier:
                 jobs.append((wh.get("platform", "wecom"), wh["url"]))
         if channels.get("email"):
             jobs.append(("email", channels["email"]))
-        if channels.get("sms_to"):
-            jobs.append(("sms", channels["sms_to"]))
+        # R6-P2-16：sms_to 死代码分支删除——sms 通道未实现（send_sms 恒抛
+        # NotImplementedError），配了也只会记 failed；ChannelsIn 也不接受该键。
 
         for channel, target in jobs:
             if page_only or channel not in allowed:
@@ -180,6 +186,7 @@ class Notifier:
                         "skipped",
                         reason,
                         part_number=part_number,
+                        commit=commit,
                     )
                 )
                 continue
@@ -207,6 +214,7 @@ class Notifier:
                         link,
                         "sent",
                         part_number=part_number,
+                        commit=commit,
                     )
                 )
             except Exception as e:
@@ -224,6 +232,7 @@ class Notifier:
                         "failed",
                         str(e),
                         part_number=part_number,
+                        commit=commit,
                     )
                 )
         if page_only:
@@ -242,6 +251,7 @@ class Notifier:
                     link,
                     "sent",
                     "站内触达（trial 按次扣减配额）",
+                    commit=commit,
                     part_number=part_number,
                 )
             )
