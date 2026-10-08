@@ -46,3 +46,27 @@ VALID_TIERS = tuple(TIERS.keys())
 
 def tier_of(user_tier: str | None) -> dict:
     return TIERS.get(user_tier or "free", TIERS["free"])
+
+
+def effective_tier(user) -> str:
+    """有效档位：付费档过期后按 free 算。
+
+    全库所有档位判断必须走这个函数，禁止直接读 user.tier（断裂-1）。
+    user 可为 None（匿名 trial）→ 返回 "trial"。
+    """
+    if user is None:
+        return "trial"
+    tier = user.tier or "free"
+    if tier in ("standard", "pro"):
+        exp = getattr(user, "tier_expires_at", None)
+        if exp is not None:
+            from datetime import datetime, timezone
+
+            now = exp.now(timezone.utc) if exp.tzinfo else datetime.utcnow()
+            if now >= exp:
+                return "free"
+    return tier if tier in TIERS else "free"
+
+
+def effective_tier_of(user) -> dict:
+    return TIERS[effective_tier(user)]

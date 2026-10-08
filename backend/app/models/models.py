@@ -30,6 +30,11 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     tier: Mapped[str] = mapped_column(String(32), default="free", nullable=False)
     tier_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # 降级到期生效：用户主动降级时记在这里，到期 sweep 再切换 tier
+    pending_tier: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # 购买日+30天滚动配额周期锚点（北京时间口径）；免费用户按注册日
+    quota_reset_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    email_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     totp_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
     totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -79,6 +84,8 @@ class MonitorTask(Base):
     channels: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     paused: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # 连续通知失败次数；全通道失败+1、全成功清零；>=10 自动暂停（不断裂-6）
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_polled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_poll_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     last_poll_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -134,6 +141,8 @@ class Notification(Base):
     title: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     body: Mapped[str] = mapped_column(Text, default="", nullable=False)
     link: Mapped[str] = mapped_column(String(1024), default="", nullable=False)
+    # 任务删除后保留的 part_number 快照，避免历史变成"幽灵"通知（不自洽-4）
+    part_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="sent", nullable=False)
     error: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
