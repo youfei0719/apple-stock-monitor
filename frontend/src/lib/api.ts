@@ -451,8 +451,10 @@ export const api = {
 
   taskStates: (id: string | number) => req<StateRow[]>(`/tasks/${id}/states`),
 
-  // P0-5 双保险：refresh=1 时后端理论上返回纯数组，但若返回对象 {refreshing, stores}
-  //（历史形状错位曾导致白屏），这里防御性解包，保证永远返回数组
+  // R14-P3-2：公开接口的 refresh=1 已永久 403（门店目录在线刷新已移至管理后台
+  // POST /api/admin/catalog/refresh，前端 AddMonitor 按钮收到的 403 只做 toast）。
+  // 下面仅保留历史形状 {refreshing, stores} 的防御性解包（曾导致白屏的形状错位），
+  // 保证永远返回数组——不是给 refresh=1 用的。
   stores: async (refresh = 0): Promise<StoreRef[]> => {
     const data = await req<StoreRef[] | { refreshing?: boolean; stores?: StoreRef[] }>(
       `/catalog/stores?refresh=${refresh}`,

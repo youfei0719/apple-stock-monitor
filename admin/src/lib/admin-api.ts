@@ -232,9 +232,6 @@ export async function getUsers(
   return req(`/api/admin/users?${params}`)
 }
 
-/** 单次查询上限（与后端 list_users le=200 对齐）；members 页据此做截断提示 */
-export const USERS_QUERY_LIMIT = 200
-
 /** PATCH /api/admin/users/{id} 返回体。
  * R9-I12：后端改级默认 +30 天并在 notices 里提示（如"未传 tier_expires_at，已默认设为 +30 天"），
  * changes.tier_expires_at.to 是实际生效的到期时间——前端展示用它，不用自己传的 iso。 */
@@ -349,6 +346,25 @@ export async function setPeakMode(enabled: boolean): Promise<PeakModeOut> {
 /** 审计日志 */
 export async function getAudit(): Promise<AuditEntry[]> {
   return req('/api/admin/audit')
+}
+
+/** 门店目录项（后端 GET /api/catalog/stores 数组元素；refresh 接口返回同形） */
+export interface CatalogStore {
+  number: string
+  name: string
+  city: string
+  province?: string
+}
+
+/**
+ * R14-P2-1：门店目录在线刷新（重操作：在线打 Apple 接口）。
+ * POST /api/admin/catalog/refresh（管理路由，走 get_current_admin 的 TOTP
+ * 二次验证；TOTP 未验证时 403 {code:"totp_required"}）。
+ * 成功：立即返回当前目录数组（刷新走后台异步任务，前端稍后重拉即可）。
+ * 限流：全局 1 次/小时，超限 429 {code:"refresh_limited"}。
+ */
+export async function refreshCatalog(): Promise<CatalogStore[]> {
+  return req<CatalogStore[]>('/api/admin/catalog/refresh', { method: 'POST' })
 }
 
 export const TIER_LABEL: Record<Tier, string> = {

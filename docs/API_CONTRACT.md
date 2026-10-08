@@ -30,7 +30,7 @@ Task: `{id, name, group, category, part_number, product_name, color, capacity, s
 - `DELETE /api/tasks/{id}`
 
 ## 目录（公开）
-- `GET /api/catalog/stores?refresh=0` → `[{number, name, city, province}]`（全国直营店，refresh=1 触发在线刷新）
+- `GET /api/catalog/stores?refresh=0` → `[{number, name, city, province}]`（全国直营店；**refresh=1 已 403** `{code:"use_admin_refresh"}`，在线刷新能力已移至管理后台 `POST /api/admin/catalog/refresh`（TOTP 二次验证，全局 1 次/小时））
 - `GET /api/catalog/products?category=iphone|ipad|mac|watch` → `[{part_number, name, color, capacity, price_cny}]`
 - `GET /api/catalog/anchors` → `[城市名, ...]`（城市锚点列表，调试/管理用；空库时自动播种种子锚点）
 
@@ -93,6 +93,7 @@ state ∈ `available | unavailable | unknown | verifying | cooling | paused | ex
 - `POST /api/admin/payments/{id}/refund` → 标记退款：`status='refunded'`（revenue 只计 paid，自动排除）+ 该用户降回 `free` 并清空 `tier_expires_at`/`pending_tier`（记审计）
 - `GET /api/admin/system` → `{engine: {running, last_heartbeat, last_tick_at, rounds_total, rounds_ok, last_error}, apple_cooldown: dict, peak_mode: bool, log_tail: string[]}`；engine 状态读独立引擎进程每 tick 写进 DB 的心跳（60s 内 = running），API 进程自身不跑引擎（`ENGINE_ENABLED=false`）
 - `POST /api/admin/system/peak-mode` `{"enabled": bool}` → 高峰模式开关（开启后 trial/free 刷新间隔 ×4；记审计）
+- `POST /api/admin/catalog/refresh` → 门店目录在线刷新（重操作：在线打 Apple 接口；管理后台系统页"刷新门店目录"卡片调用）：成功立即返回当前目录数组 `[{number, name, city, province}]`（刷新走后台异步任务，前端稍后重拉即可）；全局限流 1 次/小时，超限 429 `{code:"refresh_limited"}`；TOTP 未验证时 403 `{code:"totp_required"}`
 - `GET /api/admin/audit` → 数组元素 `{id, admin_id, action, target_type, target_id, detail, ip, created_at}`
 - `POST /api/auth/totp/setup` → `{secret, uri, enabled}`；`POST /api/auth/totp/verify {code}` → `{ok, totp_enabled}`（verify 后当前 session 标 totp_verified）
 - 所有写操作记 audit log。

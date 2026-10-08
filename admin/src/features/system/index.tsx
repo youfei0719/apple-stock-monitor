@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Activity, Inbox, Gauge, ShieldCheck, Zap } from 'lucide-react'
+import { Activity, Inbox, Gauge, ShieldCheck, Zap, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import {
   Card,
@@ -27,8 +28,10 @@ import {
   getSystem,
   getAudit,
   setPeakMode,
+  refreshCatalog,
   fmtLocalTime,
   isAuthExpired,
+  AdminApiError,
   type SystemStatus,
   type AuditEntry,
 } from '@/lib/admin-api'
@@ -106,6 +109,10 @@ export function System() {
   const [peakBusy, setPeakBusy] = useState(false)
   // P2：高峰模式开关二次确认
   const [peakPending, setPeakPending] = useState<boolean | null>(null)
+  // R14-P2-1：门店目录刷新状态
+  const [refreshBusy, setRefreshBusy] = useState(false)
+  const [refreshCooling, setRefreshCooling] = useState(false)
+  const [catalogRefreshedAt, setCatalogRefreshedAt] = useState<string | null>(null)
 
   // R8-U-4：日志直接取 sys.log_tail，不再单独调 getLogTail（原先 /api/admin/system 被请求两次）
   const loadAll = () => {
@@ -145,6 +152,34 @@ export function System() {
     } finally {
       setPeakBusy(false)
       setPeakPending(null)
+    }
+  }
+
+  // R14-P2-1：门店目录在线刷新（重操作：在线打 Apple 接口，走后台异步任务；
+  // 429 cooling 时只置冷却态、不再重复打接口）
+  async function doRefreshCatalog() {
+    setRefreshBusy(true)
+    try {
+      const stores = await refreshCatalog()
+      setRefreshCooling(false)
+      setCatalogRefreshedAt(new Date().toISOString())
+      toast.success(
+        `门店目录刷新已触发（后台异步进行中），当前目录 ${stores.length} 家`,
+      )
+    } catch (e) {
+      // R10-P2-8：会话过期已跳转登录页，静默吞掉
+      if (isAuthExpired(e)) return
+      if (
+        e instanceof AdminApiError &&
+        (e.status === 429 || e.code === 'refresh_limited')
+      ) {
+        setRefreshCooling(true)
+        toast.error('门店目录刷新限流：每小时 1 次，请稍后再试')
+      } else {
+        toast.error(e instanceof Error ? e.message : '刷新门店目录失败')
+      }
+    } finally {
+      setRefreshBusy(false)
     }
   }
 
@@ -299,6 +334,50 @@ export function System() {
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+
+        {/* R14-P2-1：门店目录在线刷新（重操作）。公开接口的 refresh=1 已 403，
+            刷新能力唯一入口在此（POST /api/admin/catalog/refresh，TOTP 二次验证） */}
+        <Card className='mt-4 rounded-3xl border-[#0071e3]/30'>
+          <CardHeader className='flex flex-row items-center justify-between'>
+            <div>
+              <CardTitle className='flex items-center gap-2'>
+                <RefreshCw className='h-4.5 w-4.5 text-[#0071e3]' />
+                刷新门店目录
+                {refreshCooling && (
+                  <Badge className='rounded-full bg-[#ff9f0a]/10 text-[#b26a00]'>
+                    ● 冷却中（每小时 1 次）
+                  </Badge>
+                )}
+              </CardTitle>
+              <CardDescription className='mt-1'>
+                在线调用 Apple 接口重新发现门店（刷新走后台异步任务，立即返回当前目录）。
+                全局限流 1 次/小时；失败/限流时下方 toast 提示。
+                {catalogRefreshedAt && (
+                  <span className='mt-1 block'>
+                    最近一次触发：{fmtLocalTime(catalogRefreshedAt)}（北京时间）
+                  </span>
+                )}
+              </CardDescription>
+            </div>
+            <Button
+              onClick={doRefreshCatalog}
+              disabled={refreshBusy}
+              className='rounded-2xl'
+            >
+              {refreshBusy ? (
+                <>
+                  <RefreshCw className='mr-2 h-4 w-4 animate-spin' />
+                  刷新中…
+                </>
+              ) : (
+                <>
+                  <RefreshCw className='mr-2 h-4 w-4' />
+                  在线刷新门店目录
+                </>
+              )}
+            </Button>
+          </CardHeader>
+        </Card>
 
         <div className='mt-4 grid gap-4 lg:grid-cols-2'>
           <Card className='rounded-3xl'>
