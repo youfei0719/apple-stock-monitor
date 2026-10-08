@@ -16,7 +16,14 @@ from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
 from app.core.tiers import TIERS, VALID_TIERS
-from app.models.models import MonitorTask, Notification, StockState, SystemConfig, User
+from app.models.models import (
+    ApiHit,
+    MonitorTask,
+    Notification,
+    StockState,
+    SystemConfig,
+    User,
+)
 from app.services.notifier import build_product_link
 
 log = get_logger("lifecycle")
@@ -44,6 +51,37 @@ def _milestone_3_1(days_left: float) -> int | None:
     if 0.0 <= days_left <= 1.0:
         return 1
     return None
+
+
+def _beijing_date(dt: datetime | None) -> str:
+    """UTC 时间转北京时间日期展示（R4-P2：通知文案不再用 UTC 裸格式）。"""
+    return (dt + timedelta(hours=8)).strftime("%Y-%m-%d") if dt else ""
+
+
+def converge_task_limit(db: Session, user: User) -> list[MonitorTask]:
+    """按用户当前档位的任务上限暂停超限任务（复用 membership_sweep 的 keep_limit 口径）。
+
+    R4-P1-B8：refund 把用户打回 free 后立即调用——membership_sweep 只处理
+    standard/pro 过期用户，tier 已是 free 会被跳过，pro 的 30 个任务会继续
+    轮询、吃 free 的配额。返回被暂停的任务列表。
+    """
+    keep_limit = TIERS.get(user.tier, TIERS["free"])["tasks_limit"]
+    active = (
+        db.execute(
+            select(MonitorTask)
+            .where(MonitorTask.user_id == user.id, MonitorTask.paused.is_(False))
+            .order_by(MonitorTask.updated_at.desc())
+        )
+        .scalars()
+        .all()
+    )
+    paused = active[keep_limit:]
+    for t in paused:
+        t.paused = True
+        db.add(t)
+    if paused:
+        log.info("tasks_converged", user_id=user.id, tier=user.tier, paused=len(paused))
+    return paused
 
 
 def _sys_notify(
@@ -132,8 +170,12 @@ def membership_sweep(db: Session) -> dict:
             u.tier = new
             u.pending_tier = None
             u.tier_expires_at = now + timedelta(days=30)
+            # R4-P1-D1：晋升 pending_tier 时同步配额锚点，否则配额周期与
+            # 会员周期错位
+            u.quota_reset_at = now + timedelta(days=30)
             action = (
-                f"已按预约切换为{TIERS[new]['name']}（有效期至 {u.tier_expires_at:%Y-%m-%d} UTC）"
+                f"已按预约切换为{TIERS[new]['name']}"
+                f"（有效期至 {_beijing_date(u.tier_expires_at)}，北京时间）"
             )
             stats["pending_promoted"] += 1
         else:
@@ -145,23 +187,9 @@ def membership_sweep(db: Session) -> dict:
         # D7：按切换后档位的任务上限保留最近更新的 N 个任务，暂停超出部分
         # （pending_tier=standard 的用户切换后仍是 10 个限额，不是一刀切到 3 个）
         new_info = TIERS.get(u.tier, TIERS["free"])
-        keep_limit = new_info["tasks_limit"]
-        # 超限任务暂停：按更新时间倒序保留新档位限额，暂停超出部分
-        active = (
-            db.execute(
-                select(MonitorTask)
-                .where(MonitorTask.user_id == u.id, MonitorTask.paused.is_(False))
-                .order_by(MonitorTask.updated_at.desc())
-            )
-            .scalars()
-            .all()
-        )
-        paused_names = []
-        for t in active[keep_limit:]:
-            t.paused = True
-            paused_names.append(t.name)
-            db.add(t)
-        stats["tasks_paused"] += len(paused_names)
+        paused_tasks = converge_task_limit(db, u)
+        stats["tasks_paused"] += len(paused_tasks)
+        paused_names = [t.name for t in paused_tasks]
         pause_note = (
             f"；超出{new_info['name']}版任务上限，已自动暂停 {len(paused_names)} 个任务："
             + "、".join(paused_names[:5])
@@ -201,7 +229,8 @@ def membership_sweep(db: Session) -> dict:
             None,
             "membership_expiring",
             f"会员将于 {ms} 天后到期",
-            f"您的{TIERS[u.tier]['name']}会员将于 {u.tier_expires_at:%Y-%m-%d}（UTC）到期，"
+            f"您的{TIERS[u.tier]['name']}会员将于 "
+            f"{_beijing_date(u.tier_expires_at)}（北京时间）到期，"
             f"到期后将降为免费版。如需续费请前往「我」页，提前续费不亏天数。",
         )
         stats["renewal_reminders"] += 1
@@ -240,7 +269,8 @@ def task_expiry_sweep(db: Session) -> dict:
             t.id,
             "task_expiring",
             f"监控任务将于 {ms} 天后到期：{t.name}",
-            f"任务「{t.name}」（{t.part_number}）将于 {t.expires_at:%Y-%m-%d}（UTC）到期，"
+            f"任务「{t.name}」（{t.part_number}）将于 "
+            f"{_beijing_date(t.expires_at)}（北京时间）到期，"
             "到期后停止轮询、可在任务详情页一键续期（+30 天）。",
             link=build_product_link(t.category, t.part_number),
             part_number=t.part_number,
@@ -360,6 +390,23 @@ def zombie_sweep(db: Session) -> dict:
     return stats
 
 
+# ---------------------------------------------------------------- maintenance
+# api_hits 保留策略（R4-P1-B4）：删除 90 天前的访问统计行，防止表无限增长 +
+# 与引擎争 SQLite 写锁。
+# 调度方式：并入 run_lifecycle_sweep（engine 每 ~5 分钟跑一轮 sweep），无需独立 cron。
+API_HITS_RETENTION_DAYS = 90
+
+
+def prune_api_hits(db: Session, retention_days: int = API_HITS_RETENTION_DAYS) -> dict:
+    """删除 retention_days 天前的 api_hits 行。幂等、可重入。"""
+    cutoff = _utcnow() - timedelta(days=retention_days)
+    n = db.query(ApiHit).filter(ApiHit.created_at < cutoff).delete(synchronize_session=False)
+    db.commit()
+    if n:
+        log.info("api_hits_pruned", deleted=n, retention_days=retention_days)
+    return {"pruned": n}
+
+
 # ---------------------------------------------------------------- entry
 def run_lifecycle_sweep(db: Session) -> dict:
     """执行一轮生命周期 sweep，返回各项计数。幂等、可重入。
@@ -371,6 +418,7 @@ def run_lifecycle_sweep(db: Session) -> dict:
         ("membership", membership_sweep),
         ("task_expiry", task_expiry_sweep),
         ("zombie", zombie_sweep),
+        ("api_hits_retention", prune_api_hits),
     ):
         try:
             out[name] = fn(db)
@@ -386,4 +434,6 @@ __all__ = [
     "membership_sweep",
     "task_expiry_sweep",
     "zombie_sweep",
+    "converge_task_limit",
+    "prune_api_hits",
 ]

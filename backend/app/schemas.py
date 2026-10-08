@@ -109,8 +109,9 @@ class TaskCreateIn(BaseModel):
 
 
 class TaskBatchIn(BaseModel):
-    part_numbers: list[str] = Field(min_length=1)
-    store_numbers: list[str] = Field(min_length=1)
+    # R4-P1-B2：两边各上限 30（笛卡尔积 ≤900），防 1万×1万物化 OOM worker
+    part_numbers: list[str] = Field(min_length=1, max_length=30)
+    store_numbers: list[str] = Field(min_length=1, max_length=30)
     name_template: str = "{part_number} × {store_number}"
     category: str = "iphone"
     mode: str = "instant"

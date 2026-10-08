@@ -150,6 +150,7 @@ async def rate_limit_and_track(request: Request, call_next):
 def healthz():
     # D1：API 进程不跑引擎，引擎状态读独立 engine 进程每 tick 写进 DB 的心跳，
     # 不再读本进程内存（恒为 stopped）。
+    # R4-P2：DB 挂时不再 200，返回 503（deploy 健康检查据此判失败）。
     db_ok = True
     engine_state = "stopped"
     try:
@@ -162,13 +163,16 @@ def healthz():
     except Exception as e:
         db_ok = False
         log.warning("healthz_db_failed", error=str(e))
-    return {
-        "status": "ok",
+    payload = {
+        "status": "ok" if db_ok else "degraded",
         "db": db_ok,
         "engine": engine_state,
         "engine_in_api": settings.ENGINE_ENABLED,
         "version": settings.APP_VERSION,
     }
+    if not db_ok:
+        return JSONResponse(status_code=503, content=payload)
+    return payload
 
 
 # /api/me 兼容（契约要求 GET /api/me）

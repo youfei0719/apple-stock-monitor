@@ -1,11 +1,13 @@
 """认证 / 用户：注册、登录（含失败锁 IP）、登出、me、改密、TOTP、邮箱验证。"""
 
+import hashlib
 import secrets
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Cookie, Depends, Request, Response
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import _client_ip, get_current_user, get_session
@@ -128,19 +130,27 @@ def register(data: RegisterIn, request: Request, db: Session = Depends(get_db)):
     # 注册接口独立限流：5 次/小时/IP，防批量刷号
     if not check_rate_limit(f"register:{ip}", limit=5, window_sec=3600):
         raise APIError(429, "注册过于频繁，请稍后再试", "rate_limited")
-    exists = db.execute(select(User).where(User.email == data.email)).scalar_one_or_none()
+    # R4-P1-B1：邮箱统一 strip().lower() 归一化（register/login/verify/resend
+    # 四处一致），Foo@x.com 与 foo@x.com 不再注册成两个账号
+    email = data.email.strip().lower()
+    exists = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
     if exists:
         raise APIError(400, "邮箱已注册", "email_taken")
     # 注册即初始化配额锚点（注册日=免费锚点，购买日+30天滚动口径）
     user = User(
-        email=data.email,
+        email=email,
         password_hash=hash_password(data.password),
         tier="free",
         email_verified=False,
         quota_reset_at=datetime.utcnow() + timedelta(days=30),
     )
     db.add(user)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # R4-P2：check-then-insert 竞态——并发同邮箱注册时唯一约束兜底
+        db.rollback()
+        raise APIError(400, "邮箱已注册", "email_taken") from None
     db.refresh(user)
     claimed = _claim_device_tasks(db, request, user)
     db.commit()
@@ -152,9 +162,12 @@ def register(data: RegisterIn, request: Request, db: Session = Depends(get_db)):
 @router.post("/verify-email")
 def verify_email(data: VerifyEmailIn, db: Session = Depends(get_db)):
     """邮箱验证：校验 6 位验证码（10 分钟有效），通过后置 email_verified=True。"""
-    user = db.execute(select(User).where(User.email == data.email)).scalar_one_or_none()
+    email = data.email.strip().lower()
+    user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
     if not user:
-        raise APIError(404, "用户不存在", "not_found")
+        # R4-P2 防用户枚举：未知邮箱与"验证码错误"返回完全相同的 400，
+        # 不可通过 404/400 差异探测邮箱是否注册
+        raise APIError(400, "验证码错误", "bad_code")
     if user.email_verified:
         return {"ok": True, "already": True}
     key = _email_code_key(user.email)
@@ -163,7 +176,9 @@ def verify_email(data: VerifyEmailIn, db: Session = Depends(get_db)):
         raise APIError(400, "验证码错误", "bad_code")
     expires_at = datetime.fromisoformat((row.value or {}).get("expires_at", "").rstrip("Z"))
     if datetime.utcnow() > expires_at:
-        raise APIError(400, "验证码已过期，请重新注册获取", "code_expired")
+        # R4-P1-D6：过期文案指引"重新发送"，而不是"重新注册"
+        # （该邮箱已注册，重新注册必 400 email_taken，用户会撞墙）
+        raise APIError(400, "验证码已过期，请点击重新发送获取新验证码", "code_expired")
     user.email_verified = True
     db.add(user)
     db.delete(row)
@@ -184,7 +199,8 @@ def resend_code(data: ResendCodeIn, request: Request, db: Session = Depends(get_
         raise APIError(429, "发送过于频繁，请稍后再试", "rate_limited")
     user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
     if not user:
-        raise APIError(404, "用户不存在", "not_found")
+        # R4-P2 防用户枚举：未知邮箱也返回 ok，不可探测邮箱是否注册
+        return {"ok": True}
     if user.email_verified:
         return {"ok": True, "already": True}
     ok = _send_verification_code(db, user)
@@ -199,10 +215,14 @@ def login(data: LoginIn, request: Request, response: Response, db: Session = Dep
     locked = login_locked(ip)
     if locked > 0:
         raise APIError(429, f"登录失败次数过多，{int(locked)} 秒后重试", "login_locked")
-    user = db.execute(select(User).where(User.email == data.email)).scalar_one_or_none()
+    # R4-P1-B1：登录邮箱同样归一化，换大小写登录不再 401
+    email = data.email.strip().lower()
+    user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
     if not user or not verify_password(data.password, user.password_hash):
         fails = record_login_failure(ip)
-        log.warning("login_failed", email=data.email, ip=ip, fails=fails)
+        # R4-P1-B3：失败日志不打邮箱明文（撞库时会攒出真实邮箱清单），只记哈希
+        email_hash = hashlib.sha256(email.encode()).hexdigest()[:16]
+        log.warning("login_failed", email_hash=email_hash, ip=ip, fails=fails)
         raise APIError(401, "邮箱或密码错误", "bad_credentials")
     # 邮箱未验证不许登录（断裂-22；前端据此 code 提示去验证）
     if not user.email_verified:
@@ -248,10 +268,12 @@ def _quota_for(db: Session, user: User) -> dict:
     ).scalar_one_or_none()
     push_used = usage.push_count if usage else 0
     info = effective_tier_of(user)
-    tasks_used = db.execute(
-        select(MonitorTask).where(MonitorTask.user_id == user.id, MonitorTask.paused.is_(False))
-    ).scalars()
-    tasks_used_n = len(list(tasks_used))
+    # R4-P2：用 func.count() 代替 len(list())，避免把全表行拉进 Python
+    tasks_used_n = db.execute(
+        select(func.count())
+        .select_from(MonitorTask)
+        .where(MonitorTask.user_id == user.id, MonitorTask.paused.is_(False))
+    ).scalar()
     return {
         "push_used": push_used,
         "push_limit": info["push_limit"],

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import _client_ip, get_current_admin
 from app.api.errors import APIError
+from app.api.routers.pay import apply_tier_grant
 from app.core.db import get_db
 from app.core.logging import get_logger
 from app.core.tiers import VALID_TIERS
@@ -24,6 +25,7 @@ from app.models.models import (
 )
 from app.schemas import AdminUserPatchIn
 from app.services.engine import PEAK_MODE_KEY, get_config, read_engine_status
+from app.services.lifecycle import converge_task_limit
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 log = get_logger("admin")
@@ -74,13 +76,14 @@ def audit(
 def overview(admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
     total_users = db.execute(select(func.count()).select_from(User)).scalar()
     tier_rows = db.execute(select(User.tier, func.count()).group_by(User.tier)).all()
-    today = datetime.utcnow().date()
+    # R4-P2：today_pushes 按北京时间口径统计（此前按 UTC，用户看到的"今日"少 8 小时）。
+    beijing_today = (datetime.utcnow() + timedelta(hours=8)).date()
     today_pushes = db.execute(
         select(func.count())
         .select_from(Notification)
         .where(Notification.kind == "stock_alert")
         .where(Notification.status == "sent")
-        .where(func.date(Notification.created_at) == today)
+        .where(func.date(Notification.created_at, "+8 hours") == beijing_today)
     ).scalar()
     revenue = db.execute(
         select(func.coalesce(func.sum(Payment.amount_cny), 0)).where(Payment.status == "paid")
@@ -88,12 +91,12 @@ def overview(admin: User = Depends(get_current_admin), db: Session = Depends(get
     active_tasks = db.execute(
         select(func.count()).select_from(MonitorTask).where(MonitorTask.paused.is_(False))
     ).scalar()
-    # 待处理支付（断裂-15/16）：未认领订单 + 金额异常
+    # 待处理支付（断裂-15/16）：未认领订单 + 金额异常 + 未知 plan（R4-P1-D5）
     unclaimed = db.execute(
         select(func.count())
         .select_from(Payment)
         .where(Payment.user_id.is_(None))
-        .where(Payment.status.in_(["paid", "amount_mismatch"]))
+        .where(Payment.status.in_(["paid", "amount_mismatch", "unknown_plan"]))
     ).scalar()
     amount_mismatch = db.execute(
         select(func.count())
@@ -150,6 +153,7 @@ def list_users(
             "email": u.email,
             "tier": u.tier,
             "tier_expires_at": u.tier_expires_at.isoformat() + "Z" if u.tier_expires_at else None,
+            "email_verified": u.email_verified,
             "is_admin": u.is_admin,
             "totp_enabled": u.totp_enabled,
             "created_at": u.created_at.isoformat() + "Z",
@@ -175,6 +179,17 @@ def patch_user(
             raise APIError(400, "tier 非法", "bad_tier")
         changes["tier"] = (target.tier, data.tier)
         target.tier = data.tier
+        if data.tier == "free":
+            # R4-P1-D2：手动降回 free 时同步清空 tier_expires_at/pending_tier，
+            # 与 /payments/{id}/refund 语义一致（否则用户再买时 apply_tier_grant
+            # 会取未来值白送天数）。
+            changes["tier_expires_at"] = (
+                target.tier_expires_at.isoformat() if target.tier_expires_at else None,
+                None,
+            )
+            changes["pending_tier"] = (target.pending_tier, None)
+            target.tier_expires_at = None
+            target.pending_tier = None
     if data.tier_expires_at is not None:
         # 补单入口：手动设定会员到期时间（断裂-17）。传 null 清空暂不支持，
         # 需要清空请走 DB（避免误操作把付费用户变成永久会员）。
@@ -246,7 +261,8 @@ def _payment_remark(p: Payment) -> str:
 def list_payments(
     limit: int = Query(default=100, ge=1, le=500),
     status: str | None = Query(
-        default=None, description="按状态筛选：paid/refunded/cancelled/amount_mismatch"
+        default=None,
+        description="按状态筛选：paid/refunded/cancelled/amount_mismatch/unknown_plan/resolved",
     ),
     claim_status: str | None = Query(
         default=None, description="unclaimed=待认领（user_id 为空）"
@@ -259,7 +275,7 @@ def list_payments(
         query = query.where(Payment.status == status)
     if claim_status == "unclaimed":
         query = query.where(Payment.user_id.is_(None)).where(
-            Payment.status.in_(["paid", "amount_mismatch"])
+            Payment.status.in_(["paid", "amount_mismatch", "unknown_plan"])
         )
     rows = db.execute(query.limit(limit)).scalars().all()
     return [
@@ -303,13 +319,11 @@ def claim_payment(
     tier_to = p.tier_to
     if tier_to not in ("standard", "pro"):
         raise APIError(400, f"订单档位异常：{tier_to}", "bad_tier")
-    now = datetime.utcnow()
-    base = user.tier_expires_at if user.tier_expires_at and user.tier_expires_at > now else now
     old_tier = (user.tier, user.tier_expires_at.isoformat() if user.tier_expires_at else None)
-    user.tier = tier_to
-    user.tier_expires_at = base + timedelta(days=30)
-    user.quota_reset_at = base + timedelta(days=30)
-    user.pending_tier = None
+    # R4-P1-D3：复用 webhook 的 apply_tier_grant（升级立即生效 / 降级到期生效），
+    # 不再内联直接 user.tier = tier_to（此前管理员认领 standard 给在效期 pro
+    # 用户会立即降级，与 webhook 口径矛盾）。
+    grant_result = apply_tier_grant(db, user, tier_to)
     db.add(user)
     # 补单联动回填 Payment.user_id（断裂-17）
     p.user_id = user.id
@@ -323,7 +337,8 @@ def claim_payment(
     detail = {
         "user_id": user.id,
         "tier": {"from": old_tier[0], "to": tier_to},
-        "tier_expires_at": user.tier_expires_at.isoformat(),
+        "grant_result": grant_result,
+        "tier_expires_at": user.tier_expires_at.isoformat() if user.tier_expires_at else None,
         "payment_status": p.status,
     }
     audit(db, admin, "payment.claim", "payment", payment_id, detail, _client_ip(request))
@@ -333,8 +348,9 @@ def claim_payment(
         "ok": True,
         "payment_id": p.id,
         "user_id": user.id,
-        "tier": tier_to,
-        "tier_expires_at": user.tier_expires_at.isoformat() + "Z",
+        "tier": user.tier,
+        "pending_tier": user.pending_tier,
+        "tier_expires_at": user.tier_expires_at.isoformat() + "Z" if user.tier_expires_at else None,
         "payment_status": p.status,
     }
     if pending_count is not None:
@@ -349,12 +365,12 @@ def close_payment(
     admin: User = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    """D4：不予开通直接关闭——金额异常/待认领订单人工定夺为"不处理"时，
+    """D4：不予开通直接关闭——金额异常/未知 plan/待认领订单人工定夺为"不处理"时，
     status 置 resolved（从待处理队列移除），不绑定用户、不开通档位。"""
     p = db.get(Payment, payment_id)
     if not p:
         raise APIError(404, "订单不存在", "not_found")
-    if p.status not in ("amount_mismatch", "paid"):
+    if p.status not in ("amount_mismatch", "paid", "unknown_plan"):
         raise APIError(400, f"订单状态 {p.status} 不可关闭", "bad_status")
     old_status = p.status
     p.status = "resolved"
@@ -389,6 +405,10 @@ def refund_payment(
     """D3：标记退款——联动：
     - payment.status='refunded'（revenue 统计只计 paid，已自动排除）
     - 清空该用户 tier_expires_at 并降回 free（pending_tier 同步清空）
+    - R4-P1-B7：quota_reset_at 重置为 now+30 天（退款后用户按免费档重新起算周期）
+    - R4-P1-B8：立即收敛任务数（复用 sweep keep_limit 口径），别让 pro 的
+      30 个任务继续吃 free 配额
+    - R4-P0-3：amount_mismatch → refunded 时待处理计数递减
     """
     p = db.get(Payment, payment_id)
     if not p:
@@ -398,6 +418,11 @@ def refund_payment(
     old_status = p.status
     p.status = "refunded"
     db.add(p)
+    # R4-P0-3：金额异常订单被标记退款后，待处理计数必须递减
+    # （amount_mismatch → refunded 是合法路径）
+    pending_count = None
+    if old_status == "amount_mismatch":
+        pending_count = _dec_amount_mismatch_pending(db)
     user_info = None
     if p.user_id is not None:
         user = db.get(User, p.user_id)
@@ -406,8 +431,18 @@ def refund_payment(
             user.tier = "free"
             user.tier_expires_at = None
             user.pending_tier = None
+            # R4-P1-B7：退款后配额锚点按免费档重算——从退款时刻起新的 30 天周期
+            user.quota_reset_at = datetime.utcnow() + timedelta(days=30)
             db.add(user)
-            user_info = {"user_id": user.id, "tier": {"from": old[0], "to": "free"}}
+            # R4-P1-B8：tier 已是 free，membership_sweep 会跳过，pro 的 30 个任务
+            # 会继续轮询；这里立即执行一次任务数收敛（free 上限）
+            converged = converge_task_limit(db, user)
+            user_info = {
+                "user_id": user.id,
+                "tier": {"from": old[0], "to": "free"},
+                "quota_reset_at": user.quota_reset_at.isoformat() + "Z",
+                "tasks_paused": len(converged),
+            }
     audit(
         db,
         admin,
@@ -424,7 +459,10 @@ def refund_payment(
         from_status=old_status,
         user_id=p.user_id,
     )
-    return {"ok": True, "payment_id": p.id, "payment_status": p.status, "user": user_info}
+    out = {"ok": True, "payment_id": p.id, "payment_status": p.status, "user": user_info}
+    if pending_count is not None:
+        out["pending_count"] = pending_count
+    return out
 
 
 @router.get("/system")

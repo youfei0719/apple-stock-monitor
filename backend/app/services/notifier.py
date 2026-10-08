@@ -79,16 +79,6 @@ def send_sms(to_number: str, body: str) -> None:
     raise NotImplementedError("SMS provider not integrated yet")
 
 
-CHANNEL_SENDERS = {
-    "bark": send_bark,
-    "wecom": None,  # 走 send_webhook
-    "dingtalk": None,
-    "feishu": None,
-    "email": None,
-    "sms": send_sms,
-}
-
-
 class Notifier:
     def __init__(self, db):
         self.db = db

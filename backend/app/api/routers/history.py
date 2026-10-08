@@ -23,6 +23,9 @@ def events(
     part_number: str | None = Query(default=None),
     store: str | None = Query(default=None),
     days: int = Query(default=30, ge=1, le=365),
+    # R4-P2：加 limit（days≤365 全量进内存）。过滤下推到 SQL 再限行，
+    # 避免先截断再过滤导致漏数据。
+    limit: int = Query(default=500, ge=1, le=2000),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -36,13 +39,14 @@ def events(
         .where(Notification.created_at >= _since(days))
         .order_by(desc(Notification.created_at))
     )
+    if part_number:
+        q = q.where(MonitorTask.part_number == part_number)
+    if store:
+        q = q.where(Notification.body.like(f"%{store}%"))
+    q = q.limit(limit)
     out = []
     for n, t in db.execute(q).all():
         pn = t.part_number if t else ""
-        if part_number and pn != part_number:
-            continue
-        if store and store not in (n.body or ""):
-            continue
         out.append(
             {
                 "id": n.id,

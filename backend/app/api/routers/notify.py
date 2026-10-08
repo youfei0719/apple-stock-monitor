@@ -29,6 +29,17 @@ CHANNEL_META: list[tuple[str, str]] = [
 ]
 
 
+def _mask_target(channel: str, target: str) -> str:
+    """R4-P2：webhook URL / bark key 只返回掩码，不返回明文。
+
+    email 是用户自己的邮箱，保留明文供展示；其他通道的 target 可能是
+    敏感密钥/URL，统一掩码。
+    """
+    if channel in ("bark", "wecom", "dingtalk", "feishu") and target:
+        return (target[:6] + "***") if len(target) > 6 else "***"
+    return target
+
+
 @router.post("/notify/test")
 def notify_test(
     data: NotifyTestIn,
@@ -100,25 +111,47 @@ def channels_health(
         if ch.get("email"):
             task_channels.add("email")
 
-    rows_30d = (
+    # R4-P2：不再把 30 天全量行拉进 Python。7d 成功率走 SQL 聚合，
+    # 30d 活跃通道走 distinct（截断 50 个），last_failure 按通道各查 1 行。
+    agg = db.execute(
+        select(Notification.channel, Notification.status, func.count())
+        .where(
+            Notification.user_id == user.id,
+            Notification.created_at >= since_7d,
+            Notification.status.in_(["sent", "failed"]),
+        )
+        .group_by(Notification.channel, Notification.status)
+    ).all()
+    counts_7d = {(ch, st): c for ch, st, c in agg}
+    recent_channels = set(
         db.execute(
-            select(Notification).where(
+            select(func.distinct(Notification.channel))
+            .where(
                 Notification.user_id == user.id,
                 Notification.created_at >= since_30d,
             )
+            .limit(50)
         )
         .scalars()
         .all()
     )
-    recent_channels = {n.channel for n in rows_30d}
 
     channels = []
     for key, name in CHANNEL_META:
-        recs_7d = [n for n in rows_30d if n.channel == key and n.created_at >= since_7d]
-        sent = sum(1 for n in recs_7d if n.status == "sent")
-        failed = sum(1 for n in recs_7d if n.status == "failed")
-        fails = [n for n in recs_7d if n.status == "failed"]
-        last_fail = max(fails, key=lambda n: n.created_at) if fails else None
+        sent = counts_7d.get((key, "sent"), 0)
+        failed = counts_7d.get((key, "failed"), 0)
+        last_fail = None
+        if failed:
+            last_fail = db.execute(
+                select(Notification)
+                .where(
+                    Notification.user_id == user.id,
+                    Notification.channel == key,
+                    Notification.status == "failed",
+                )
+                .order_by(desc(Notification.created_at))
+                .limit(1)
+            ).scalar_one_or_none()
         channels.append(
             {
                 "key": key,
@@ -155,7 +188,8 @@ def list_notifications(
             "task_id": n.task_id,
             "kind": n.kind,
             "channel": n.channel,
-            "target": n.target,
+            # R4-P2：webhook URL / bark key 脱敏，只返回掩码
+            "target": _mask_target(n.channel, n.target or ""),
             "title": n.title,
             "body": n.body,
             "link": n.link,

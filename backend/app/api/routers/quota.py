@@ -31,6 +31,8 @@ def get_quota(user: User = Depends(get_current_user), db: Session = Depends(get_
     return {
         "tier": tier,
         "tier_expires_at": user.tier_expires_at.isoformat() + "Z" if user.tier_expires_at else None,
+        # R4-P1-D1：pending_tier 对用户可见（降级预约到期切换），到期前展示"到期后切换"
+        "pending_tier": user.pending_tier,
         # 配额周期锚点（ISO 时间，前端按北京时间展示）；period 为锚点日期
         "quota_reset_at": user.quota_reset_at.isoformat() + "Z" if user.quota_reset_at else None,
         "push_used": usage.push_count if usage else 0,

@@ -14,6 +14,7 @@ router = APIRouter(prefix="/analytics", tags=["analytics"])
 
 
 def _event_rows(db: Session, user_id: int, days: int):
+    # R4-P2：加界（ranking days≤30 / overview days≤90 全量进内存）
     since = datetime.utcnow() - timedelta(days=days)
     return db.execute(
         select(Notification, MonitorTask)
@@ -22,6 +23,7 @@ def _event_rows(db: Session, user_id: int, days: int):
         .where(Notification.kind == "stock_alert")
         .where(Notification.status == "sent")
         .where(Notification.created_at >= since)
+        .limit(5000)
     ).all()
 
 

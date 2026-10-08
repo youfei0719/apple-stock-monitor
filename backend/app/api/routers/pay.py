@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import desc, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -103,6 +104,23 @@ def apply_tier_grant(db: Session, user: User, tier_to: str) -> str:
     return "granted"
 
 
+def _add_payment_atomic(db: Session, payment: Payment) -> Payment | None:
+    """幂等原子落库（R4-P2）。
+
+    重复回调先查 select 再插 insert 的竞态窗口里，并发第二个请求会撞
+    order_id 唯一约束：捕获 IntegrityError → 回滚 → 返回 None，
+    调用方按 duplicate 处理，不再 500。
+    """
+    db.add(payment)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        log.warning("afdian_payment_race_duplicate", order_id=payment.order_id)
+        return None
+    return payment
+
+
 def verify_afdian_signature(raw_body: bytes, signature: str | None) -> bool:
     """验签（fail-closed）：无 token / 无签名 / 不符一律返回 False。"""
     token = (settings.AFDIAN_TOKEN or "").strip()
@@ -157,8 +175,41 @@ async def afdian_webhook(request: Request, db: Session = Depends(get_db)):
 
     tier_to = _tier_by_plan().get(plan_id)
     if not tier_to:
+        # R4-P1-D5：未知 plan_id 不再直接 400（爱发电会重试，永远 400 成黑洞，
+        # 已扣款订单在 Payment 表和后台都看不见）。落库 status='unknown_plan'
+        # 返回 200，计入待处理（admin 待处理视图可见、可关闭）。
         log.warning("afdian_unknown_plan", plan_id=plan_id, order_id=order_id)
-        raise APIError(400, f"未知 plan_id: {plan_id}", "unknown_plan")
+        user = _resolve_user(db, remark, user_id_raw)
+        row = _add_payment_atomic(
+            db,
+            Payment(
+                user_id=user.id if user else None,
+                order_id=order_id,
+                plan=plan_id,
+                amount_cny=amount_fen / 100,
+                tier_from=effective_tier(user) if user else "",
+                tier_to="",
+                status="unknown_plan",
+                raw_payload=payload,
+            ),
+        )
+        if row is None:
+            return {"ok": True, "duplicate": True}
+        pending = _bump_amount_mismatch_pending(db)
+        db.commit()
+        log.error(
+            "afdian_unknown_plan_recorded",
+            order_id=order_id,
+            user_id=user.id if user else None,
+            pending_count=pending,
+        )
+        return {
+            "ok": True,
+            "status": "unknown_plan",
+            "user_id": user.id if user else None,
+            "pending_count": pending,
+            "detail": "未知 plan_id，已记录待人工处理（admin 待处理视图）",
+        }
 
     # 金额与档位价比对：不符不再直接 400 拒绝（断裂-15）。
     # 爱发电已扣款（不退），拒绝会导致"钱货两空"黑洞；改为落库待人工处理。
@@ -173,7 +224,8 @@ async def afdian_webhook(request: Request, db: Session = Depends(get_db)):
             expected_fen=expected_fen,
         )
         user = _resolve_user(db, remark, user_id_raw)
-        db.add(
+        row = _add_payment_atomic(
+            db,
             Payment(
                 user_id=user.id if user else None,
                 order_id=order_id,
@@ -183,8 +235,10 @@ async def afdian_webhook(request: Request, db: Session = Depends(get_db)):
                 tier_to=tier_to,
                 status="amount_mismatch",
                 raw_payload=payload,
-            )
+            ),
         )
+        if row is None:
+            return {"ok": True, "duplicate": True}
         pending = _bump_amount_mismatch_pending(db)
         db.commit()
         log.error(
@@ -216,7 +270,8 @@ async def afdian_webhook(request: Request, db: Session = Depends(get_db)):
                 pending_tier=tier_to,
             )
 
-    db.add(
+    row = _add_payment_atomic(
+        db,
         Payment(
             user_id=user.id if user else None,
             order_id=order_id,
@@ -226,8 +281,10 @@ async def afdian_webhook(request: Request, db: Session = Depends(get_db)):
             tier_to=tier_to,
             status="paid",
             raw_payload=payload,
-        )
+        ),
     )
+    if row is None:
+        return {"ok": True, "duplicate": True}
     db.commit()
     log.info("afdian_paid", order_id=order_id, tier_to=tier_to, user_id=user.id if user else None)
     return {"ok": True, "tier": tier_to, "user_id": user.id if user else None}

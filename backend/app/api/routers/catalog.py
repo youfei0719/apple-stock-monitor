@@ -159,6 +159,11 @@ def list_stores(
     db: Session = Depends(get_db),
     user: User | None = Depends(get_optional_user),
 ):
+    """R4-P0-5：refresh=1 成功时也返回纯数组（与 refresh=0 同形）。
+
+    刷新是在线打 Apple 接口的重操作，走后台异步任务；本请求立即返回当前
+    目录数组，前端轮询/稍后重拉即可拿到新数据。
+    """
     _seed_if_empty(db)
     if refresh == 1:
         # 刷新是在线打 Apple 接口的重操作：仅管理员可触发，且走后台异步任务
@@ -169,12 +174,12 @@ def list_stores(
             raise APIError(429, "门店目录刷新限流：每小时 1 次", "refresh_limited")
         current = get_config(db, STORE_CATALOG_KEY, {}).get("stores", [])
         if _refresh_running:
-            return {"refreshing": True, "stores": current}
+            return current
         # 先占位写刷新时间，防并发重复触发
         set_config(db, REFRESH_AT_KEY, {"at": time.time()})
         background_tasks.add_task(_do_refresh_stores)
         log.info("catalog_refresh_enqueued", admin_id=user.id)
-        return {"refreshing": True, "stores": current}
+        return current
     stores = get_config(db, STORE_CATALOG_KEY, {}).get("stores", [])
     return stores
 
@@ -194,8 +199,3 @@ def list_anchors(db: Session = Depends(get_db)):
     """城市锚点列表（调试/管理用）。"""
     _seed_if_empty(db)
     return get_config(db, CITY_ANCHORS_KEY, {}).get("anchors", [])
-
-
-def seed_catalog(db: Session) -> None:
-    """供 alembic/启动时调用的种子写入（幂等）。"""
-    _seed_if_empty(db)

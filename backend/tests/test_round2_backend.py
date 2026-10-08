@@ -271,10 +271,12 @@ def test_apply_budgets_per_user_limit_skips(db, eng):
     kept = eng._apply_budgets(db, [t, t2], __import__("time").time())
     assert t in kept  # free 上限 10，est=4 通过
     assert t2 not in kept  # trial 上限 3，est=4 被跳过
+    # R4-P0-4：预算跳过只记内存计数 + 日志，不再写 notifications 表
+    assert eng.budget_skips_total == 1
     skipped = db.execute(
         select(Notification).where(Notification.error == "per_user_rate_limit")
     ).scalars().all()
-    assert len(skipped) == 1
+    assert len(skipped) == 0
 
 
 def test_peak_mode_flag(db, eng):

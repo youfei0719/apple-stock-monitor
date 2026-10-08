@@ -8,6 +8,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -32,7 +33,7 @@ class User(Base):
     tier_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # 降级到期生效：用户主动降级时记在这里，到期 sweep 再切换 tier
     pending_tier: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    # 购买日+30天滚动配额周期锚点（北京时间口径）；免费用户按注册日
+    # 购买日+30天滚动配额周期锚点（R4-P2：实际为 UTC 锚点，展示时转北京时间）
     quota_reset_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     email_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -64,6 +65,8 @@ class Session(Base):
 
 class MonitorTask(Base):
     __tablename__ = "monitor_tasks"
+    # R4-P2：engine._due_tasks 每 5 秒按 paused/expires_at 粗筛，加复合索引
+    __table_args__ = (Index("ix_monitor_tasks_paused_expires", "paused", "expires_at"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int | None] = mapped_column(
@@ -162,7 +165,7 @@ class QuotaUsage(Base):
     user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
     )
-    period: Mapped[str] = mapped_column(String(7), nullable=False)  # YYYY-MM
+    period: Mapped[str] = mapped_column(String(10), nullable=False)  # YYYY-MM-DD（配额锚点日期）
     push_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=_utcnow, onupdate=_utcnow, nullable=False

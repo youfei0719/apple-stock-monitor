@@ -62,10 +62,14 @@ class ProviderResult:
 
 
 def classify(pickup_display: str | None, store_pick_eligible: bool | None) -> str:
-    """统一三态判定。"""
+    """统一三态判定。
+
+    R4-P2：缺字段判 unknown 而非 unavailable（此前 pickup_display="available"
+    但 store_pick_eligible 缺失时会被判 unavailable，误导为"无货"）。
+    """
     if pickup_display == "available" and store_pick_eligible:
         return "available"
-    if pickup_display in ("available", "unavailable"):
+    if pickup_display == "unavailable":
         return "unavailable"
     return "unknown"
 
