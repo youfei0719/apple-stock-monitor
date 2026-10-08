@@ -6,10 +6,6 @@
  * 新管理员首次需走 `POST /api/auth/totp/setup` 绑 TOTP 再 verify。
  * 前端不存任何密钥 / token，敏感操作（改级）在页面层做二次确认。
  */
-/** R9：mock 模式已下线（USE_MOCK 恒为 false），所有 mock 分支与 mock 数据已删除。
- * 该常量仅保留导出，供各页的 "(mock 数据)"类展示兜底判断使用。 */
-export const USE_MOCK = false
-
 const API_BASE = import.meta.env.VITE_API_BASE ?? '' // 开发: http://localhost:8000；生产: 同源 ''
 
 export type Tier = 'trial' | 'free' | 'standard' | 'pro' // 对齐后端 VALID_TIERS
@@ -20,6 +16,13 @@ export interface OverviewKpi {
   today_pushes: number
   revenue_cny: number
   active_tasks: number
+  /**
+   * R11-P1-2：有效档位分布（后端按 effective_tier 口径 SQL case 统计；
+   * 可选链防御旧后端，缺失时前端回退 tier_distribution 自算）。
+   */
+  effective_tier_distribution?: Record<string, number>
+  /** R11-P1-2：有效付费会员数（standard + pro 有效档位；可选链防御旧后端）。 */
+  paid_members?: number
   /**
    * 待处理支付（后端 GET /api/admin/overview 已返回；unclaimed=未认领
    * （user_id 为空且 status∈{paid,amount_mismatch,unknown_plan}），
@@ -213,17 +216,19 @@ export async function getTraffic(days = 30): Promise<TrafficPoint[]> {
 }
 
 /** 会员列表
- * R10-I5：后端 GET /api/admin/users 只支持 limit（默认 50，最大 200），无 offset——
- * 真分页要等后端加 offset 参数；当前传 limit=200 + 截断提示兜底。 */
+ * R11-P1-1：后端 GET /api/admin/users 支持 limit（默认 50，最大 200）+ offset
+ * 真分页（R10 后端已补）；响应仍为裸 list，members 页按"返回条数 < limit"判末页。 */
 export async function getUsers(
   q = '',
   tier: Tier | '' = '',
   limit = 200,
+  offset = 0,
 ): Promise<AdminUser[]> {
   const params = new URLSearchParams()
   if (q) params.set('q', q)
   if (tier) params.set('tier', tier)
   params.set('limit', String(limit))
+  params.set('offset', String(offset))
   return req(`/api/admin/users?${params}`)
 }
 

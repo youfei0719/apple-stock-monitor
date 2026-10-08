@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { api, type ChannelHealth, type Payment, type Plan, type Quota } from '../lib/api';
+import { api, fmtCny, type ChannelHealth, type Payment, type Plan, type Quota } from '../lib/api';
 import { useApp } from '../components/App';
 import { NotificationHistory } from '../components/NotifyChannels';
 import { Card, EmptyState, ErrorState, LoadingState, PageHeader, PrimaryButton } from '../components/ui';
@@ -588,7 +588,7 @@ export default function Me() {
                       {p.order_id}
                     </p>
                   </div>
-                  <span className="mono text-sm">¥{p.amount_cny}</span>
+                  <span className="mono text-sm">{fmtCny(p.amount_cny)}</span>
                 </Card>
               ))}
             </div>

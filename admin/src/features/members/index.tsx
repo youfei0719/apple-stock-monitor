@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Search } from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
@@ -45,11 +45,13 @@ import {
   updateUserTier,
   verifyUserEmail,
   isAuthExpired,
-  USERS_QUERY_LIMIT,
   type AdminUser,
   type Tier,
   TIER_LABEL,
 } from '@/lib/admin-api'
+
+/** R11-P1-1：会员列表每页条数（后端 limit≤200，真分页走 offset） */
+const MEMBERS_PAGE_SIZE = 50
 
 const TIER_BADGE: Record<Tier, string> = {
   trial: 'bg-[#ff9f0a]/10 text-[#b26a00]',
@@ -123,12 +125,12 @@ export function Members() {
     return () => clearTimeout(t)
   }, [q])
 
-  const load = (query: string, t: 'all' | Tier) => {
+  const load = (query: string, t: 'all' | Tier, p: number) => {
     setUsers(null)
     setLoadError(null)
-    // R10-I5：后端 /api/admin/users 无 offset 参数（只支持 limit≤200），真分页等后端补；
-    // 先传 limit=200 + 截断提示，避免超 50 人静默截断
-    getUsers(query, t === 'all' ? '' : t, USERS_QUERY_LIMIT)
+    // R11-P1-1：后端 /api/admin/users 支持 offset 真分页（R10 后端已补）；
+    // 按 offset=p*PAGE_SIZE 拉取，响应为裸 list
+    getUsers(query, t === 'all' ? '' : t, MEMBERS_PAGE_SIZE, p * MEMBERS_PAGE_SIZE)
       .then((u) => setUsers(u))
       // R8-I-13：失败不伪装成空数组，"没有符合条件的会员"只在真正无数据时出现；
       // R10-P2-8：会话过期已跳转登录页，静默吞掉
@@ -138,10 +140,24 @@ export function Members() {
       })
   }
 
+  const [page, setPage] = useState(0)
+  // R11-P1-1：搜索/档位变化 → 回第一页；翻页 → 拉对应页。
+  // 单 effect 判 filterKey 变化，避免"搜索后先按旧 page 请求一次"的重复请求
+  const filterKey = `${debouncedQ}|${tier}`
+  const prevFilterKey = useRef(filterKey)
   useEffect(() => {
-    load(debouncedQ, tier)
+    if (prevFilterKey.current !== filterKey) {
+      prevFilterKey.current = filterKey
+      setPage(0)
+      load(debouncedQ, tier, 0)
+    } else {
+      load(debouncedQ, tier, page)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedQ, tier])
+  }, [filterKey, page])
+
+  // 返回条数 < pageSize 即末页（后端响应为裸 list，无总数；R10 后端注释同口径）
+  const hasMore = users !== null && users.length >= MEMBERS_PAGE_SIZE
 
   const rows = useMemo(() => users ?? [], [users])
 
@@ -228,13 +244,7 @@ export function Members() {
                 ? loadError
                   ? '加载失败'
                   : '加载中…'
-                : `共 ${users.length} 位会员`}
-              {/* R10-I5：单次查询上限 200 条，达到上限时提示截断（后端暂无 offset，真分页待补） */}
-              {users !== null && users.length >= USERS_QUERY_LIMIT && (
-                <span className='text-[#b26a00]'>
-                  {' '}已达单次查询上限 {USERS_QUERY_LIMIT} 条，可能有更多会员未显示
-                </span>
-              )}
+                : `共 ${users.length} 位会员（第 ${page + 1} 页）`}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -243,7 +253,7 @@ export function Members() {
                 <div className='py-12 text-center'>
                   <p className='text-sm text-[#d70015]'>加载失败：{loadError}</p>
                   <button
-                    onClick={() => load(debouncedQ, tier)}
+                    onClick={() => load(debouncedQ, tier, page)}
                     className='mt-3 rounded-2xl bg-muted px-4 py-2 text-sm font-medium hover:text-foreground'
                   >
                     重试
@@ -339,6 +349,28 @@ export function Members() {
                   )}
                 </TableBody>
               </Table>
+            )}
+            {/* R11-P1-1：真分页器——返回条数 < pageSize 即末页（后端响应为裸 list，无总数） */}
+            {users !== null && (
+              <div className='mt-4 flex items-center justify-between'>
+                <span className='text-sm text-muted-foreground'>第 {page + 1} 页</span>
+                <div className='flex gap-2'>
+                  <button
+                    disabled={page === 0}
+                    onClick={() => setPage((p) => p - 1)}
+                    className='rounded-2xl border border-border px-4 py-1.5 text-sm transition hover:bg-muted disabled:opacity-40 disabled:hover:bg-transparent'
+                  >
+                    上一页
+                  </button>
+                  <button
+                    disabled={!hasMore}
+                    onClick={() => setPage((p) => p + 1)}
+                    className='rounded-2xl border border-border px-4 py-1.5 text-sm transition hover:bg-muted disabled:opacity-40 disabled:hover:bg-transparent'
+                  >
+                    下一页
+                  </button>
+                </div>
+              </div>
             )}
           </CardContent>
         </Card>

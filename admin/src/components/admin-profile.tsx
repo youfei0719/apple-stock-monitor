@@ -12,7 +12,6 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { ConfirmDialog } from '@/components/confirm-dialog'
-import { USE_MOCK } from '@/lib/admin-api'
 import { invalidateAdminGuardCache } from '@/routes/_authenticated/route'
 
 /** 后台管理员头像菜单：退出登录（前端不存任何密钥） */
@@ -22,15 +21,9 @@ export function AdminProfile() {
 
   async function handleSignOut() {
     // R8-U-12：退出后清除路由守卫缓存，避免旧登录态被复用
+    // R11-P2-6：mock 分支已删——只走真实登出（后端清除 HttpOnly 会话 Cookie）
     invalidateAdminGuardCache()
-    if (USE_MOCK) {
-      // mock：只清本地登录标记（不存 token/密钥）
-      sessionStorage.removeItem('admin-authed')
-    } else {
-      // 真实登出：POST /api/auth/logout 已实现，后端清除 HttpOnly 会话 Cookie（R8：旧 TODO 已过期）
-      await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => {})
-      sessionStorage.removeItem('admin-authed')
-    }
+    await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => {})
     navigate({ to: '/sign-in', replace: true })
   }
 

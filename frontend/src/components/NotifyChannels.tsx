@@ -298,19 +298,28 @@ export default function NotifyChannels({
           <TestResult r={results.bark} />
         </div>
 
-        {/* 邮箱 */}
+        {/* 邮箱——R11-P1-3：trial 档后端 _require_channels 对 email 直接 400，
+            与 bark/webhook 禁用对称：trial 时禁用输入框并注明仅支持站内 */}
         <div>
           <div className="flex gap-2">
             <input
               value={value.email ?? ''}
               onChange={(e) => set({ email: e.target.value })}
-              placeholder="邮箱（推送渠道，可选）"
+              placeholder={
+                tier === 'trial' ? '邮箱（体验版仅支持站内通知，暂不可填）' : '邮箱（推送渠道，可选）'
+              }
+              disabled={tier === 'trial'}
+              title={
+                tier === 'trial'
+                  ? '体验版仅支持站内通知（在 App 内查看），填写后提交会被拒绝'
+                  : undefined
+              }
               type="email"
-              className={inputCls}
+              className={`${inputCls}${tier === 'trial' ? ' opacity-60' : ''}`}
             />
             <TestButton
               busy={busy === 'email'}
-              disabled={anonymous}
+              disabled={anonymous || tier === 'trial'}
               onClick={() => run('email', 'email', value.email ?? '')}
             />
           </div>

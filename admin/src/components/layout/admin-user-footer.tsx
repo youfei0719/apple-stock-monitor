@@ -5,7 +5,6 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { SidebarMenu, SidebarMenuItem } from '@/components/ui/sidebar'
 import { ConfirmDialog } from '@/components/confirm-dialog'
-import { USE_MOCK } from '@/lib/admin-api'
 import { invalidateAdminGuardCache } from '@/routes/_authenticated/route'
 
 /** 侧边栏底部：管理员身份 + 退出登录（前端不存任何密钥） */
@@ -16,14 +15,12 @@ export function AdminUserFooter() {
   async function signOut() {
     // R9-D3：侧边栏退出同样清除路由守卫缓存（与 AdminProfile 的退出路径一致），
     // 否则 guardPassed 仍为 true，守卫放行旧会话，各接口 401 卡"加载失败"而不跳登录页
+    // R11-P2-6：mock 模式已彻底下线，无用分支/sessionStorage 标记一并删除
     invalidateAdminGuardCache()
-    sessionStorage.removeItem('admin-authed')
-    if (!USE_MOCK) {
-      await fetch('/api/auth/logout', {
-        method: 'POST',
-        credentials: 'include',
-      }).catch(() => {})
-    }
+    await fetch('/api/auth/logout', {
+      method: 'POST',
+      credentials: 'include',
+    }).catch(() => {})
     navigate({ to: '/sign-in', replace: true })
   }
 

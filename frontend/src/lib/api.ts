@@ -511,3 +511,10 @@ export const api = {
   plans: () => req<Plan[]>('/plans'),
   payments: () => req<Payment[]>('/payments'),
 };
+
+/** R11-P2-5：金额格式化统一——整数千分位（¥19），小数保留两位（¥19.50）。
+ * 后端 amount_cny 是 Float，直接渲染会出 ¥19.0。 */
+export function fmtCny(v: number | null | undefined): string {
+  if (v == null) return '—';
+  return `¥${Number.isInteger(v) ? v.toLocaleString('zh-CN') : v.toFixed(2)}`;
+}

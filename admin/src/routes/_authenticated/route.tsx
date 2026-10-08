@@ -1,11 +1,10 @@
 import { createFileRoute, redirect } from '@tanstack/react-router'
 import { AuthenticatedLayout } from '@/components/layout/authenticated-layout'
-import { USE_MOCK } from '@/lib/admin-api'
 
 /**
  * 后台路由守卫：未登录一律去 /sign-in。
- * mock 模式用 sessionStorage 标记；真实模式用 HttpOnly Cookie 会话，
- * 以管理接口校验（401/403 → 登录页）。前端不存任何密钥。
+ * 真实模式用 HttpOnly Cookie 会话，以管理接口校验（401/403 → 登录页）。前端不存任何密钥。
+ * R11-P2-6：mock 模式彻底下线（USE_MOCK 常量及 sessionStorage admin-authed 标记一并删除）
  *
  * TOTP 分流：会话有效但未过 TOTP 二次验证（后端 code=totp_required）时，
  * 未绑定 TOTP 的新管理员 → /totp-setup 扫码绑定；
@@ -27,10 +26,6 @@ export const Route = createFileRoute('/_authenticated')({
         to: '/sign-in',
         search: { redirect: location.href, reason },
       })
-    }
-    if (USE_MOCK) {
-      if (sessionStorage.getItem('admin-authed') !== '1') toSignIn()
-      return
     }
     // R8-U-12：同会话内守卫已通过，直接放行，跳过重复的 /api/admin/overview 请求
     if (guardPassed) return

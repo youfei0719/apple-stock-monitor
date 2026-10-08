@@ -29,7 +29,6 @@ import {
   getMe,
   totpVerify,
   AdminApiError,
-  USE_MOCK,
 } from '@/lib/admin-api'
 
 const step1Schema = z.object({
@@ -95,9 +94,8 @@ export function SignIn() {
   }
 
   function loginDone() {
-    // 登录成功：mock 模式记一个本地标记；真实模式靠 HttpOnly Cookie。
-    // 前端不存任何 token / 密钥。
-    sessionStorage.setItem('admin-authed', '1')
+    // 登录成功：会话靠 HttpOnly Cookie，前端不存任何 token / 密钥。
+    // R11-P2-6：mock 模式已下线，sessionStorage 本地标记一并删除
     setFailCount(0)
     toast.success('登录成功')
     navigate({ to: redirect || '/', replace: true })
@@ -115,7 +113,6 @@ export function SignIn() {
       // 管理员会话需要 TOTP 二次验证：已绑定 → 第 2 步输码；未绑定 → 引导绑定
       const me = await getMe()
       if (!me.totp_enabled) {
-        sessionStorage.setItem('admin-authed', '1')
         toast.info('首次登录：请先绑定 TOTP 动态验证码')
         navigate({ to: '/totp-setup', replace: true })
         return
@@ -155,7 +152,6 @@ export function SignIn() {
             {step === 1
               ? '第 1 步：邮箱 + 密码'
               : '第 2 步：TOTP 动态验证码'}
-            {USE_MOCK && '（mock：任意邮箱密码可登录；验证码填 000000 可模拟失败）'}
           </CardDescription>
         </CardHeader>
         <CardContent>

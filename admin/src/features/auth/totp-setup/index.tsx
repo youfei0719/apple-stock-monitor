@@ -77,7 +77,6 @@ export function TotpSetup() {
     try {
       await totpVerify(data.code)
       toast.success('TOTP 绑定成功，已完成二次验证')
-      sessionStorage.setItem('admin-authed', '1')
       navigate({ to: '/', replace: true })
     } catch (e) {
       // R10-P2-8：会话过期已跳转登录页，静默吞掉

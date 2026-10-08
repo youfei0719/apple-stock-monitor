@@ -159,18 +159,20 @@ function TaskCard({
         {task.paused && !expired && (
           <p className="mt-1.5 text-[11px] text-faint">暂停仍占用任务名额</p>
         )}
-        {trialExhausted && (
-          <p className="mt-1.5 text-[11px] text-bad font-medium">
-            体验推送已用完，去
-            {/* R6-I11：匿名用户文案"去注册"，已登录用户文案"去升级"
-                （被 admin 授予 trial 的已注册用户也会命中横幅） */}
-            <Link to={anonymous ? '/login' : '/me'} className="underline">
-              {anonymous ? '注册' : '升级'}
-            </Link>
-            继续监控
-          </p>
-        )}
       </Link>
+      {/* R11-P1-4：Link 嵌套 Link 是非法 HTML（内层点击可能冒泡触发外层导航）——
+          trialExhausted 提示移到外层 Link 之外，仍在卡片内 */}
+      {trialExhausted && (
+        <p className="mt-1.5 text-[11px] text-bad font-medium">
+          体验推送已用完，去
+          {/* R6-I11：匿名用户文案"去注册"，已登录用户文案"去升级"
+              （被 admin 授予 trial 的已注册用户也会命中横幅） */}
+          <Link to={anonymous ? '/login' : '/me'} className="underline">
+            {anonymous ? '注册' : '升级'}
+          </Link>
+          继续监控
+        </p>
+      )}
       <div className="mt-3 pt-3 border-t border-line">
         {/* R8-I-12：3 天内到期也渲染续期按钮，与详情页规则（expired || days<=3）一致；
             暂停按钮保留在下方第二排，不挤占 */}

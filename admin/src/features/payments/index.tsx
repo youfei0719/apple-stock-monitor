@@ -45,6 +45,7 @@ import {
   TIER_LABEL,
   isAuthExpired,
 } from '@/lib/admin-api'
+import { fmtCny } from '@/lib/utils'
 
 const STATUS_LABEL: Record<string, string> = {
   paid: '已到账',
@@ -234,7 +235,7 @@ export function Payments() {
           <Card className='rounded-3xl px-5 py-3'>
             <div className='text-xs text-muted-foreground'>成功到账合计（全站）</div>
             <div className='font-mono text-2xl font-semibold'>
-              {total === null ? '—' : `¥${total.toLocaleString()}`}
+              {total === null ? '—' : fmtCny(total)}
             </div>
           </Card>
         </div>
@@ -308,7 +309,7 @@ export function Payments() {
                         <TableCell
                           className={`font-mono font-semibold ${mismatch ? 'text-[#d70015]' : ''}`}
                         >
-                          ¥{r.amount_cny}
+                          {fmtCny(r.amount_cny)}
                         </TableCell>
                         <TableCell className='text-[13px]'>{fmtPlan(r)}</TableCell>
                         <TableCell>{fmtTierChange(r)}</TableCell>
@@ -397,7 +398,7 @@ export function Payments() {
             <AlertDialogTitle>认领订单</AlertDialogTitle>
             <AlertDialogDescription>
               将订单 <span className='font-mono text-foreground'>{claiming?.order_id}</span>
-              （¥{claiming?.amount_cny}
+              （{fmtCny(claiming?.amount_cny)}
               {claiming?.remark ? `，备注「${claiming.remark}」` : ''}）
               绑定到指定用户。该操作会写入管理员审计日志。
             </AlertDialogDescription>
@@ -429,7 +430,7 @@ export function Payments() {
             <AlertDialogTitle>确认标记退款？</AlertDialogTitle>
             <AlertDialogDescription>
               将订单 <span className='font-mono text-foreground'>{refunding?.order_id}</span>
-              （¥{refunding?.amount_cny}，{refunding && (STATUS_LABEL[refunding.status] ?? refunding.status)}）
+              （{fmtCny(refunding?.amount_cny)}，{refunding && (STATUS_LABEL[refunding.status] ?? refunding.status)}）
               标记为退款。该操作会：
               <br />
               1. 把订单状态置为「已退款」（收入统计只计已到账，自动排除）；
@@ -487,7 +488,7 @@ export function Payments() {
             <AlertDialogTitle>确认关闭该订单？</AlertDialogTitle>
             <AlertDialogDescription>
               将订单 <span className='font-mono text-foreground'>{closing?.order_id}</span>
-              （¥{closing?.amount_cny}，{closing && (STATUS_LABEL[closing.status] ?? closing.status)}）
+              （{fmtCny(closing?.amount_cny)}，{closing && (STATUS_LABEL[closing.status] ?? closing.status)}）
               关闭（不处理）。状态将置为「已处理」，从待处理队列移除，不绑定用户、不开通任何档位。
               该操作会写入管理员审计日志。
             </AlertDialogDescription>

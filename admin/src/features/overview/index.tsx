@@ -93,12 +93,15 @@ export function Overview() {
   }, [])
 
   const loading = data === null && loadError === null
-  // 后端 tier_distribution 是 {tier: count} 对象，键来自 DB（trial/free/standard/pro）
-  const dist = data?.tier_distribution ?? {}
+  // R11-P1-2：优先用后端有效档位统计（effective_tier_distribution /
+  // paid_members，按 effective_tier 口径）；可选链防御旧后端，缺失时回退
+  // 旧口径（tier_distribution 自算）保证展示不空白
+  const dist = data?.effective_tier_distribution ?? data?.tier_distribution ?? {}
   const total = Object.values(dist).reduce((s, c) => s + c, 0)
-  const paid = Object.entries(dist)
+  const paidFallback = Object.entries(dist)
     .filter(([t]) => !NON_PAID_TIERS.has(t))
     .reduce((s, [, c]) => s + c, 0)
+  const paid = data?.paid_members ?? paidFallback
   // 待处理支付 KPI（P2）：后端 /api/admin/overview 返回；可选链防御旧后端
   // R7 口径说明（对齐后端 admin.py overview）：unclaimed = user_id 为空 且
   // status ∈ {paid, amount_mismatch, unknown_plan} 的订单数；
@@ -152,11 +155,9 @@ export function Overview() {
           <KpiCard
             title='付费会员'
             value={data ? paid.toLocaleString() : '—'}
-            // R10-I6：tier_distribution 是 DB 原始 tier 口径——到期后要等 sweep 才降为 free，
-            // 窗口期内已过期用户仍被计入（与全库 effective_tier 口径矛盾）。
-            // 后端暂无按有效档位统计的接口（admin.py /overview 未返回），真修法需后端加接口；
-            // 当前先诚实标注"含已到期未降档"，避免把过期用户当付费会员数
-            sub='标准 + Pro 合计（不含体验/免费；含已到期未降档）'
+            // R11-P1-2：直接用后端 paid_members（有效档位口径，过期未降档不计入）；
+            // R10-I6 旧注释（"含已到期未降档"）作废
+            sub='标准 + Pro 合计（按有效档位统计，不含体验/免费）'
             icon={Activity}
             loading={loading}
           />
@@ -205,8 +206,9 @@ export function Overview() {
         <Card className='mt-4 rounded-3xl'>
           <CardHeader>
             <CardTitle>会员分布</CardTitle>
-            {/* R10-I6：同付费会员 KPI——DB 原始 tier 口径，含已到期未降档 */}
-            <CardDescription>按 tier 划分的用户构成（含已到期未降档）</CardDescription>
+            {/* R11-P1-2：有效档位口径（后端 effective_tier_distribution），
+                R10-I6 旧"DB 原始 tier / 含已到期未降档"注释作废 */}
+            <CardDescription>按有效档位划分的用户构成</CardDescription>
           </CardHeader>
           <CardContent>
             {loading ? (
