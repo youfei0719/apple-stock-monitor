@@ -1,8 +1,9 @@
 """Pydantic schemas（请求/响应）。"""
 
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 # ---------- auth ----------
@@ -47,6 +48,34 @@ class StoreIn(BaseModel):
     city: str = ""
 
 
+class WebhookIn(BaseModel):
+    """单个 webhook 渠道配置。"""
+
+    url: str = Field(min_length=1, max_length=2048)
+    platform: Literal["wecom", "dingtalk", "feishu"]
+
+    @field_validator("url")
+    @classmethod
+    def _must_be_http_url(cls, v: str) -> str:
+        if not v.startswith(("http://", "https://")):
+            raise ValueError("webhook url 必须以 http:// 或 https:// 开头")
+        return v
+
+
+class ChannelsIn(BaseModel):
+    """任务通知渠道配置（与 tiers.py 的 channels 键名对齐）。
+
+    未知键一律拒绝（extra="forbid"），避免前后端类型打架导致运行时
+    AttributeError（不自洽-12）。非法结构由 FastAPI 返回 422。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    bark_key: str | None = Field(default=None, max_length=256)
+    email: str | None = Field(default=None, max_length=255)
+    webhooks: list[WebhookIn] | None = None
+
+
 class TaskCreateIn(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     group: str = ""
@@ -55,11 +84,14 @@ class TaskCreateIn(BaseModel):
     product_name: str = ""
     color: str = ""
     capacity: str = ""
-    stores: list[StoreIn] = Field(min_length=1)
+    stores: list[StoreIn] = Field(min_length=1, max_length=20)
     mode: str = "instant"
-    repeat_interval_sec: int | None = None
-    channels: dict = Field(default_factory=dict)
+    repeat_interval_sec: int | None = Field(default=None, ge=3600)
+    channels: ChannelsIn = Field(default_factory=ChannelsIn)
     expires_at: datetime | None = None
+    # 僵尸任务自动结束开关（断裂-11）：连续 90 天无货自动暂停。DB 列需 models.py
+    # 加 auto_retire 列（另见 migration）；列不存在时仅接受默认值 True。
+    auto_retire: bool = True
 
 
 class TaskBatchIn(BaseModel):
@@ -68,7 +100,7 @@ class TaskBatchIn(BaseModel):
     name_template: str = "{part_number} × {store_number}"
     category: str = "iphone"
     mode: str = "instant"
-    channels: dict = Field(default_factory=dict)
+    channels: ChannelsIn = Field(default_factory=ChannelsIn)
 
 
 class TaskPatchIn(BaseModel):
@@ -76,9 +108,10 @@ class TaskPatchIn(BaseModel):
     group: str | None = None
     paused: bool | None = None
     expires_at: datetime | None = None
-    channels: dict | None = None
+    channels: ChannelsIn | None = None
     mode: str | None = None
-    repeat_interval_sec: int | None = None
+    repeat_interval_sec: int | None = Field(default=None, ge=3600)
+    auto_retire: bool | None = None
 
 
 class TaskOut(BaseModel):
@@ -96,6 +129,7 @@ class TaskOut(BaseModel):
     channels: dict
     paused: bool
     expires_at: datetime | None
+    auto_retire: bool = True  # DB 列缺失时按 True 处理（见 tasks.py）
     created_at: datetime
     latest: dict = Field(default_factory=dict)  # 最新状态摘要
 

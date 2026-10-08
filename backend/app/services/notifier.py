@@ -9,23 +9,20 @@ from email.mime.text import MIMEText
 from app.core.config import get_settings
 from app.core.http import make_client
 from app.core.logging import get_logger
-from app.models.models import Notification
+from app.core.tiers import effective_tier_of
+from app.models.models import MonitorTask, Notification, User
 
 log = get_logger("notifier")
 
-CATEGORY_BUY_PATH = {
-    "iphone": "buy-iphone",
-    "ipad": "buy-ipad",
-    "mac": "buy-mac",
-    "watch": "buy-watch",
-}
-
 
 def build_product_link(category: str, part_number: str) -> str:
-    """通知直达链接：商品页；兜底购物袋。"""
-    path = CATEGORY_BUY_PATH.get((category or "").lower())
-    if path and part_number:
-        return f"https://www.apple.com.cn/shop/{path}/{part_number}"
+    """通知直达链接：直达商品页。
+
+    Apple 购物袋是 cookie 会话，静态 URL 无法预填 SKU，所以不再拼购物袋链接；
+    无 part_number 时兜底返回官网购物袋页。
+    """
+    if part_number:
+        return f"https://www.apple.com.cn/shop/product/{part_number.lower()}"
     return "https://www.apple.com.cn/shop/bag"
 
 
@@ -108,6 +105,7 @@ class Notifier:
         link,
         status,
         error=None,
+        part_number=None,
     ) -> Notification:
         n = Notification(
             user_id=user_id,
@@ -120,6 +118,7 @@ class Notifier:
             link=link,
             status=status,
             error=error,
+            part_number=part_number,
         )
         self.db.add(n)
         self.db.commit()
@@ -134,8 +133,25 @@ class Notifier:
         body: str,
         link: str,
         kind: str = "stock_alert",
+        user=None,
     ) -> list[Notification]:
-        """按任务渠道配置逐个发送，每条写库。返回通知记录列表。"""
+        """按任务渠道配置逐个发送，每条写库。返回通知记录列表。
+
+        付费墙（断裂-23）：按用户有效档位的 channels 过滤。trial 档位只允许
+        "page"（站内展示，走 TaskOut.latest，不经过外部通道），dispatch 遇到
+        trial 用户直接全部跳过并记 skipped。免费/标准/Pro 目前只开放 email，
+        bark/webhook 等未在档位 channels 内的直接记 skipped，不发送。
+        """
+        if user is None and user_id is not None:
+            user = self.db.get(User, user_id)
+        allowed = set(effective_tier_of(user)["channels"])
+        page_only = allowed == {"page"}
+
+        part_number = None
+        if task_id is not None:
+            task = self.db.get(MonitorTask, task_id)
+            part_number = task.part_number if task else None
+
         out: list[Notification] = []
         jobs: list[tuple[str, str]] = []  # (channel, target)
         if channels.get("bark_key"):
@@ -149,6 +165,29 @@ class Notifier:
             jobs.append(("sms", channels["sms_to"]))
 
         for channel, target in jobs:
+            if page_only or channel not in allowed:
+                reason = (
+                    "trial 档位仅支持站内展示，不经过外部通道"
+                    if page_only
+                    else f"通道 {channel} 不在当前档位开放范围"
+                )
+                log.info("notify_skipped_tier", channel=channel, task_id=task_id, reason=reason)
+                out.append(
+                    self._record(
+                        user_id,
+                        task_id,
+                        kind,
+                        channel,
+                        target,
+                        title,
+                        body,
+                        link,
+                        "skipped",
+                        reason,
+                        part_number=part_number,
+                    )
+                )
+                continue
             try:
                 if channel == "bark":
                     send_bark(target, title, body, link)
@@ -162,28 +201,49 @@ class Notifier:
                     raise ValueError(f"unsupported channel: {channel}")
                 log.info("notify_sent", channel=channel, task_id=task_id, kind=kind)
                 out.append(
-                    self._record(user_id, task_id, kind, channel, target, title, body, link, "sent")
+                    self._record(
+                        user_id,
+                        task_id,
+                        kind,
+                        channel,
+                        target,
+                        title,
+                        body,
+                        link,
+                        "sent",
+                        part_number=part_number,
+                    )
                 )
             except Exception as e:
                 log.warning("notify_failed", channel=channel, task_id=task_id, error=str(e))
                 out.append(
                     self._record(
-                        user_id, task_id, kind, channel, target, title, body, link, "failed", str(e)
+                        user_id,
+                        task_id,
+                        kind,
+                        channel,
+                        target,
+                        title,
+                        body,
+                        link,
+                        "failed",
+                        str(e),
+                        part_number=part_number,
                     )
                 )
         return out
 
     def test_channel(self, channel: str, target: str, user_id=None) -> Notification:
-        """通知链路测试：发一条测试消息并写库。"""
+        """通知链路测试：发一条测试消息并写库。测试消息与真实发送一致附带链接。"""
         title = "StockMon 通知链路测试"
         body = "这是一条测试通知，说明该渠道配置可用。"
         link = get_settings().BASE_URL
         if channel == "bark":
             fn = lambda: send_bark(target, title, body, link)  # noqa: E731
         elif channel in ("wecom", "dingtalk", "feishu"):
-            fn = lambda: send_webhook(channel, target, title, body)  # noqa: E731
+            fn = lambda: send_webhook(channel, target, title, body + f"\n{link}")  # noqa: E731
         elif channel == "email":
-            fn = lambda: send_email(target, title, body)  # noqa: E731
+            fn = lambda: send_email(target, title, f"{body}\n\n{link}")  # noqa: E731
         elif channel == "sms":
             fn = lambda: send_sms(target, body)  # noqa: E731
         else:

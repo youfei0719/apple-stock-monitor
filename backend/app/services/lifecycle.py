@@ -1,0 +1,387 @@
+"""任务/会员生命周期 sweep：过期提醒、续期、僵尸清理、无货提醒、会员到期降级。
+
+由监控引擎每 tick 调用一次（见 engine.py）。各函数幂等、可重入：
+- 提醒类通知按天去重（同一 user/task + kind 一天只记一条）；
+- 僵尸里程碑去重持久化在 system_config；
+- 所有生命周期通知均为审计/站内风格（channel="system"，status="sent"），
+  不走外部通道、不扣推送配额。
+
+全部时间 UTC（naive）。
+"""
+
+from datetime import datetime, timedelta
+
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from app.core.logging import get_logger
+from app.core.tiers import TIERS, VALID_TIERS
+from app.models.models import MonitorTask, Notification, StockState, SystemConfig, User
+from app.services.notifier import build_product_link
+
+log = get_logger("lifecycle")
+
+# 僵尸任务里程碑（天）及去重 key
+ZOMBIE_MILESTONES = (30, 60, 90)
+ZOMBIE_NOTIFIED_KEY = "lifecycle:zombie_notified"
+
+# 到期提醒里程碑：到期前 3 天 / 1 天
+RENEW_MILESTONES = (3, 1)
+
+
+def _utcnow() -> datetime:
+    return datetime.utcnow()
+
+
+def _today_start(now: datetime) -> datetime:
+    return now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _milestone_3_1(days_left: float) -> int | None:
+    """到期前 3 天/1 天里程碑判定（其他天数返回 None，不打扰）。"""
+    if 2.0 < days_left <= 3.0:
+        return 3
+    if 0.0 <= days_left <= 1.0:
+        return 1
+    return None
+
+
+def _sys_notify(
+    db: Session,
+    user_id: int | None,
+    task_id: int | None,
+    kind: str,
+    title: str,
+    body: str,
+    link: str = "",
+    part_number: str | None = None,
+) -> Notification:
+    """记一条审计风格的站内通知：不走外部通道，不扣配额。"""
+    n = Notification(
+        user_id=user_id,
+        task_id=task_id,
+        kind=kind,
+        channel="system",
+        target="",
+        title=title,
+        body=body,
+        link=link,
+        part_number=part_number,
+        status="sent",
+    )
+    db.add(n)
+    return n
+
+
+def _notified_today(
+    db: Session, user_id: int | None, kind: str, task_id: int | None = None
+) -> bool:
+    """同一 user/task + kind 今天是否已记过提醒（按天去重，避免重发）。"""
+    q = (
+        select(func.count())
+        .select_from(Notification)
+        .where(
+            Notification.user_id == user_id,
+            Notification.kind == kind,
+            Notification.created_at >= _today_start(_utcnow()),
+        )
+    )
+    if task_id is not None:
+        q = q.where(Notification.task_id == task_id)
+    return db.execute(q).scalar() > 0
+
+
+def _get_kv(db: Session, key: str) -> dict:
+    row = db.execute(select(SystemConfig).where(SystemConfig.key == key)).scalar_one_or_none()
+    return dict(row.value) if row and isinstance(row.value, dict) else {}
+
+
+def _set_kv(db: Session, key: str, value: dict) -> None:
+    row = db.execute(select(SystemConfig).where(SystemConfig.key == key)).scalar_one_or_none()
+    if row is None:
+        row = SystemConfig(key=key, value=value)
+        db.add(row)
+    else:
+        row.value = value
+        db.add(row)
+
+
+# ---------------------------------------------------------------- membership
+def membership_sweep(db: Session) -> dict:
+    """会员到期降级 + 到期前 3 天/1 天续费提醒 + 降级后超限任务暂停。"""
+    now = _utcnow()
+    stats = {
+        "downgraded": 0,
+        "pending_promoted": 0,
+        "renewal_reminders": 0,
+        "tasks_paused": 0,
+    }
+    free_limit = TIERS["free"]["tasks_limit"]
+
+    # ---- 到期降级 ----
+    expired = (
+        db.execute(
+            select(User).where(User.tier.in_(["standard", "pro"]), User.tier_expires_at < now)
+        )
+        .scalars()
+        .all()
+    )
+    for u in expired:
+        old = u.tier
+        if u.pending_tier in VALID_TIERS:
+            # 不自洽-1：降级到期生效——到期时按 pending_tier 切换
+            new = u.pending_tier
+            u.tier = new
+            u.pending_tier = None
+            u.tier_expires_at = now + timedelta(days=30)
+            action = (
+                f"已按预约切换为{TIERS[new]['name']}（有效期至 {u.tier_expires_at:%Y-%m-%d} UTC）"
+            )
+            stats["pending_promoted"] += 1
+        else:
+            u.tier = "free"
+            u.tier_expires_at = None
+            u.pending_tier = None
+            action = "已降为免费版（任务上限 3 个、推送 5 次/月）"
+            stats["downgraded"] += 1
+        # 超限任务暂停：按更新时间倒序保留 free 限额，暂停超出部分
+        active = (
+            db.execute(
+                select(MonitorTask)
+                .where(MonitorTask.user_id == u.id, MonitorTask.paused.is_(False))
+                .order_by(MonitorTask.updated_at.desc())
+            )
+            .scalars()
+            .all()
+        )
+        paused_names = []
+        for t in active[free_limit:]:
+            t.paused = True
+            paused_names.append(t.name)
+            db.add(t)
+        stats["tasks_paused"] += len(paused_names)
+        pause_note = (
+            f"；超出免费版任务上限，已自动暂停 {len(paused_names)} 个任务："
+            + "、".join(paused_names[:5])
+            + ("…" if len(paused_names) > 5 else "")
+            if paused_names
+            else ""
+        )
+        _sys_notify(
+            db,
+            u.id,
+            None,
+            "membership_changed",
+            f"会员已到期：{TIERS[old]['name']} → {TIERS[u.tier]['name']}",
+            f"您的{TIERS[old]['name']}会员已到期，{action}{pause_note}。如需恢复请前往「我」页续费。",
+        )
+        db.add(u)
+        log.info("membership_downgraded", user_id=u.id, old=old, new=u.tier)
+
+    # ---- 到期前 3 天 / 1 天续费提醒（按天去重） ----
+    upcoming = (
+        db.execute(
+            select(User).where(User.tier.in_(["standard", "pro"]), User.tier_expires_at > now)
+        )
+        .scalars()
+        .all()
+    )
+    for u in upcoming:
+        days_left = (u.tier_expires_at - now).total_seconds() / 86400
+        ms = _milestone_3_1(days_left)
+        if ms is None:
+            continue
+        if _notified_today(db, u.id, "membership_expiring"):
+            continue
+        _sys_notify(
+            db,
+            u.id,
+            None,
+            "membership_expiring",
+            f"会员将于 {ms} 天后到期",
+            f"您的{TIERS[u.tier]['name']}会员将于 {u.tier_expires_at:%Y-%m-%d}（UTC）到期，"
+            f"到期后将降为免费版。如需续费请前往「我」页，提前续费不亏天数。",
+        )
+        stats["renewal_reminders"] += 1
+        log.info("membership_expiring", user_id=u.id, days_left=round(days_left, 2))
+
+    db.commit()
+    return stats
+
+
+# ---------------------------------------------------------------- task expiry
+def task_expiry_sweep(db: Session) -> dict:
+    """任务过期前 3 天/1 天提醒；trial 匿名任务过期 7 天后物理删除。"""
+    now = _utcnow()
+    stats = {"reminders": 0, "trial_deleted": 0}
+
+    tasks = (
+        db.execute(
+            select(MonitorTask).where(
+                MonitorTask.expires_at.is_not(None),
+                MonitorTask.paused.is_(False),
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for t in tasks:
+        days_left = (t.expires_at - now).total_seconds() / 86400
+        ms = _milestone_3_1(days_left)
+        if ms is None:
+            continue
+        if _notified_today(db, t.user_id, "task_expiring", t.id):
+            continue
+        _sys_notify(
+            db,
+            t.user_id,
+            t.id,
+            "task_expiring",
+            f"监控任务将于 {ms} 天后到期：{t.name}",
+            f"任务「{t.name}」（{t.part_number}）将于 {t.expires_at:%Y-%m-%d}（UTC）到期，"
+            "到期后停止轮询、可在任务详情页一键续期（+30 天）。",
+            link=build_product_link(t.category, t.part_number),
+            part_number=t.part_number,
+        )
+        stats["reminders"] += 1
+        log.info("task_expiring", task_id=t.id, days_left=round(days_left, 2))
+
+    # trial 匿名任务过期 7 天后物理删除（断裂-7）
+    cutoff = now - timedelta(days=7)
+    old_trials = (
+        db.execute(
+            select(MonitorTask).where(
+                MonitorTask.user_id.is_(None),
+                MonitorTask.expires_at < cutoff,
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for t in old_trials:
+        db.delete(t)
+        stats["trial_deleted"] += 1
+        log.info("trial_task_deleted", task_id=t.id)
+
+    db.commit()
+    return stats
+
+
+# ---------------------------------------------------------------- zombie
+def _zombie_days(db: Session, task: MonitorTask, now: datetime) -> int | None:
+    """连续无货天数：全部 state 持续非 available 的天数。
+
+    - 任一门店 available → 0（不清零里程碑记录，只是不发提醒）
+    - 混有 unknown/cooling/verifying → None（数据不可确认，本轮跳过）
+    - 锚点 = 各门店最近一次有货事件（last_event_at），从未有货则按任务创建时间
+    """
+    rows = db.execute(select(StockState).where(StockState.task_id == task.id)).scalars().all()
+    if not rows:
+        return None
+    states = {r.state for r in rows}
+    if "available" in states:
+        return 0
+    if not states <= {"unavailable"}:
+        return None
+    anchors = [r.last_event_at or task.created_at for r in rows]
+    anchors = [a for a in anchors if a]
+    if not anchors:
+        return None
+    return (now - max(anchors)).days
+
+
+def zombie_sweep(db: Session) -> dict:
+    """连续无货 30/60/90 天各提醒一次（不扣配额）；90 天且 auto_retire 未关闭自动暂停。"""
+    now = _utcnow()
+    stats = {"nudges": 0, "auto_paused": 0}
+
+    notified: dict[str, list[int]] = _get_kv(db, ZOMBIE_NOTIFIED_KEY)
+    # 清理已不存在任务的记录
+    alive_ids = {r for r in db.execute(select(MonitorTask.id)).scalars().all()}
+    for tid in [k for k in notified if k.isdigit() and int(k) not in alive_ids]:
+        del notified[tid]
+
+    tasks = (
+        db.execute(
+            select(MonitorTask).where(
+                MonitorTask.paused.is_(False),
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for t in tasks:
+        # 已过期任务不轮询，僵尸计时冻结，跳过
+        if t.expires_at is not None and t.expires_at < now:
+            continue
+        days = _zombie_days(db, t, now)
+        if not days:
+            continue
+        done = notified.get(str(t.id), [])
+        # 取本轮应提醒的最高里程碑（追赶场景一次只发一条，避免刷屏），
+        # 同时把已达到的低里程碑一并标记为已通知。
+        target = max(
+            (ms for ms in ZOMBIE_MILESTONES if days >= ms and ms not in done),
+            default=None,
+        )
+        if target is None:
+            continue
+        auto_retire = getattr(t, "auto_retire", True)
+        body = (
+            f"任务「{t.name}」（{t.part_number}）已连续 {days} 天无货。"
+            "该型号可能已下架或长期无补货，建议检查是否继续监控。"
+        )
+        if target >= 90 and auto_retire:
+            t.paused = True
+            db.add(t)
+            body += "已按「自动结束」开关自动暂停，可在任务详情重新开启。"
+            stats["auto_paused"] += 1
+            log.info("zombie_auto_paused", task_id=t.id, days=days)
+        elif target >= 90:
+            body += "「自动结束」开关已关闭，未自动暂停。"
+        _sys_notify(
+            db,
+            t.user_id,
+            t.id,
+            "zombie_nudge",
+            f"长期无货提醒（{target} 天）：{t.name}",
+            body,
+            link=build_product_link(t.category, t.part_number),
+            part_number=t.part_number,
+        )
+        notified[str(t.id)] = sorted(set(done) | {ms for ms in ZOMBIE_MILESTONES if days >= ms})
+        stats["nudges"] += 1
+        log.info("zombie_nudge", task_id=t.id, milestone=target, days=days)
+
+    _set_kv(db, ZOMBIE_NOTIFIED_KEY, notified)
+    db.commit()
+    return stats
+
+
+# ---------------------------------------------------------------- entry
+def run_lifecycle_sweep(db: Session) -> dict:
+    """执行一轮生命周期 sweep，返回各项计数。幂等、可重入。
+
+    单个子 sweep 异常不影响其他 sweep，也不影响引擎主轮询。
+    """
+    out: dict = {}
+    for name, fn in (
+        ("membership", membership_sweep),
+        ("task_expiry", task_expiry_sweep),
+        ("zombie", zombie_sweep),
+    ):
+        try:
+            out[name] = fn(db)
+        except Exception as e:  # noqa: BLE001 - sweep 失败只记日志，不中断 tick
+            db.rollback()
+            log.warning("lifecycle_sweep_failed", sweep=name, error=str(e))
+            out[name] = {"error": str(e)[:200]}
+    return out
+
+
+__all__ = [
+    "run_lifecycle_sweep",
+    "membership_sweep",
+    "task_expiry_sweep",
+    "zombie_sweep",
+]

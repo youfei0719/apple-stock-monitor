@@ -40,13 +40,21 @@ def ranking(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """全国榜单：城市放货排行（按该用户有货事件聚合）。"""
+    """城市放货排行（个人范围）。
+
+    断裂-19 诚实化：当前按该用户自己的有货通知聚合，不是全站榜单；
+    响应带 scope="personal"，前端据此展示「我的放货城市分布」而非「全国榜单」。
+    全站匿名聚合是长期项，见审查文档对标差距-6。
+    """
     counts: dict[str, int] = {}
     for n, t in _event_rows(db, user.id, days):
         city = _city_of(t, n.body or "")
         counts[city] = counts.get(city, 0) + 1
     ranked = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)
-    return [{"city": city, "events": c} for city, c in ranked]
+    return {
+        "scope": "personal",
+        "ranking": [{"city": city, "events": c} for city, c in ranked],
+    }
 
 
 @router.get("/overview")

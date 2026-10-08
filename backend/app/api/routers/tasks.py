@@ -5,7 +5,7 @@
 
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, Header, Request
+from fastapi import APIRouter, Depends, Header, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -14,14 +14,26 @@ from app.api.errors import APIError
 from app.core.db import get_db
 from app.core.logging import get_logger
 from app.core.ratelimit import check_rate_limit
-from app.core.tiers import tier_of
+from app.core.tiers import effective_tier_of, tier_of
 from app.models.models import MonitorTask, StockState, User
 from app.schemas import TaskBatchIn, TaskCreateIn, TaskOut, TaskPatchIn
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 log = get_logger("tasks")
 
-DISPLAY_STATE_ORDER = ("available", "unavailable", "unknown", "verifying", "cooling", "paused")
+DISPLAY_STATE_ORDER = (
+    "available",
+    "unavailable",
+    "unknown",
+    "verifying",
+    "cooling",
+    "paused",
+    "expired",
+)
+
+# auto_retire DB 列是否已存在（models.py 归属其他 worker，加列需 migration；
+# 列缺失时开关按默认值 True 生效，显式关闭会报 501，见下）。
+HAS_AUTO_RETIRE_COL = hasattr(MonitorTask, "auto_retire")
 
 # 匿名体验任务最长存活 24h（服务端强制，不信任客户端传的 expires_at）
 TRIAL_MAX_TTL = timedelta(hours=24)
@@ -40,9 +52,20 @@ def _clamp_expires(expires_at: datetime | None, anonymous: bool) -> datetime | N
     return expires_at
 
 
+def _is_expired(task: MonitorTask, now: datetime | None = None) -> bool:
+    """任务是否已过期：expires_at < now 且未手动暂停（断裂-7）。"""
+    if task.paused:
+        return False
+    if task.expires_at is None:
+        return False
+    return task.expires_at < (now or datetime.utcnow())
+
+
 def _display_state(task: MonitorTask, row: StockState | None) -> str:
     if task.paused:
         return "paused"
+    if _is_expired(task):
+        return "expired"
     if row is None:
         return "unknown"
     if row.state == "cooling":
@@ -79,6 +102,7 @@ def _task_out(task: MonitorTask, db: Session) -> TaskOut:
         channels=task.channels or {},
         paused=task.paused,
         expires_at=task.expires_at,
+        auto_retire=getattr(task, "auto_retire", True),
         created_at=task.created_at,
         latest={"stores": by_store, "available_count": available_n, "total": len(rows)},
     )
@@ -86,7 +110,8 @@ def _task_out(task: MonitorTask, db: Session) -> TaskOut:
 
 def _check_task_limit(db: Session, user: User | None, device_id: str | None) -> None:
     if user:
-        tier = tier_of(user.tier)
+        # 过期付费档按 free 算（断裂-1），走 effective_tier
+        tier = effective_tier_of(user)
         n = db.execute(
             select(func.count()).select_from(MonitorTask).where(MonitorTask.user_id == user.id)
         ).scalar()
@@ -100,6 +125,34 @@ def _check_task_limit(db: Session, user: User | None, device_id: str | None) -> 
             raise APIError(403, "体验版仅可创建 1 个任务，请登录后使用", "task_limit_trial")
 
 
+def _find_conflict(
+    db: Session,
+    user_id: int | None,
+    device_id: str | None,
+    part_number: str,
+    store_numbers: list[str],
+) -> MonitorTask | None:
+    """断裂-8：按 (归属, part_number, 门店集合) 查重，避免重复任务重复通知/扣配额。"""
+    q = select(MonitorTask)
+    if user_id is not None:
+        q = q.where(MonitorTask.user_id == user_id)
+    else:
+        q = q.where(MonitorTask.device_id == device_id, MonitorTask.user_id.is_(None))
+    want = frozenset(store_numbers)
+    for t in db.execute(q).scalars().all():
+        if t.part_number == part_number and frozenset(t.store_numbers or []) == want:
+            return t
+    return None
+
+
+def _conflict_error(task: MonitorTask) -> APIError:
+    return APIError(
+        409,
+        f"已存在相同监控任务（id={task.id}）：同型号 {task.part_number} + 同门店组合",
+        "task_conflict",
+    )
+
+
 def _validate_task_in(data: TaskCreateIn) -> None:
     if data.mode not in ("instant", "confirmed"):
         raise APIError(400, "mode 必须为 instant 或 confirmed", "bad_mode")
@@ -109,10 +162,13 @@ def _validate_task_in(data: TaskCreateIn) -> None:
 
 @router.get("", response_model=list[TaskOut])
 def list_tasks(
+    status: str = Query(default="all", description="active=监控中, expired=已过期, all=全部"),
     user: User | None = Depends(get_optional_user),
     db: Session = Depends(get_db),
     x_device_id: str | None = Header(default=None),
 ):
+    if status not in ("active", "expired", "all"):
+        raise APIError(400, "status 必须为 active、expired 或 all", "bad_status")
     q = select(MonitorTask).order_by(MonitorTask.created_at.desc())
     if user:
         q = q.where(MonitorTask.user_id == user.id)
@@ -120,7 +176,12 @@ def list_tasks(
         q = q.where(MonitorTask.device_id == x_device_id)
     else:
         return []
-    return [_task_out(t, db) for t in db.execute(q).scalars().all()]
+    tasks = db.execute(q).scalars().all()
+    if status == "active":
+        tasks = [t for t in tasks if not _is_expired(t)]
+    elif status == "expired":
+        tasks = [t for t in tasks if _is_expired(t)]
+    return [_task_out(t, db) for t in tasks]
 
 
 @router.post("", response_model=TaskOut, status_code=201)
@@ -141,23 +202,39 @@ def create_task(
     _validate_task_in(data)
     _check_task_limit(db, user, x_device_id)
     stores = [s.model_dump() for s in data.stores]
-    task = MonitorTask(
+    part_number = data.part_number.strip().upper()
+    store_numbers = [s["number"] for s in stores]
+    # 断裂-8：重复任务冲突检测
+    conflict = _find_conflict(
+        db, user.id if user else None, x_device_id, part_number, store_numbers
+    )
+    if conflict:
+        raise _conflict_error(conflict)
+    task_kwargs: dict = dict(
         user_id=user.id if user else None,
         device_id=None if user else x_device_id,
         name=data.name,
         group=data.group,
         category=data.category,
-        part_number=data.part_number.strip().upper(),
+        part_number=part_number,
         product_name=data.product_name,
         color=data.color,
         capacity=data.capacity,
-        store_numbers=[s["number"] for s in stores],
+        store_numbers=store_numbers,
         stores=stores,
         mode=data.mode,
         repeat_interval_sec=data.repeat_interval_sec,
-        channels=data.channels,
+        channels=data.channels.model_dump(exclude_none=True),
         expires_at=_clamp_expires(data.expires_at, anonymous=user is None),
     )
+    if HAS_AUTO_RETIRE_COL:
+        task_kwargs["auto_retire"] = data.auto_retire
+    elif data.auto_retire is not True:
+        # 列尚未建：只能接受默认值 True，显式关闭必须等 DB 迁移
+        raise APIError(
+            501, "auto_retire 开关后端尚未启用（需 DB 迁移），暂只支持默认开启", "not_implemented"
+        )
+    task = MonitorTask(**task_kwargs)
     db.add(task)
     db.commit()
     db.refresh(task)
@@ -172,7 +249,7 @@ def batch_create(
     db: Session = Depends(get_db),
 ):
     """门店 × 型号批量生成任务。"""
-    tier = tier_of(user.tier)
+    tier = effective_tier_of(user)
     existing = db.execute(
         select(func.count()).select_from(MonitorTask).where(MonitorTask.user_id == user.id)
     ).scalar()
@@ -185,6 +262,18 @@ def batch_create(
         )
     if data.mode not in ("instant", "confirmed"):
         raise APIError(400, "mode 必须为 instant 或 confirmed", "bad_mode")
+    # 断裂-8：批量内去重 + 与已有任务查重（409）
+    seen: set[tuple[str, frozenset]] = set()
+    for part, store in combos:
+        pn = part.strip().upper()
+        key = (pn, frozenset([store]))
+        if key in seen:
+            raise APIError(409, f"批量内重复：{pn} × {store} 出现了多次", "task_conflict")
+        seen.add(key)
+        conflict = _find_conflict(db, user.id, None, pn, [store])
+        if conflict:
+            raise _conflict_error(conflict)
+    channels = data.channels.model_dump(exclude_none=True)
     created = []
     for part, store in combos:
         name = data.name_template.replace("{part_number}", part).replace("{store_number}", store)
@@ -196,7 +285,7 @@ def batch_create(
             store_numbers=[store],
             stores=[{"number": store, "name": "", "city": ""}],
             mode=data.mode,
-            channels=data.channels,
+            channels=channels,
         )
         db.add(task)
         created.append(task)
@@ -227,11 +316,18 @@ def patch_task(
     x_device_id: str | None = Header(default=None),
 ):
     task = _get_owned(task_id, user, x_device_id, db)
-    fields = ("name", "group", "paused", "channels", "mode", "repeat_interval_sec")
+    fields = ("name", "group", "paused", "mode", "repeat_interval_sec")
     for field in fields:
         v = getattr(data, field)
         if v is not None:
             setattr(task, field, v)
+    if data.channels is not None:
+        task.channels = data.channels.model_dump(exclude_none=True)
+    if data.auto_retire is not None:
+        if HAS_AUTO_RETIRE_COL:
+            task.auto_retire = data.auto_retire
+        else:
+            raise APIError(501, "auto_retire 开关后端尚未启用（需 DB 迁移）", "not_implemented")
     if data.expires_at is not None:
         # 匿名任务同样强制 24h 上限
         task.expires_at = _clamp_expires(data.expires_at, anonymous=user is None)
@@ -240,6 +336,26 @@ def patch_task(
     db.add(task)
     db.commit()
     db.refresh(task)
+    return _task_out(task, db)
+
+
+@router.post("/{task_id}/renew", response_model=TaskOut)
+def renew_task(
+    task_id: int,
+    user: User | None = Depends(get_optional_user),
+    db: Session = Depends(get_db),
+    x_device_id: str | None = Header(default=None),
+):
+    """一键续期：expires_at = now + 30 天（断裂-7）。
+
+    只延长时间，不改 paused/配额状态。匿名 trial 任务同样受 24h 上限钳制。
+    """
+    task = _get_owned(task_id, user, x_device_id, db)
+    task.expires_at = _clamp_expires(datetime.utcnow() + timedelta(days=30), anonymous=user is None)
+    db.add(task)
+    db.commit()
+    db.refresh(task)
+    log.info("task_renewed", task_id=task_id, expires_at=task.expires_at)
     return _task_out(task, db)
 
 

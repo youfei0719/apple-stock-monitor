@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.db import get_db
-from app.core.tiers import tier_of
+from app.core.tiers import effective_tier_of
 from app.models.models import MonitorTask, Notification, User
 
 router = APIRouter(prefix="/history", tags=["history"])
@@ -65,7 +65,9 @@ def releases(
     db: Session = Depends(get_db),
 ):
     """放货记录：按天 × part_number 聚合有货事件。"""
-    if not tier_of(user.tier)["history"]:
+    # 断裂-18：档位过期按 free 算；403 已是结构化错误 code="tier_required"，
+    # 前端据此渲染升级引导卡片。
+    if not effective_tier_of(user)["history"]:
         from app.api.errors import APIError
 
         raise APIError(403, "完整历史数据需要标准版及以上", "tier_required")
