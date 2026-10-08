@@ -219,6 +219,13 @@ def patch_user(
             data.tier_expires_at.isoformat(),
         )
         target.tier_expires_at = data.tier_expires_at
+        # R7 后-I-1（钱相关）：只 PATCH tier_expires_at 的补单分支同样同步
+        # quota_reset_at（配额锚点），否则配额周期与会员周期错位。注意下方
+        # data.tier 分支已有同口径同步（R6-I5），此分支补上"只改到期时间"
+        # 的场景；若同时传了 tier=free，tier 分支会按退款语义覆盖为 now+30 天。
+        if target.tier in ("standard", "pro"):
+            target.quota_reset_at = data.tier_expires_at
+            changes["quota_reset_at"] = target.quota_reset_at.isoformat()
     if data.tier is not None:
         # R6-I5：改档同步配额锚点——付费档 quota_reset_at 与 tier_expires_at
         # 对齐（与 apply_tier_grant 口径一致，购买日+30天滚动）；手动降回
@@ -243,6 +250,10 @@ def patch_user(
         )
         for t in tasks:
             t.paused = True
+            # R7：批量暂停记 manual 原因——auth._claim_device_tasks 的自动恢复
+            # 是白名单口径（仅 paused_reason == "quota_exhausted" 恢复），
+            # manual 任务天然被排除，不会被误恢复
+            t.paused_reason = "manual"
             db.add(t)
         changes["paused_tasks"] = len(tasks)
     db.add(target)

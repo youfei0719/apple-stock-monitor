@@ -60,7 +60,8 @@ def notify_test(
         raise APIError(
             400,
             f"当前档位（{tier_info['name']}）仅支持{allowed_names}通知；"
-            "Bark / 群机器人可配置，但到货不会发送（测试通过≠到货会发）",
+            "该测试只验证目标是否连通，不代表到货时会经此通道发送——"
+            "当前档位下到货提醒只走邮件/站内，如需 Bark / 群机器人到货提醒请升级档位",
             "channel_not_supported",
         )
     # R6-P2-9：email 测试目标必须是用户本人邮箱（管理员除外），防拿测试

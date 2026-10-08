@@ -41,7 +41,16 @@ def _utcnow() -> datetime:
 
 
 def _today_start(now: datetime) -> datetime:
-    return now.replace(hour=0, minute=0, second=0, microsecond=0)
+    """按天去重的"今天"起点：北京时间口径（R7：与 admin.py overview/traffic、
+    analytics/history 的 "+8 hours" 按天口径一致。此前按 UTC 起点，用户看到
+    的"今日"少 8 小时，会导致跨天边界的重复提醒）。
+
+    输入输出均为 naive UTC 时间戳：北京时间午夜 = UTC 前一天 16:00。
+    """
+    beijing_midnight = (now + timedelta(hours=8)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    return beijing_midnight - timedelta(hours=8)
 
 
 def _milestone_3_1(days_left: float) -> int | None:

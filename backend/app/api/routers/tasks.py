@@ -3,7 +3,7 @@
 匿名体验：无会话时可用 X-Device-Id 创建 1 个任务（不计配额）。
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Header, Query, Request
 from sqlalchemy import func, select, update
@@ -39,10 +39,23 @@ TASK_CREATE_LIMIT = 20
 TASK_CREATE_WINDOW_SEC = 3600
 
 
+def _as_naive_utc(dt: datetime | None) -> datetime | None:
+    """R7 断裂 后-D-1：pydantic 会把 "2026-12-01T00:00:00Z" 解析为 tz-aware
+    datetime，aware 与 naive 直接比较（expires_at < now / expires_at > cap）
+    会 TypeError→500。入库/比较前统一归一化为 naive UTC（aware 转 UTC 后
+    去 tzinfo，naive 保持原样）。"""
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
 def _clamp_expires(expires_at: datetime | None, anonymous: bool) -> datetime | None:
     """匿名任务强制 24h 过期：为空或超过 24h 时一律 clamp 到 now+24h。"""
     if not anonymous:
-        return expires_at
+        return _as_naive_utc(expires_at)
+    expires_at = _as_naive_utc(expires_at)
     cap = datetime.utcnow() + TRIAL_MAX_TTL
     if expires_at is None or expires_at > cap:
         return cap
@@ -165,7 +178,11 @@ def _validate_task_in(data: TaskCreateIn) -> None:
 
 
 def _validate_expires_at(expires_at: datetime | None) -> None:
-    """R6-P2-12：expires_at 早于当前时间直接 400（过期任务建了也无意义）。"""
+    """R6-P2-12：expires_at 早于当前时间直接 400（过期任务建了也无意义）。
+
+    R7 断裂 后-D-1：先归一化为 naive UTC 再比较（pydantic 解析出的 "…Z"
+    是 tz-aware，与 datetime.utcnow() 直接比会 TypeError→500）。"""
+    expires_at = _as_naive_utc(expires_at)
     if expires_at is not None and expires_at < datetime.utcnow():
         raise APIError(400, "expires_at 不能早于当前时间", "bad_expires_at")
 
@@ -261,7 +278,11 @@ def _idempotent_replay(
     for tid in rec.task_ids:
         task = db.get(MonitorTask, tid)
         if task is None:
-            return None  # 首次结果的任务已被删除：按新请求处理
+            # R7 诚实注释（此前写"按新请求处理"不成立）：这里返回 None 后，上游
+            # _claim_idempotency_key 撞唯一约束会看到 task_ids 非空的记录——
+            # TTL（IDEMPOTENCY_CLAIM_TTL_MIN=10 分钟）内不会接管，直接走 409
+            # idempotency_in_progress；TTL 过期后才允许接管 key 重建。
+            return None
         # scope 已隔离归属（u: / d: 前缀），这里只做兜底一致性检查
         if user and task.user_id != user.id:
             return None

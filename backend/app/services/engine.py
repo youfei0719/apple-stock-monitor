@@ -445,8 +445,13 @@ class Engine:
                         self._consume_quota(db, task, sent)
                         if no_channel:
                             # R6-D4：零渠道/全 skipped → 记一条 skipped 审计行，
-                            # 且不推进 last_event_at（边沿不被消费，下轮仍会
-                            # 触发，避免静默丢失）
+                            # 且不推进 last_event_at（R7 诚实注释：此前"边沿不被
+                            # 消费，下轮仍会触发"不成立——prev_known 在前面已推进，
+                            # 本轮边沿已被消费。下轮 evaluate_transition 不会再
+                            # 触发；只有配了 repeat_interval_sec 且距上次成功
+                            # 通知超间隔时，"持续有货再提醒"分支才会再发一次。
+                            # 不推进 last_event_at 的真实作用是保持上次成功
+                            # 通知的锚点，避免连续轮询刷屏）。
                             self._record_skipped(
                                 db,
                                 task,
