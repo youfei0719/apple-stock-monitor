@@ -106,7 +106,10 @@ esac
 # ===== R4-P1-D7：备份连接加 busy_timeout（3:10 可能与引擎写锁撞车） =====
 # .backup 失败时 sqlite3 进程可能仍退出 0，所以产物必须做非空 + 完整性检查，
 # 失败走 fail()：写日志 + SMTP 告警 + 非零退出，让 cron 能感知（不能静默"备份成功"）。
-sqlite3 "$SRC" "PRAGMA busy_timeout=15000;" ".backup '$DST_DIR/app-$DAY.db'"
+# R8-I-2：sqlite3 本体命令加 || fail(...)，否则 set -e 直接终结脚本，
+# 绕过 fail()/alert()（备份命令本身失败时运维收不到邮件）。
+sqlite3 "$SRC" "PRAGMA busy_timeout=15000;" ".backup '$DST_DIR/app-$DAY.db'" \
+  || fail "sqlite 备份命令失败（exit=$?）"
 if [ ! -s "$DST_DIR/app-$DAY.db" ]; then
   fail "备份产物为空或缺失: $DST_DIR/app-$DAY.db（可能与引擎写锁撞车，busy_timeout=15s 仍超时）"
 fi

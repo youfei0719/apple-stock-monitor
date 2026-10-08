@@ -10,7 +10,7 @@ EnvironmentFile=/opt/stockmon/.env
 # D1：API 进程不跑监控引擎（ENGINE_ENABLED=false 为默认值，此处显式声明防误配）。
 # 引擎由独立 stockmon-engine.service 进程运行（ENGINE_ENABLED=true），避免双引擎
 # 重复轮询、重复通知和配额 double-count。
-Environment ENGINE_ENABLED=false
+Environment=ENGINE_ENABLED=false
 # R7 日志方案(a)：API 进程写 stockmon-api.log（与 engine 进程分开，
 # 避开 TimedRotatingFileHandler 双进程午夜 rollover 竞态）。
 Environment=STOCKMON_LOG_NAME=stockmon-api.log

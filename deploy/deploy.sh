@@ -19,7 +19,9 @@ DOMAIN=stock.glint.red
 # ===== R5-D-1/D-2：.env 提取器 =====
 # 提取 $ENV_FILE 中 KEY 的值：
 #   - 先去行尾注释再取值：`APP_ENV=prod  # 生产环境` → `prod`（R5-D-1）
-#   - 支持 `export KEY=...` 前缀写法（R5-D-2）
+#   - 支持 `export KEY=...` 前缀写法（R5-D-2）；但注意：systemd EnvironmentFile
+#     会静默丢弃 export 行，所以校验阶段（R8-I-1）已把 export 前缀拦截报错，
+#     这里的支持只是容错，不代表生产 .env 里可以写 export
 #   - 值里含 # 时必须加引号（如 PASSWORD='a#b'）；引号包裹的值按引号边界取值
 #   - R6-P2-6：重复键取最后一个，与 `source` 语义一致（重复键以后者为准）
 #   - R6-P2-1：最终清理只去首尾（空白/CR/引号），值内空格原样保留
@@ -96,6 +98,16 @@ echo "[deploy] 前置软件检查通过（node $(node --version)）"
   echo "请先创建并填入真实值（可对照仓库 .env.example），然后重新运行本脚本。"
   exit 1
 }
+# ===== R8-I-1：拦截 `export KEY=` 前缀行（fail-fast） =====
+# systemd EnvironmentFile 会静默丢弃带 export 前缀的整行（真机实测：服务里读不到）。
+# env_val 为了容错支持 export 前缀（R5-D-2），不拦截的话 deploy.sh 校验能通过、
+# 但服务实际读不到该变量（APP_SECRET_KEY 等会回退默认值/报错）。直接拦死。
+if grep -nE '^[[:space:]]*export[[:space:]]' "$ENV_FILE" >/dev/null 2>&1; then
+  echo "ERROR: $ENV_FILE 里有 export 前缀行（systemd EnvironmentFile 会静默丢弃整行，服务读不到这些变量）："
+  grep -nE '^[[:space:]]*export[[:space:]]' "$ENV_FILE" | sed 's/^/  行 /'
+  echo "请去掉 export 前缀（直接写 KEY=value）后重新运行。"
+  exit 1
+fi
 SECRET_VAL=$(env_val APP_SECRET_KEY)
 if [ -z "$SECRET_VAL" ] || [ "$SECRET_VAL" = "change-me-64hex" ]; then
   echo "ERROR: $ENV_FILE 中 APP_SECRET_KEY 未设置或仍为默认值 change-me-64hex。"
@@ -156,8 +168,15 @@ ln -sfn "$REPO/deploy" /opt/stockmon/deploy
 # ===== N12(b)：sqlite3 CLI（备份/排查 sqlite 真库用；前置软件检查已覆盖） =====
 
 # 运行所需目录
-# 注意：sqlite 真库在 $APP_DIR/data（DATABASE_URL=sqlite:///./data/app.db，相对 backend），
-#       backend/logs 不用建——systemd 日志统一走 /opt/stockmon/logs
+# 注意：sqlite 真库在 $APP_DIR/data（DATABASE_URL=sqlite:///./data/app.db，相对 backend）。
+#       backend/logs/ 不用手动建：logging.py 默认 log_dir="logs"（相对 systemd
+#       WorkingDirectory，即 $APP_DIR/logs），configure_logging 里 os.makedirs
+#       自动创建。structlog JSON 应用日志（stockmon-api.log / stockmon-engine.log）
+#       真实路径是 $APP_DIR/logs/，由 TimedRotatingFileHandler 自带轮转（30 天），
+#       logrotate 不覆盖它——copytruncate 与 TimedRotatingFileHandler 混用有截断风险，
+#       别把 backend/logs 加进 logrotate 配置。
+#       /opt/stockmon/logs/ 只放 systemd 捕获的 stdout/stderr（*.out.log/*.err.log）
+#       和 backup.sh 的 cron 输出（backup.log），logrotate 覆盖的是这些。
 mkdir -p "$APP_DIR/data" /opt/stockmon/logs /opt/stockmon/frontend \
          /opt/stockmon/admin /opt/stockmon/backups
 
