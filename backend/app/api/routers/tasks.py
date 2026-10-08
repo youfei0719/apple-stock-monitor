@@ -656,18 +656,20 @@ def renew_task(
     """
     task = _get_owned(task_id, user, x_device_id, db)
     now = datetime.utcnow()
-    # R10-P2-7：并发双击防护——updated_at 在去重窗口内说明上一次续期刚提交
-    #（updated_at 由 onupdate=_utcnow 自动推进），视为重复点击直接返回当前
-    # 状态，不再叠加 +30 天。纯 DB 口径，多 worker 同样有效；误伤场景（10 秒
-    # 内刚编辑过任务又点续期）只是本次不延长，用户再点一次即可。
+    # R13-P1-1：并发双击防护改用 last_renewed_at 专用列（仅续期成功时写入）。
+    # 旧逻辑用 updated_at < 10s 去重，但 updated_at 带 onupdate=_utcnow，
+    # 引擎每轮 poll（写 last_polled_at/last_poll_ok/last_poll_ms）都会推进它，
+    # 导致续期被静默吞掉（pro 用户约 87% 概率续期无效，前端还显示"已续期至"
+    # 假象）。专用列只有续期成功才写，引擎轮询不碰它，去重不再误触发。
     if (
-        task.updated_at is not None
-        and (now - task.updated_at).total_seconds() < RENEW_DEDUP_WINDOW_SEC
+        task.last_renewed_at is not None
+        and (now - task.last_renewed_at).total_seconds() < RENEW_DEDUP_WINDOW_SEC
     ):
         log.info("task_renew_duplicate_click", task_id=task_id)
         return _task_out(task, db)
     base = max(now, task.expires_at) if task.expires_at else now
     task.expires_at = _clamp_expires(base + timedelta(days=30), anonymous=user is None)
+    task.last_renewed_at = now
     db.add(task)
     db.commit()
     db.refresh(task)

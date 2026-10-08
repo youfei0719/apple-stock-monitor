@@ -97,6 +97,9 @@ class MonitorTask(Base):
     last_polled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_poll_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     last_poll_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # R13-P1-1：一键续期去重专用列——仅续期成功时写入；引擎轮询只碰
+    # last_polled_at/last_poll_ok/last_poll_ms，不再误触发去重
+    last_renewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=_utcnow, onupdate=_utcnow, nullable=False

@@ -254,7 +254,7 @@ export function System() {
                 )}
               </CardTitle>
               <CardDescription className='mt-1'>
-                开启后：trial / free 轮询间隔拉长、catalog 后台刷新暂停、pro 任务优先。
+                开启后：trial / free 轮询间隔 ×4。
                 适用于新品发售等全站流量高峰。
               </CardDescription>
             </div>
@@ -278,7 +278,7 @@ export function System() {
               <AlertDialogDescription>
                 {peakPending ? (
                   <>
-                    开启后：trial / free 轮询间隔拉长、catalog 后台刷新暂停、pro 任务优先。
+                    开启后：trial / free 轮询间隔 ×4。
                     适用于新品发售等全站流量高峰。
                   </>
                 ) : (

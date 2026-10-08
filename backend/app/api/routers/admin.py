@@ -3,13 +3,14 @@
 import os
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import and_, case, desc, func, or_, select, text, update
 from sqlalchemy.orm import Session
 
 from app.api.deps import _client_ip, get_current_admin
 from app.api.errors import APIError
+from app.api.routers.catalog import enqueue_catalog_refresh
 from app.api.routers.pay import TIER_RANK, apply_tier_grant
 from app.core.db import get_db
 from app.core.logging import get_logger
@@ -26,7 +27,11 @@ from app.models.models import (
 )
 from app.schemas import AdminUserPatchIn
 from app.services.engine import PEAK_MODE_KEY, get_config, read_engine_status
-from app.services.lifecycle import converge_task_limit, resume_tier_limited_tasks
+from app.services.lifecycle import (
+    converge_task_limit,
+    resume_quota_exhausted_tasks,
+    resume_tier_limited_tasks,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 log = get_logger("admin")
@@ -344,6 +349,10 @@ def patch_user(
         resumed = resume_tier_limited_tasks(db, target)
         if resumed:
             notices.append(f"自动恢复 {len(resumed)} 个因档位超限被暂停的监控任务")
+        # R13-P2-5：配额耗尽暂停的任务在新周期配额可用时一并恢复（手动暂停的不动）
+        resumed_q = resume_quota_exhausted_tasks(db, target)
+        if resumed_q:
+            notices.append(f"自动恢复 {len(resumed_q)} 个因配额耗尽被暂停的监控任务")
     # R10-P1-1：手动降档后立即收敛任务数——复用 refund_payment 的同口径
     # （converge_task_limit(reason="tier_limit")）。注意降为 free 时
     # tier_expires_at 已被清空（上文 R4-P1-D2 分支），membership_sweep 只扫
@@ -505,6 +514,10 @@ def claim_payment(
         resumed = resume_tier_limited_tasks(db, user)
         if resumed:
             notices.append(f"自动恢复 {len(resumed)} 个因档位超限被暂停的监控任务")
+        # R13-P2-5：配额耗尽暂停的任务在新周期配额可用时一并恢复（手动暂停的不动）
+        resumed_q = resume_quota_exhausted_tasks(db, user)
+        if resumed_q:
+            notices.append(f"自动恢复 {len(resumed_q)} 个因配额耗尽被暂停的监控任务")
     # D4：认领成功后 amount_mismatch 从待处理队列移除（status=resolved），
     # 待处理计数同步递减
     pending_count = None
@@ -679,6 +692,21 @@ def refund_payment(
     return out
 
 
+@router.post("/catalog/refresh")
+def admin_catalog_refresh(
+    background_tasks: BackgroundTasks,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """R13-P3-10：门店目录在线刷新（重操作：在线打 Apple 接口）。
+
+    从公开 /catalog/stores?refresh=1 拆到管理路由——原先仅凭 user.is_admin
+    判断，绕过了管理后台的 TOTP 二次验证；这里走 get_current_admin，
+    TOTP 未验证时 403。返回当前目录数组（刷新走后台异步任务）。
+    """
+    return enqueue_catalog_refresh(db, background_tasks, admin)
+
+
 @router.get("/system")
 def system_status(admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
     # D1：API 进程不跑引擎（内存状态恒 stopped），引擎状态读独立 engine 进程
@@ -724,8 +752,17 @@ def set_peak_mode(
 
 
 def _tail_log(n: int = 100) -> list[str]:
-    candidates = ["logs/app.log"]
+    # R13-P2-3：按 STOCKMON_LOG_NAME 读对应进程的日志文件——生产环境 API
+    # 与 engine 各写各的文件（stockmon-api.log / stockmon-engine.log，
+    # 见 core/logging.py 与 deploy/*.service），写死的 logs/app.log 在生产
+    # 恒为空。未设置时回退 app.log（与 logging.configure_logging 同口径）。
+    log_name = os.environ.get("STOCKMON_LOG_NAME", "app.log")
+    candidates = [f"logs/{log_name}", "logs/app.log"]
+    seen: list[str] = []
     for p in candidates:
+        if p not in seen:
+            seen.append(p)
+    for p in seen:
         if os.path.exists(p):
             try:
                 with open(p, encoding="utf-8") as f:

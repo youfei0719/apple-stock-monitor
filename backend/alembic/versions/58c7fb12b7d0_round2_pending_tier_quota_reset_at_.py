@@ -18,11 +18,15 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     # 只含 round2 新增列；api_hits 的 alter 系 autogenerate 伪 diff（sqlite 不支持），已剔除
-    op.add_column('monitor_tasks', sa.Column('consecutive_failures', sa.Integer(), nullable=False, server_default="0"))
+    op.add_column(
+        'monitor_tasks',
+        sa.Column('consecutive_failures', sa.Integer(), nullable=False, server_default="0"))
     op.add_column('notifications', sa.Column('part_number', sa.String(length=64), nullable=True))
     op.add_column('users', sa.Column('pending_tier', sa.String(length=32), nullable=True))
     op.add_column('users', sa.Column('quota_reset_at', sa.DateTime(), nullable=True))
-    op.add_column('users', sa.Column('email_verified', sa.Boolean(), nullable=False, server_default="0"))
+    op.add_column(
+        'users',
+        sa.Column('email_verified', sa.Boolean(), nullable=False, server_default="0"))
 
 
 def downgrade() -> None:

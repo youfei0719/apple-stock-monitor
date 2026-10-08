@@ -8,9 +8,9 @@ from sqlalchemy import engine_from_config, event, pool
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import app.models  # noqa: E402,F401  (注册全部模型)
 from app.core.config import get_settings  # noqa: E402
 from app.core.db import Base  # noqa: E402
-import app.models  # noqa: E402,F401  (注册全部模型)
 
 config = context.config
 settings = get_settings()

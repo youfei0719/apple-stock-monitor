@@ -20,6 +20,7 @@ from app.models.models import (
     ApiHit,
     MonitorTask,
     Notification,
+    QuotaUsage,
     StockState,
     SystemConfig,
     User,
@@ -27,6 +28,7 @@ from app.models.models import (
 from app.models.models import (
     Session as DbSession,
 )
+from app.services.engine import QUOTA_CYCLE_DAYS, quota_period_key
 from app.services.notifier import build_product_link
 
 log = get_logger("lifecycle")
@@ -168,6 +170,84 @@ def resume_tier_limited_tasks(db: Session, user: User) -> list[MonitorTask]:
             "tier_limited_tasks_resumed",
             user_id=user.id,
             tier=effective_tier(user),
+            resumed=len(resumed),
+            still_paused=len(paused) - len(resumed),
+        )
+    return resumed
+
+
+def resume_quota_exhausted_tasks(db: Session, user: User) -> list[MonitorTask]:
+    """R13-P2-5：升级/续费成功后，自动恢复因配额耗尽被暂停的任务。
+
+    只恢复 paused_reason == "quota_exhausted" 的任务（manual / tier_limit /
+    notify_failures / zombie 等其他原因的不动——手动暂停必须由用户亲手恢复，
+    与手动暂停严格区分）；要求新周期配额有余量（当前周期 push_count <
+    档位 push_limit，与 engine._check_quota 同口径），否则不动，避免
+    "恢复→引擎立刻再暂停→重复发 quota_exhausted 通知"的抖动；按新档位
+    tasks_limit 限额、优先恢复最近更新的任务；恢复后清空 paused_reason。
+    webhook / admin claim / admin 改档三条升级路径共用。返回被恢复的任务。
+    """
+    if user is None or user.id is None:
+        return []
+    tier = effective_tier(user)
+    tier_cfg = TIERS.get(tier, TIERS["free"])
+    # 配额余量检查：先滚锚点（升级路径一般已由 apply_tier_grant 置好新锚点，
+    # 这里是兜底），再按周期键读用量
+    now = datetime.utcnow()
+    anchor = getattr(user, "quota_reset_at", None)
+    rolled = anchor
+    while rolled is not None and now >= rolled:
+        rolled = rolled + timedelta(days=QUOTA_CYCLE_DAYS)
+    if rolled != anchor:
+        user.quota_reset_at = rolled
+        db.add(user)
+    period = quota_period_key(user)
+    usage = db.execute(
+        select(QuotaUsage).where(
+            QuotaUsage.user_id == user.id, QuotaUsage.period == period
+        )
+    ).scalar_one_or_none()
+    used = usage.push_count if usage else 0
+    if used >= tier_cfg["push_limit"]:
+        log.info(
+            "quota_exhausted_tasks_not_resumed",
+            user_id=user.id,
+            tier=tier,
+            used=used,
+            limit=tier_cfg["push_limit"],
+        )
+        return []
+    paused = (
+        db.execute(
+            select(MonitorTask)
+            .where(
+                MonitorTask.user_id == user.id,
+                MonitorTask.paused.is_(True),
+                MonitorTask.paused_reason == "quota_exhausted",
+            )
+            .order_by(MonitorTask.updated_at.desc())
+        )
+        .scalars()
+        .all()
+    )
+    if not paused:
+        return []
+    active_count = db.execute(
+        select(func.count())
+        .select_from(MonitorTask)
+        .where(MonitorTask.user_id == user.id, MonitorTask.paused.is_(False))
+    ).scalar()
+    slots = max(tier_cfg["tasks_limit"] - (active_count or 0), 0)
+    resumed = paused[:slots]
+    for t in resumed:
+        t.paused = False
+        t.paused_reason = None
+        db.add(t)
+    if resumed:
+        log.info(
+            "quota_exhausted_tasks_resumed",
+            user_id=user.id,
+            tier=tier,
             resumed=len(resumed),
             still_paused=len(paused) - len(resumed),
         )
@@ -660,6 +740,7 @@ __all__ = [
     "converge_task_limit",
     "null_notification_task_ids",
     "resume_tier_limited_tasks",
+    "resume_quota_exhausted_tasks",
     "prune_api_hits",
     "prune_notifications",
     "prune_sessions",

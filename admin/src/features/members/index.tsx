@@ -163,8 +163,14 @@ export function Members() {
 
   function openPending(user: AdminUser, tier: Tier) {
     setPending({ user, tier })
-    // 默认给新档位 +30 天到期（与 webhook 开通语义一致），可手动改
-    setExpiresAt(toLocalInput(new Date(Date.now() + 30 * 86400000).toISOString()))
+    // R13-P1-2：降为 free/trial 时不预填到期时间——后端 R11-P2-2 分支会 400
+    // 拒绝 free/trial + tier_expires_at 的组合；付费档位才默认 +30 天（与
+    // webhook 开通语义一致），可手动改
+    if (tier === 'free' || tier === 'trial') {
+      setExpiresAt('')
+    } else {
+      setExpiresAt(toLocalInput(new Date(Date.now() + 30 * 86400000).toISOString()))
+    }
   }
 
   async function confirmChange() {
@@ -172,9 +178,16 @@ export function Members() {
     setChanging(true)
     try {
       const iso = toISO(expiresAt)
+      // R13-P1-2：降为 free/trial 时不传 tier_expires_at（传了后端 400 拒绝）；
+      // 付费档位才传（未填则后端默认 +30 天）
+      const isDowngrade = pending.tier === 'free' || pending.tier === 'trial'
       // R9-I12：展示后端实际生效值 + notices（未传到期时间时后端默认 +30 天），
       // 不再用前端自己传的 iso 渲染，避免与实际生效值不一致
-      const out = await updateUserTier(pending.user.id, pending.tier, iso)
+      const out = await updateUserTier(
+        pending.user.id,
+        pending.tier,
+        isDowngrade ? undefined : iso,
+      )
       const rawExp = out.changes?.tier_expires_at
       const actualExp = rawExp && typeof rawExp === 'object' ? (rawExp.to ?? null) : iso
       setUsers((prev) =>
@@ -398,9 +411,13 @@ export function Members() {
                 value={expiresAt}
                 onChange={(e) => setExpiresAt(e.target.value)}
                 className='rounded-2xl font-mono'
+                // R13-P1-2：free/trial 档位无需到期时间，禁用输入避免误填触发后端 400
+                disabled={pending?.tier === 'free' || pending?.tier === 'trial'}
               />
               <p className='mt-1.5 text-xs text-muted-foreground'>
-                当前到期：{fmtLocalTime(pending?.user.tier_expires_at ?? null)}
+                {pending?.tier === 'free' || pending?.tier === 'trial'
+                  ? 'free/trial 档位无需到期时间'
+                  : `当前到期：${fmtLocalTime(pending?.user.tier_expires_at ?? null)}`}
               </p>
             </div>
           </AlertDialogHeader>

@@ -30,7 +30,7 @@ from app.core.db import get_db
 from app.core.logging import get_logger
 from app.core.tiers import effective_tier
 from app.models.models import Payment, User
-from app.services.lifecycle import resume_tier_limited_tasks
+from app.services.lifecycle import resume_quota_exhausted_tasks, resume_tier_limited_tasks
 
 router = APIRouter(tags=["pay"])
 log = get_logger("pay")
@@ -314,6 +314,11 @@ async def afdian_webhook(request: Request, db: Session = Depends(get_db)):
             resumed = resume_tier_limited_tasks(db, user)
             if resumed:
                 notices.append(f"自动恢复 {len(resumed)} 个因档位超限被暂停的监控任务")
+            # R13-P2-5：配额耗尽暂停的任务在新周期配额可用时一并恢复
+            # （手动暂停的不动）
+            resumed_q = resume_quota_exhausted_tasks(db, user)
+            if resumed_q:
+                notices.append(f"自动恢复 {len(resumed_q)} 个因配额耗尽被暂停的监控任务")
 
     row = _add_payment_atomic(
         db,

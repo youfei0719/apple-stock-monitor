@@ -78,7 +78,7 @@ export interface SystemStatus {
   engine: EngineStatus
   apple_cooldown: Record<string, unknown>
   log_tail: string[]
-  /** 高峰模式：trial/free 间隔拉长、catalog 后台刷新暂停、pro 优先 */
+  /** 高峰模式：trial / free 轮询间隔 ×4（唯一生效点见 engine.py peak 分支） */
   peak_mode: boolean
 }
 

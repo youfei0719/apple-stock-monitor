@@ -255,12 +255,15 @@ export default function AddMonitor() {
     }
   };
 
-  // 预计月消耗（上限估算，按成功发送计）：ceil(30*24*3600 / interval) × 门店数
+  // 预计月消耗（上限估算，按成功发送计）：
+  // ceil(30*24*3600 / interval) × 门店数 × 机型数（R13-P2-7：此前漏乘机型数）
   const riNum = parseInt(repeatInterval, 10);
   const showEstimate =
     mode === 'confirmed' && Number.isFinite(riNum) && riNum >= MIN_REPEAT_INTERVAL_SEC;
   const monthlyEstimate = showEstimate
-    ? Math.ceil((30 * 24 * 3600) / riNum) * Math.max(1, pickedStores.size)
+    ? Math.ceil((30 * 24 * 3600) / riNum) *
+      Math.max(1, pickedStores.size) *
+      Math.max(1, partNumbers.length)
     : 0;
 
   return (

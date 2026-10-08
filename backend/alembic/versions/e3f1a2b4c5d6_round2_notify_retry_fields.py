@@ -18,7 +18,9 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column('notifications', sa.Column('retry_count', sa.Integer(), nullable=False, server_default="0"))
+    op.add_column(
+        'notifications',
+        sa.Column('retry_count', sa.Integer(), nullable=False, server_default="0"))
     op.add_column('notifications', sa.Column('retry_at', sa.DateTime(), nullable=True))
     # 老用户回填：邮箱验证功能上线前注册的账号视为已验证
     op.execute(sa.text("UPDATE users SET email_verified = 1"))

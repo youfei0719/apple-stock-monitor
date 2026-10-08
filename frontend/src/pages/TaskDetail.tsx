@@ -100,12 +100,16 @@ export default function TaskDetail() {
             ? '已续期 +30 天'
             : gainedDays >= 0.9
               ? '已续期 +24 小时'
-              : `已续期至 ${new Date(t.expires_at).toLocaleDateString('zh-CN', {
-                  // R9-I7：全站显式北京时间（与页脚承诺一致）
-                  timeZone: 'Asia/Shanghai',
-                  month: '2-digit',
-                  day: '2-digit',
-                })}`;
+              : // R13-P1-1：非匿名任务真实续期必 ≥29 天（匿名钳制 +24h 必 ≥0.9），
+                // 走到这里说明后端命中了续期去重（重复点击），不再显示"已续期至"假象
+                !anonymous
+                ? '请勿重复点击'
+                : `已续期至 ${new Date(t.expires_at).toLocaleDateString('zh-CN', {
+                    // R9-I7：全站显式北京时间（与页脚承诺一致）
+                    timeZone: 'Asia/Shanghai',
+                    month: '2-digit',
+                    day: '2-digit',
+                  })}`;
       }
       // R9-I14：后端续费/升级路径自动恢复 tier_limit 暂停的任务，notices 在响应里返回，
       // 前端一并展示（如"已自动恢复 N 个任务"）

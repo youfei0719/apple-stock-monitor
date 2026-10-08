@@ -1,5 +1,6 @@
 """FastAPI 入口：挂载路由、健康检查、限流中间件、引擎生命周期。"""
 
+import asyncio
 import hashlib
 import threading
 import time
@@ -161,7 +162,15 @@ def _buffer_api_hit(path: str, ip_hash: str) -> None:
         ):
             do_flush = True
     if do_flush:
-        _flush_api_hits()
+        # R13-P3-9：刷盘是同步 DB I/O，不能在事件循环里直接跑（会阻塞所有
+        # 并发请求）；丢到线程池执行。非 async 上下文调用时（理论上不存在，
+        # 只有上面的 async 中间件会调）降级为直接执行。
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            _flush_api_hits()
+        else:
+            loop.run_in_executor(None, _flush_api_hits)
 
 
 def _flush_api_hits() -> None:

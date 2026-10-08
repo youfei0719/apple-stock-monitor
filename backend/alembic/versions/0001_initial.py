@@ -5,15 +5,15 @@ Revises:
 Create Date: 2026-10-09
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0001_initial"
-down_revision: Union[str, None] = None
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = None
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -35,7 +35,11 @@ def upgrade() -> None:
     op.create_table(
         "sessions",
         sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("user_id", sa.Integer(), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "user_id",
+            sa.Integer(),
+            sa.ForeignKey("users.id", ondelete="CASCADE"),
+            nullable=False),
         sa.Column("token_digest", sa.String(128), nullable=False),
         sa.Column("totp_verified", sa.Boolean(), nullable=False, server_default="0"),
         sa.Column("ip", sa.String(64), nullable=True),
@@ -49,7 +53,11 @@ def upgrade() -> None:
     op.create_table(
         "monitor_tasks",
         sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("user_id", sa.Integer(), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=True),
+        sa.Column(
+            "user_id",
+            sa.Integer(),
+            sa.ForeignKey("users.id", ondelete="CASCADE"),
+            nullable=True),
         sa.Column("device_id", sa.String(128), nullable=True),
         sa.Column("name", sa.String(255), nullable=False),
         sa.Column("task_group", sa.String(128), nullable=False, server_default=""),
@@ -78,7 +86,11 @@ def upgrade() -> None:
     op.create_table(
         "stock_states",
         sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("task_id", sa.Integer(), sa.ForeignKey("monitor_tasks.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "task_id",
+            sa.Integer(),
+            sa.ForeignKey("monitor_tasks.id", ondelete="CASCADE"),
+            nullable=False),
         sa.Column("store_number", sa.String(16), nullable=False),
         sa.Column("part_number", sa.String(64), nullable=False),
         sa.Column("state", sa.String(16), nullable=False, server_default="unknown"),
@@ -96,8 +108,16 @@ def upgrade() -> None:
     op.create_table(
         "notifications",
         sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("user_id", sa.Integer(), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=True),
-        sa.Column("task_id", sa.Integer(), sa.ForeignKey("monitor_tasks.id", ondelete="SET NULL"), nullable=True),
+        sa.Column(
+            "user_id",
+            sa.Integer(),
+            sa.ForeignKey("users.id", ondelete="CASCADE"),
+            nullable=True),
+        sa.Column(
+            "task_id",
+            sa.Integer(),
+            sa.ForeignKey("monitor_tasks.id", ondelete="SET NULL"),
+            nullable=True),
         sa.Column("kind", sa.String(32), nullable=False, server_default="stock_alert"),
         sa.Column("channel", sa.String(32), nullable=False),
         sa.Column("target", sa.String(512), nullable=False, server_default=""),
@@ -114,7 +134,11 @@ def upgrade() -> None:
     op.create_table(
         "quota_usage",
         sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("user_id", sa.Integer(), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "user_id",
+            sa.Integer(),
+            sa.ForeignKey("users.id", ondelete="CASCADE"),
+            nullable=False),
         sa.Column("period", sa.String(7), nullable=False),
         sa.Column("push_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("updated_at", sa.DateTime(), nullable=False),
@@ -125,7 +149,11 @@ def upgrade() -> None:
     op.create_table(
         "payments",
         sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("user_id", sa.Integer(), sa.ForeignKey("users.id", ondelete="SET NULL"), nullable=True),
+        sa.Column(
+            "user_id",
+            sa.Integer(),
+            sa.ForeignKey("users.id", ondelete="SET NULL"),
+            nullable=True),
         sa.Column("order_id", sa.String(128), nullable=False),
         sa.Column("plan", sa.String(128), nullable=False, server_default=""),
         sa.Column("amount_cny", sa.Float(), nullable=False, server_default="0"),
@@ -182,7 +210,9 @@ def downgrade() -> None:
         ("stock_states", ["ix_stock_states_task_id"]),
         (
             "monitor_tasks",
-            ["ix_monitor_tasks_user_id", "ix_monitor_tasks_device_id", "ix_monitor_tasks_part_number"],
+            ["ix_monitor_tasks_user_id",
+             "ix_monitor_tasks_device_id",
+             "ix_monitor_tasks_part_number"],
         ),
         ("sessions", ["ix_sessions_user_id", "ix_sessions_token_digest"]),
         ("users", ["ix_users_email"]),

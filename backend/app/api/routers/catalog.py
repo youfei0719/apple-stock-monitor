@@ -1,7 +1,8 @@
-"""目录（公开）：全国门店目录 + 在线刷新、产品目录。
+"""目录（公开）：全国门店目录、产品目录。
 
-门店目录以 system_config 的 store_catalog 为准；refresh=1 时按城市锚点
-在线调用 pickup-message 重新发现，全局限流 1 次/小时。
+门店目录以 system_config 的 store_catalog 为准；在线刷新是重操作，已拆到
+POST /api/admin/catalog/refresh（管理后台，走 TOTP 二次验证），公开接口
+不再接受 refresh=1（R13-P3-10）。
 """
 
 import time
@@ -9,7 +10,6 @@ import time
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_optional_user
 from app.api.errors import APIError
 from app.core.db import SessionLocal, get_db
 from app.core.logging import get_logger
@@ -169,12 +169,33 @@ def _do_refresh_stores() -> None:
         _refresh_running = False
 
 
+def enqueue_catalog_refresh(
+    db: Session, background_tasks: BackgroundTasks, admin_user: User
+) -> list:
+    """R13-P3-10：门店目录在线刷新（重操作）——按城市锚点在线调用
+    pickup-message 重新发现，全局限流 1 次/小时。
+
+    仅供管理后台调用（POST /api/admin/catalog/refresh，经 get_current_admin
+    的 TOTP 二次验证）；公开接口不再直接触发。
+    """
+    last = get_config(db, REFRESH_AT_KEY, {}).get("at", 0)
+    if time.time() - last < REFRESH_COOLDOWN_SEC:
+        raise APIError(429, "门店目录刷新限流：每小时 1 次", "refresh_limited")
+    current = get_config(db, STORE_CATALOG_KEY, {}).get("stores", [])
+    if _refresh_running:
+        return current
+    # 先占位写刷新时间，防并发重复触发
+    set_config(db, REFRESH_AT_KEY, {"at": time.time()})
+    background_tasks.add_task(_do_refresh_stores)
+    log.info("catalog_refresh_enqueued", admin_id=admin_user.id)
+    return current
+
+
 @router.get("/stores")
 def list_stores(
     background_tasks: BackgroundTasks,
     refresh: int = Query(default=0, ge=0, le=1),
     db: Session = Depends(get_db),
-    user: User | None = Depends(get_optional_user),
 ):
     """R4-P0-5：refresh=1 成功时也返回纯数组（与 refresh=0 同形）。
 
@@ -183,20 +204,10 @@ def list_stores(
     """
     _seed_if_empty(db)
     if refresh == 1:
-        # 刷新是在线打 Apple 接口的重操作：仅管理员可触发，且走后台异步任务
-        if not user or not user.is_admin:
-            raise APIError(403, "刷新门店目录需要管理员权限", "forbidden")
-        last = get_config(db, REFRESH_AT_KEY, {}).get("at", 0)
-        if time.time() - last < REFRESH_COOLDOWN_SEC:
-            raise APIError(429, "门店目录刷新限流：每小时 1 次", "refresh_limited")
-        current = get_config(db, STORE_CATALOG_KEY, {}).get("stores", [])
-        if _refresh_running:
-            return current
-        # 先占位写刷新时间，防并发重复触发
-        set_config(db, REFRESH_AT_KEY, {"at": time.time()})
-        background_tasks.add_task(_do_refresh_stores)
-        log.info("catalog_refresh_enqueued", admin_id=user.id)
-        return current
+        # R13-P3-10：公开接口不再接受 refresh=1——原先仅凭 user.is_admin
+        # 判断，绕过了管理后台的 TOTP 二次验证；刷新请走管理后台
+        # POST /api/admin/catalog/refresh
+        raise APIError(403, "门店目录刷新请使用管理后台", "use_admin_refresh")
     stores = get_config(db, STORE_CATALOG_KEY, {}).get("stores", [])
     return stores
 
