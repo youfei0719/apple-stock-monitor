@@ -40,8 +40,12 @@ const step2Schema = z.object({
   totp: z.string().regex(/^\d{6,8}$/, '请输入 6–8 位动态验证码'),
 })
 
-const MAX_FAILS = 5 // 与后端契约一致：连续失败锁 IP（时长由后端执行）
-const COOLDOWN_SEC = 60 // 前端侧演示冷却（真实锁定由后端执行）
+// 与后端契约一致：连续失败触发后端锁定（config.py: LOGIN_FAIL_LOCK=5 / LOGIN_LOCK_MINUTES=15）。
+// 第 1 步（邮箱 + 密码）按 IP 计锁；第 2 步（TOTP）按账号（user）计锁。
+const MAX_FAILS = 5
+// R9-I5：前端页面冷却（防连点 UX），真实锁定由后端执行——后端锁 15 分钟，
+// 文案不许暗示"60 秒后锁定就解除"，否则 60 秒后重试必吃 429 陷入死循环。
+const COOLDOWN_SEC = 60
 
 /**
  * 后台登录（两步，对齐后端 auth.py）：
@@ -176,15 +180,29 @@ export function SignIn() {
               <AlertTriangle className='mt-0.5 h-4 w-4 shrink-0' />
               <div>
                 {locked ? (
+                  step === 1 ? (
+                    <>
+                      已连续 {MAX_FAILS} 次登录失败：当前 IP 将被后端锁定约 15 分钟。
+                      <br />
+                      页面冷却 {cooldown} 秒（锁定期内重试也会被拒绝，请确认密码无误后再试）。
+                    </>
+                  ) : (
+                    <>
+                      已连续 {MAX_FAILS} 次验证码失败：该账号将被后端锁定约 15
+                      分钟（按账号计，非 IP）。
+                      <br />
+                      页面冷却 {cooldown} 秒（锁定期内重试也会被拒绝）。
+                    </>
+                  )
+                ) : step === 1 ? (
                   <>
-                    已连续 {MAX_FAILS} 次失败，触发限流：当前 IP 将被锁定。
-                    <br />
-                    请 {cooldown} 秒后再试。
+                    登录失败（第 {failCount} 次）。连续 {MAX_FAILS}{' '}
+                    次失败将锁定当前 IP 约 15 分钟。
                   </>
                 ) : (
                   <>
-                    登录失败（第 {failCount} 次）。连续 {MAX_FAILS}{' '}
-                    次失败将锁定当前 IP。
+                    验证码失败（第 {failCount} 次）。连续 {MAX_FAILS}{' '}
+                    次失败将锁定该账号约 15 分钟（按账号计，非 IP）。
                   </>
                 )}
               </div>

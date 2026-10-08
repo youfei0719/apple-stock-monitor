@@ -162,7 +162,7 @@ export function System() {
         <div className='mb-6'>
           <h1 className='text-2xl font-bold tracking-tight'>系统状态</h1>
           <p className='text-sm text-muted-foreground'>
-            引擎 / Apple 冷却 / 日志 / 管理员审计 · 时间均为本地时间
+            引擎 / Apple 冷却 / 日志 / 管理员审计 · 时间均为北京时间
             {USE_MOCK && '（mock 数据，待后端联调）'}
           </p>
         </div>
@@ -203,7 +203,7 @@ export function System() {
                 </Badge>
               )}
               <p className='mt-2 font-mono text-xs text-muted-foreground'>
-                上次心跳 {fmtLocalTime(engine?.last_heartbeat)}（本地时间）
+                上次心跳 {fmtLocalTime(engine?.last_heartbeat)}（北京时间）
               </p>
               {engine?.last_error && (
                 <p className='mt-1 font-mono text-xs text-[#d70015]'>
@@ -378,7 +378,7 @@ export function System() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>时间（本地时间）</TableHead>
+                    <TableHead>时间（北京时间）</TableHead>
                     <TableHead className='font-mono'>管理员 ID</TableHead>
                     <TableHead>操作</TableHead>
                     <TableHead>对象</TableHead>

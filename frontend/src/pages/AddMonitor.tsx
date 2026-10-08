@@ -221,7 +221,24 @@ export default function AddMonitor() {
         if (group.trim()) patch.group = group.trim();
         if (repeatSec !== null) patch.repeat_interval_sec = repeatSec;
         if (Object.keys(patch).length > 0) {
-          await Promise.all(created.map((t) => api.updateTask(t.id, patch)));
+          // R9-D4：PATCH 补齐阶段单独捕获——batch 已成功（任务已入库），
+          // 任一 PATCH 失败不能渲染成"创建失败"，否则用户重试会撞后端 409 查重；
+          // 照常 refreshTasks + 跳首页，失败信息经首页横幅（location.state.notice）展示一次
+          try {
+            await Promise.all(created.map((t) => api.updateTask(t.id, patch)));
+          } catch (patchErr) {
+            try {
+              await refreshTasks('active');
+            } catch {
+              /* 刷新失败不影响：任务已创建，首页会自行重试加载 */
+            }
+            navigate('/', {
+              state: {
+                notice: `任务已创建，但分组/重复间隔设置失败：${patchErr instanceof Error ? patchErr.message : '未知错误'}`,
+              },
+            });
+            return;
+          }
         }
       }
       await refreshTasks('active');

@@ -362,6 +362,9 @@ export const api = {
       totp_enabled: boolean;
       /** R7：登录/注册时认领了匿名 device 任务会有提示文案（后端 auth.py _claim_notice） */
       notice?: string | null;
+      /** R9-I15：后端 register 新增 email_sent——SMTP 瞬断导致验证码首发失败时为 false，
+       * 前端据此提示"发送失败，请点重新发送"，别让用户干等一封从未发出的邮件 */
+      email_sent?: boolean;
     }>('/auth/register', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
@@ -384,6 +387,13 @@ export const api = {
       body: JSON.stringify({ email }),
     }),
   logout: () => req<void>('/auth/logout', { method: 'POST' }),
+  /** R9-I10：修改密码——PATCH /me {old_password, password}，走统一 req()；
+   * 后端删除该用户其他会话（当前会话保留），成功返回 {ok: true} */
+  changePassword: (oldPassword: string, password: string) =>
+    req<{ ok: boolean }>('/me', {
+      method: 'PATCH',
+      body: JSON.stringify({ old_password: oldPassword, password }),
+    }),
   me: () => req<Me>('/me'),
 
   tasks: (status: TaskStatusFilter = 'all') => {
@@ -391,9 +401,11 @@ export const api = {
     return req<Task[]>(`/tasks${q}`);
   },
   task: (id: string | number) => req<Task>(`/tasks/${id}`),
-  // 后端 POST /tasks/{id}/renew 返回 TaskOut（完整任务），不是 {ok, expires_at}
+  // 后端 POST /tasks/{id}/renew 返回 TaskOut（完整任务），不是 {ok, expires_at}。
+  // R9-I14：续费/升级路径会自动恢复 tier_limit 暂停的任务，notices 在响应里返回
+  // （如"已自动恢复 N 个任务"），前端在成功提示里一并展示
   renewTask: (id: string | number) =>
-    req<Task>(`/tasks/${id}/renew`, { method: 'POST' }),
+    req<Task & { notices?: string[] }>(`/tasks/${id}/renew`, { method: 'POST' }),
   // POST /tasks/batch 直接支持 category/mode/channels；group/repeat_interval_sec 仍走 PATCH 补齐
   batchTasks: (payload: {
     part_numbers: string[];
@@ -472,7 +484,8 @@ export const api = {
   analyticsOverview: () => req<Record<string, unknown>>('/analytics/overview'),
   guide: () => req<PurchaseGuide>('/guide/purchase'),
   // F6：/stats/poll 的 last_poll_at 是 UTC 裸字符串（无 Z 后缀），前端解析时必须按 UTC 处理。
-  // 后缀缺失时补 Z；若已有 Z 或 ±hh:mm 偏移则不动。再由各页转本地展示（页脚承诺"页面内所有时间为本地时间"）。
+  // 后缀缺失时补 Z；若已有 Z 或 ±hh:mm 偏移则不动。再由各页显式按北京时间渲染
+  // （R9-I7：页脚承诺"页面内所有时间为北京时间（UTC+8）"）。
   pollStats: () =>
     req<PollStats>('/stats/poll').then((s) => ({
       ...s,

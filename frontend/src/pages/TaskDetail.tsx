@@ -23,6 +23,9 @@ export default function TaskDetail() {
   const [saveOk, setSaveOk] = useState<boolean | null>(null);
   const [renewing, setRenewing] = useState(false);
   const [renewMsg, setRenewMsg] = useState<string | null>(null);
+  // R9-I4：续期成功/失败用布尔状态判颜色，与 saveChannels 的 saveOk 对齐，
+  // 不再用 renewMsg.includes('已续期') 文本匹配
+  const [renewOk, setRenewOk] = useState<boolean | null>(null);
   // F-N5：匿名 trial 任务后端续期钳制到 now+24h，文案按实际 expires_at 动态显示
   const { me } = useApp();
   const anonymous = me === null;
@@ -77,30 +80,40 @@ export default function TaskDetail() {
     if (!id) return;
     setRenewing(true);
     setRenewMsg(null);
+    setRenewOk(null);
     try {
       // 后端 renew 按 max(now, 原 expires_at) + 30 天算（匿名钳制 now+24h），
       // 文案按返回的实际 expires_at 动态给，不写死 +30 天
       const oldExp = task?.expires_at ? new Date(task.expires_at).getTime() : Date.now();
       const t = await api.renewTask(id);
       setTask(t);
+      let msg: string;
       if (!t.expires_at) {
-        setRenewMsg('已续期');
+        msg = '已续期';
       } else {
         const gainedDays =
           (new Date(t.expires_at).getTime() - Math.max(Date.now(), oldExp)) / MS_PER_DAY;
-        setRenewMsg(
+        msg =
           gainedDays >= 29
             ? '已续期 +30 天'
             : gainedDays >= 0.9
               ? '已续期 +24 小时'
               : `已续期至 ${new Date(t.expires_at).toLocaleDateString('zh-CN', {
+                  // R9-I7：全站显式北京时间（与页脚承诺一致）
+                  timeZone: 'Asia/Shanghai',
                   month: '2-digit',
                   day: '2-digit',
-                })}`,
-        );
+                })}`;
       }
+      // R9-I14：后端续费/升级路径自动恢复 tier_limit 暂停的任务，notices 在响应里返回，
+      // 前端一并展示（如"已自动恢复 N 个任务"）
+      const notices = t.notices ?? [];
+      if (notices.length > 0) msg += `；${notices.join('；')}`;
+      setRenewMsg(msg);
+      setRenewOk(true);
     } catch (e) {
       setRenewMsg(e instanceof Error ? e.message : '续期失败');
+      setRenewOk(false);
     } finally {
       setRenewing(false);
     }
@@ -153,7 +166,8 @@ export default function TaskDetail() {
                   {renewMsg && (
                     <p
                       className={`mt-1.5 text-xs text-center ${
-                        renewMsg.includes('已续期') ? 'text-ok' : 'text-bad'
+                        // R9-I4：布尔判颜色，不再文本匹配
+                        renewOk ? 'text-ok' : 'text-bad'
                       }`}
                     >
                       {renewMsg}
@@ -233,7 +247,9 @@ export default function TaskDetail() {
                       )}
                       <span className="mono text-[10px] text-faint">
                         {r.updated_at
-                          ? new Date(r.updated_at).toLocaleTimeString('zh-CN', {
+                          ? // R9-I7：全站显式北京时间（与页脚承诺一致）
+                            new Date(r.updated_at).toLocaleTimeString('zh-CN', {
+                              timeZone: 'Asia/Shanghai',
                               hour: '2-digit',
                               minute: '2-digit',
                             })

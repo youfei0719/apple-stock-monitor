@@ -12,7 +12,8 @@ import { USE_MOCK } from '@/lib/admin-api'
  * 已绑定的 → 回 /sign-in 重新走"密码 + TOTP"登录。
  *
  * R8-U-12：守卫结果同会话缓存——overview 一次通过后不再重复请求；
- * 退出登录时由 AdminProfile 调 invalidateAdminGuardCache() 清除。
+ * 退出登录时由 AdminProfile / AdminUserFooter 调 invalidateAdminGuardCache() 清除；
+ * 会话页内过期（admin-api req() 统一拦截 401）同样清除，保证重新登录后守卫重新校验。
  */
 let guardPassed = false
 export function invalidateAdminGuardCache() {

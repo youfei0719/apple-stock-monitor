@@ -253,10 +253,13 @@ export default function NotifyChannels({
         <p className="-mt-1 text-xs text-faint leading-relaxed">
           到货时按这里的渠道发送通知（按实际发送成功的通知条数扣减配额），通知附带直达商品页链接。
         </p>
-        {/* F-2：渠道开放范围按档位动态（trial → 体验版仅站内；付费档 → 仅邮件），不写死 */}
-        <p className="-mt-2 text-xs text-bad/90 leading-relaxed bg-bad/5 rounded-card-sm px-2.5 py-2">
-          {channelNote}
-        </p>
+        {/* F-2：渠道开放范围按档位动态（trial → 体验版仅站内；付费档 → 仅邮件），不写死。
+            R9-I11：tier===null（档位加载中）时不渲染档位文案，避免匿名用户首帧闪烁 */}
+        {tier !== null && (
+          <p className="-mt-2 text-xs text-bad/90 leading-relaxed bg-bad/5 rounded-card-sm px-2.5 py-2">
+            {channelNote}
+          </p>
+        )}
         {anonymous && (
           <p className="-mt-1 text-xs text-faint leading-relaxed">
             登录后可测试通知渠道（测试不扣配额）。

@@ -148,16 +148,21 @@ export function Members() {
     setChanging(true)
     try {
       const iso = toISO(expiresAt)
-      await updateUserTier(pending.user.id, pending.tier, iso)
+      // R9-I12：展示后端实际生效值 + notices（未传到期时间时后端默认 +30 天），
+      // 不再用前端自己传的 iso 渲染，避免与实际生效值不一致
+      const out = await updateUserTier(pending.user.id, pending.tier, iso)
+      const rawExp = out.changes?.tier_expires_at
+      const actualExp = rawExp && typeof rawExp === 'object' ? (rawExp.to ?? null) : iso
       setUsers((prev) =>
         prev?.map((u) =>
           u.id === pending.user.id
-            ? { ...u, tier: pending.tier, tier_expires_at: iso }
+            ? { ...u, tier: pending.tier, tier_expires_at: actualExp ?? null }
             : u,
         ) ?? null,
       )
+      const notices = (out.notices ?? []).length > 0 ? `（${(out.notices ?? []).join('；')}）` : ''
       toast.success(
-        `已将 ${pending.user.email} 改为${TIER_LABEL[pending.tier]}${iso ? `（到期 ${fmtLocalTime(iso)}）` : ''}（已记审计）`,
+        `已将 ${pending.user.email} 改为${TIER_LABEL[pending.tier]}${actualExp ? `（到期 ${fmtLocalTime(actualExp)}）` : ''}${notices}（已记审计）`,
       )
     } catch (e) {
       toast.error(e instanceof Error ? e.message : '改级失败')
@@ -242,8 +247,8 @@ export function Members() {
                     <TableHead>管理员</TableHead>
                     <TableHead>TOTP</TableHead>
                     <TableHead>邮箱验证</TableHead>
-                    <TableHead>等级到期（本地时间）</TableHead>
-                    <TableHead>注册时间（本地时间）</TableHead>
+                    <TableHead>等级到期（北京时间）</TableHead>
+                    <TableHead>注册时间（北京时间）</TableHead>
                     <TableHead className='text-right'>操作</TableHead>
                   </TableRow>
                 </TableHeader>

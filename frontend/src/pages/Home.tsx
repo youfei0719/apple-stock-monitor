@@ -5,14 +5,15 @@ import { useApp } from '../components/App';
 import StockStateBadge from '../components/StockStateBadge';
 import { Card, EmptyState, ErrorState, LoadingState, PageHeader } from '../components/ui';
 
+// R9-I7：全站显式北京时间（与页脚承诺一致），不走设备本地时区
 function fmtTime(iso: string): string {
   const d = new Date(iso);
-  return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
 function fmtHM(iso: string): string {
   const d = new Date(iso);
-  return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit' });
 }
 
 function daysLeft(iso: string | null): number | null {
@@ -33,8 +34,10 @@ function TaskCard({
   anonymous: boolean;
 }) {
   const [busy, setBusy] = useState(false);
-  // R6-U3：续期失败用行内错误文案（参考 TaskDetail 的 renewMsg 模式），不再弹原生 alert
+  // R6-U3：续期失败用行内错误文案（参考 TaskDetail 的 renewMsg 模式），不再弹原生 alert；
+  // R9-I14：续期成功时后端 notices（如"已自动恢复 N 个任务"）也在行内展示，用布尔判颜色
   const [renewMsg, setRenewMsg] = useState<string | null>(null);
+  const [renewOk, setRenewOk] = useState<boolean | null>(null);
   // R8-I-16：暂停/恢复失败用行内错误文案，不再 unhandled rejection
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   // R8-U-8：删除确认用应用内弹窗（A·零售式明亮克制风格），不再用 window.confirm
@@ -74,11 +77,19 @@ function TaskCard({
   const renew = async () => {
     setBusy(true);
     setRenewMsg(null);
+    setRenewOk(null);
     try {
-      await api.renewTask(task.id);
+      // R9-I14：后端续费/升级路径自动恢复 tier_limit 暂停任务，notices 在响应里返回，前端一并展示
+      const t = await api.renewTask(task.id);
+      const notices = t.notices ?? [];
+      if (notices.length > 0) {
+        setRenewMsg(notices.join('；'));
+        setRenewOk(true);
+      }
       await onChanged();
     } catch (e) {
       setRenewMsg(e instanceof Error ? e.message : '续期失败');
+      setRenewOk(false);
     } finally {
       setBusy(false);
     }
@@ -194,7 +205,9 @@ function TaskCard({
           </button>
         </div>
         {renewMsg && (
-          <p className="mt-1.5 text-[11px] text-center text-bad">{renewMsg}</p>
+          <p className={`mt-1.5 text-[11px] text-center ${renewOk ? 'text-ok' : 'text-bad'}`}>
+            {renewMsg}
+          </p>
         )}
         {/* R8-I-16：暂停/恢复、删除失败的行内错误文案 */}
         {actionMsg && (

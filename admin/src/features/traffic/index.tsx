@@ -30,15 +30,23 @@ import { AdminProfile } from '@/components/admin-profile'
 import { ThemeSwitch } from '@/components/theme-switch'
 import { getTraffic, type TrafficPoint, USE_MOCK } from '@/lib/admin-api'
 
-/** R8-U-7：后端缺天不返回，前端按 days 把缺的天补 0，避免折线断裂 */
+/** R8-U-7：后端缺天不返回，前端按 days 把缺的天补 0，避免折线断裂。
+ * R9-U2：补零日期键必须用北京时间（后端 day 键是北京时间）——
+ * 浏览器本地时区下，UTC±X 的管理员日期会错位一天。 */
 function fillZeroDays(data: TrafficPoint[], days: number): TrafficPoint[] {
   const byDay = new Map(data.map((d) => [d.day, d]))
   const out: TrafficPoint[] = []
-  const pad = (n: number) => String(n).padStart(2, '0')
+  // en-CA 产出 YYYY-MM-DD，与后端 day 键同形；Asia/Shanghai 显式指定北京时间
+  const beijingDay = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  })
+  const now = Date.now()
   for (let i = days - 1; i >= 0; i--) {
-    const d = new Date()
-    d.setDate(d.getDate() - i)
-    const key = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+    // 北京时间无夏令时，按 24h 步进即连续自然日
+    const key = beijingDay.format(new Date(now - i * 86400000))
     out.push(byDay.get(key) ?? { day: key, pv: 0, uv: 0 })
   }
   return out

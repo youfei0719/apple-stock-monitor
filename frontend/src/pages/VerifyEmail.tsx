@@ -7,8 +7,11 @@ import { Card, PageHeader, PrimaryButton } from '../components/ui';
 export default function VerifyEmail() {
   const navigate = useNavigate();
   const location = useLocation();
-  const locState = (location.state as { email?: string; notice?: string | null } | null);
+  const locState = (location.state as { email?: string; notice?: string | null; emailSent?: boolean } | null);
   const initialEmail = locState?.email ?? '';
+  // R9-I15：后端 register 返回 email_sent=false（SMTP 瞬断导致验证码首发失败）时，
+  // 别让用户干等一封从未发出的邮件——明确提示点"重新发送验证码"
+  const emailSent = locState?.emailSent ?? true;
   const [email, setEmail] = useState(initialEmail);
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
@@ -68,9 +71,18 @@ export default function VerifyEmail() {
 
   return (
     <div>
-      <PageHeader title="验证邮箱" subtitle="6 位验证码已发送到你的邮箱" />
+      <PageHeader
+        title="验证邮箱"
+        subtitle={emailSent ? '6 位验证码已发送到你的邮箱' : '验证码发送失败，请重新发送'}
+      />
       <div className="px-6">
         <Card className="p-6 rise-in">
+          {/* R9-I15：验证码首发失败（email_sent=false）时醒目提示，别让用户干等 */}
+          {!emailSent && (
+            <p className="mb-4 rounded-card-sm bg-[#fff7e8] border border-[#f0c36d] px-3 py-2.5 text-xs text-[#b25e09] text-center leading-relaxed">
+              验证码发送失败（邮箱服务异常），请点下方"重新发送验证码"获取新码
+            </p>
+          )}
           <div className="space-y-3">
             <input
               type="email"

@@ -15,8 +15,10 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]['id'];
 
+// R9-I7：全站显式北京时间（与页脚承诺一致），不走设备本地时区
 function fmt(iso: string): string {
   return new Date(iso).toLocaleString('zh-CN', {
+    timeZone: 'Asia/Shanghai',
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',

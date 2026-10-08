@@ -98,6 +98,8 @@ export function Payments() {
   const [refunding, setRefunding] = useState<PaymentRecord | null>(null)
   const [closing, setClosing] = useState<PaymentRecord | null>(null)
   const [actionBusy, setActionBusy] = useState(false)
+  // R9-U1：force 退款二次确认（has_active_paid_orders）走应用内 AlertDialog，不用 window.confirm
+  const [forceConfirm, setForceConfirm] = useState(false)
 
   const load = async (unclaimed: boolean) => {
     setRows(null)
@@ -153,23 +155,21 @@ export function Payments() {
   }
 
   /** F1：标记退款——后端联动把用户降回 free、revenue 只计 paid 自动排除、记审计 */
-  async function confirmRefund() {
+  async function confirmRefund(force = false) {
     if (!refunding) return
     setActionBusy(true)
     try {
       let out: PaymentActionOut
       try {
-        out = await refundPayment(refunding.id)
+        out = await refundPayment(refunding.id, force)
       } catch (e) {
         // R7：后端 R5-B-3——该用户还有其他有效 paid 订单时 400 has_active_paid_orders；
-        // 二次确认后带 force=true 重调才会真正降档
-        if (e instanceof AdminApiError && e.code === 'has_active_paid_orders') {
-          const ok = window.confirm('该用户还有其他有效付费订单，确认仍要退款降级吗？')
-          if (!ok) return
-          out = await refundPayment(refunding.id, true)
-        } else {
-          throw e
+        // R9-U1：force 二次确认改用应用内 AlertDialog（R8-U-8 规范），不用 window.confirm
+        if (!force && e instanceof AdminApiError && e.code === 'has_active_paid_orders') {
+          setForceConfirm(true)
+          return
         }
+        throw e
       }
       toast.success(
         `订单 ${refunding.order_id} 已标记退款${out.user ? `（用户 #${out.user.user_id} 降回免费版）` : ''}`,
@@ -268,7 +268,7 @@ export function Payments() {
                     <TableHead>套餐</TableHead>
                     <TableHead>等级变化</TableHead>
                     <TableHead>状态</TableHead>
-                    <TableHead>支付时间（本地时间）</TableHead>
+                    <TableHead>支付时间（北京时间）</TableHead>
                     <TableHead className='text-right'>操作</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -427,10 +427,37 @@ export function Payments() {
             <AlertDialogCancel className='rounded-2xl'>取消</AlertDialogCancel>
             <AlertDialogAction
               className='rounded-2xl bg-[#ff9f0a] hover:bg-[#ff9f0a]/90 text-white'
-              onClick={confirmRefund}
+              onClick={() => void confirmRefund()}
               disabled={actionBusy}
             >
               {actionBusy ? '处理中…' : '确认标记退款'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* R9-U1：force 退款二次确认（has_active_paid_orders）——应用内弹窗，替代 window.confirm */}
+      <AlertDialog open={forceConfirm} onOpenChange={setForceConfirm}>
+        <AlertDialogContent className='rounded-3xl'>
+          <AlertDialogHeader>
+            <AlertDialogTitle>仍要强制退款降级？</AlertDialogTitle>
+            <AlertDialogDescription>
+              订单 <span className='font-mono text-foreground'>{refunding?.order_id}</span>
+              的用户还有其他有效付费订单。强制退款会把该用户直接降回免费版
+              （其他有效订单不受影响）。该操作会写入管理员审计日志。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className='rounded-2xl'>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className='rounded-2xl bg-[#d70015] hover:bg-[#d70015]/90 text-white'
+              onClick={() => {
+                setForceConfirm(false)
+                void confirmRefund(true)
+              }}
+              disabled={actionBusy}
+            >
+              确认强制退款
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

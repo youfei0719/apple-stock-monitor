@@ -174,7 +174,8 @@ export default function App() {
         <Outlet context={{ me, tasks, refreshTasks, tasksError, refreshMe, logout }} />
         {location.pathname !== '/login' && location.pathname !== '/verify' && (
           <footer className="px-4 pt-2 pb-6 text-center text-[11px] text-faint">
-            页面内所有时间为本地时间
+            {/* R9-I7：全站显式按北京时间渲染（UTC+8），不走设备本地时区 */}
+            页面内所有时间为北京时间（UTC+8）
           </footer>
         )}
       </main>

@@ -6,6 +6,8 @@
  * 新管理员首次需走 `POST /api/auth/totp/setup` 绑 TOTP 再 verify。
  * 前端不存任何密钥 / token，敏感操作（改级）在页面层做二次确认。
  */
+/** R9：mock 模式已下线（USE_MOCK 恒为 false），所有 mock 分支与 mock 数据已删除。
+ * 该常量仅保留导出，供各页的 "(mock 数据)"类展示兜底判断使用。 */
 export const USE_MOCK = false
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '' // 开发: http://localhost:8000；生产: 同源 ''
@@ -120,55 +122,6 @@ export class AdminApiError extends Error {
   }
 }
 
-// ------------------------------ mock 数据（契约形状，snake_case） ------------------------------
-
-function seededRand(seed: number) {
-  let s = seed
-  return () => {
-    s = (s * 1103515245 + 12345) & 0x7fffffff
-    return s / 0x7fffffff
-  }
-}
-
-const MOCK_USERS: AdminUser[] = [
-  { id: 1, email: 'admin@example.com', tier: 'pro', tier_expires_at: '2026-11-08T10:02:11Z', is_admin: true, totp_enabled: true, created_at: '2026-10-02T03:12:00Z' },
-  { id: 2, email: 'miffy.fan@163.com', tier: 'standard', tier_expires_at: '2026-11-08T11:44:02Z', is_admin: false, totp_enabled: false, created_at: '2026-10-03T09:40:00Z' },
-  { id: 3, email: 'shenzhen.frank@outlook.com', tier: 'free', tier_expires_at: null, is_admin: false, totp_enabled: false, created_at: '2026-10-04T14:05:00Z' },
-  { id: 4, email: 'kuromi_lover@qq.com', tier: 'trial', tier_expires_at: null, is_admin: false, totp_enabled: false, created_at: '2026-10-05T07:22:00Z' },
-]
-
-const MOCK_PAYMENTS: PaymentRecord[] = [
-  { id: 1, user_id: 1, order_id: 'AFD20261008001', plan: 'afdian_plan_pro', amount_cny: 39, tier_from: 'free', tier_to: 'pro', status: 'paid', remark: '2', created_at: '2026-10-08T10:02:11Z' },
-  { id: 2, user_id: 2, order_id: 'AFD20261008002', plan: 'afdian_plan_standard', amount_cny: 19, tier_from: 'free', tier_to: 'standard', status: 'paid', remark: 'miffy.fan@163.com', created_at: '2026-10-08T11:44:02Z' },
-  { id: 3, user_id: null, order_id: 'AFD20261008003', plan: 'afdian_plan_standard', amount_cny: 19, tier_from: null, tier_to: null, status: 'paid', remark: null, created_at: '2026-10-08T13:20:00Z' },
-  { id: 4, user_id: null, order_id: 'AFD20261008004', plan: 'afdian_plan_standard', amount_cny: 15, tier_from: null, tier_to: null, status: 'amount_mismatch', remark: 'shenzhen.frank@outlook.com', created_at: '2026-10-08T14:05:00Z' },
-]
-
-const MOCK_AUDIT: AuditEntry[] = [
-  { id: 1, admin_id: 1, action: 'user.patch', target_type: 'user', target_id: '2', detail: { tier: { from: 'free', to: 'standard' } }, ip: '127.0.0.1', created_at: '2026-10-08T12:00:00Z' },
-]
-
-const MOCK_LOGS = [
-  '2026-10-09T00:47:12Z [poll] store=R484 part=MJYC4CH/A → unavailable (412ms)',
-  '2026-10-09T00:46:58Z [notify] bark → u-001: iPhone 18 Pro Max 银色 512GB 有货（R484）',
-  '2026-10-09T00:46:40Z [engine] heartbeat ok',
-]
-
-function mockTraffic(days: number): TrafficPoint[] {
-  const rand = seededRand(42)
-  const out: TrafficPoint[] = []
-  const now = new Date('2026-10-09T00:00:00Z')
-  for (let i = days - 1; i >= 0; i--) {
-    const d = new Date(now.getTime() - i * 86400000)
-    const base = 800 + Math.sin(i / 4) * 200
-    const pv = Math.round(base + rand() * 400)
-    out.push({ day: d.toISOString().slice(0, 10), pv, uv: Math.round(pv * (0.35 + rand() * 0.15)) })
-  }
-  return out
-}
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
-
 // ------------------------------ 真实请求 ------------------------------
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -177,6 +130,19 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     ...init,
   })
+  // R9-I6：401（会话页内过期）统一跳登录页——全站数据走原生 fetch，
+  // main.tsx 的 react-query QueryCache 401 拦截是死逻辑（无 useQuery 在用）。
+  // 守卫缓存一并清除，保证重新登录后守卫重新校验；已在登录页时不再跳转。
+  if (res.status === 401 && !window.location.pathname.includes('/sign-in')) {
+    try {
+      // 动态 import 避免与 routes/_authenticated/route 的静态循环依赖
+      const mod = await import('@/routes/_authenticated/route')
+      mod.invalidateAdminGuardCache()
+    } catch {
+      /* 路由模块加载失败不影响跳转 */
+    }
+    window.location.href = '/admin/sign-in'
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
     throw new AdminApiError(
@@ -197,10 +163,6 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
  * 调用方按 totp_required 分流：第 2 步走 totpVerify（已绑定）或 /totp-setup（新管理员先绑定）。
  */
 export async function adminLoginPassword(email: string, password: string): Promise<LoginOut> {
-  if (USE_MOCK) {
-    await sleep(600)
-    return { ok: true, totp_required: true }
-  }
   return req<LoginOut>('/api/auth/login', {
     method: 'POST',
     body: JSON.stringify({ email, password }),
@@ -209,74 +171,44 @@ export async function adminLoginPassword(email: string, password: string): Promi
 
 /** 当前登录用户（判断 TOTP 是否已绑定） */
 export async function getMe(): Promise<MeOut> {
-  if (USE_MOCK) {
-    await sleep(200)
-    return { id: 1, email: 'admin@example.com', tier: 'pro', quota: {}, totp_enabled: true }
-  }
   return req('/api/me')
 }
 
 /** TOTP 绑定：返回 secret + otpauth:// uri（前端本地渲染二维码，不经过第三方） */
 export async function totpSetup(): Promise<TotpSetupOut> {
-  if (USE_MOCK) {
-    await sleep(300)
-    return {
-      secret: 'JBSWY3DPEHPK3PXP',
-      uri: 'otpauth://totp/admin?secret=JBSWY3DPEHPK3PXP&issuer=stockmon',
-      enabled: false,
-    }
-  }
   return req('/api/auth/totp/setup', { method: 'POST' })
 }
 
 /** TOTP 验证码校验（setup 后或登录时） */
 export async function totpVerify(code: string): Promise<{ ok: boolean; totp_enabled: boolean }> {
-  if (USE_MOCK) {
-    await sleep(400)
-    if (code === '000000') throw new AdminApiError('验证码错误', 'bad_totp', 400)
-    return { ok: true, totp_enabled: true }
-  }
   return req('/api/auth/totp/verify', { method: 'POST', body: JSON.stringify({ code }) })
 }
 
 /** 总览 KPI */
 export async function getOverview(): Promise<OverviewKpi> {
-  if (USE_MOCK) {
-    await sleep(300)
-    return {
-      total_users: 1284,
-      tier_distribution: { trial: 96, free: 1000, standard: 142, pro: 46 },
-      today_pushes: 2130,
-      revenue_cny: 4827,
-      active_tasks: 96,
-    }
-  }
   return req('/api/admin/overview')
 }
 
 /** 流量：PV/UV 按日（后端字段 day） */
 export async function getTraffic(days = 30): Promise<TrafficPoint[]> {
-  if (USE_MOCK) {
-    await sleep(300)
-    return mockTraffic(days)
-  }
   return req(`/api/admin/traffic?days=${days}`)
 }
 
 /** 会员列表 */
 export async function getUsers(q = '', tier: Tier | '' = ''): Promise<AdminUser[]> {
-  if (USE_MOCK) {
-    await sleep(300)
-    return MOCK_USERS.filter(
-      (u) =>
-        (!q || u.email.toLowerCase().includes(q.toLowerCase())) &&
-        (!tier || u.tier === tier),
-    )
-  }
   const params = new URLSearchParams()
   if (q) params.set('q', q)
   if (tier) params.set('tier', tier)
   return req(`/api/admin/users?${params}`)
+}
+
+/** PATCH /api/admin/users/{id} 返回体。
+ * R9-I12：后端改级默认 +30 天并在 notices 里提示（如"未传 tier_expires_at，已默认设为 +30 天"），
+ * changes.tier_expires_at.to 是实际生效的到期时间——前端展示用它，不用自己传的 iso。 */
+export interface UpdateUserTierOut {
+  ok: boolean
+  changes?: Record<string, { from?: string | null; to?: string | null } | number | string | boolean | null>
+  notices?: string[]
 }
 
 /** 会员改级（写操作，页面层二次确认；后端记 audit）
@@ -286,52 +218,16 @@ export async function updateUserTier(
   id: number,
   tier: Tier,
   tier_expires_at?: string | null,
-): Promise<void> {
-  if (USE_MOCK) {
-    await sleep(400)
-    const u = MOCK_USERS.find((x) => x.id === id)
-    if (u) {
-      MOCK_AUDIT.unshift({
-        id: Date.now(),
-        admin_id: 1,
-        action: 'user.patch',
-        target_type: 'user',
-        target_id: String(id),
-        detail: { tier: { from: u.tier, to: tier }, tier_expires_at },
-        ip: '127.0.0.1',
-        created_at: new Date().toISOString(),
-      })
-      u.tier = tier
-      if (tier_expires_at !== undefined) u.tier_expires_at = tier_expires_at
-    }
-    return
-  }
+): Promise<UpdateUserTierOut> {
   const body: Record<string, unknown> = { tier }
   if (tier_expires_at !== undefined) body.tier_expires_at = tier_expires_at
-  await req(`/api/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify(body) })
+  return req<UpdateUserTierOut>(`/api/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify(body) })
 }
 
 /** F3：手动标记邮箱已验证——PATCH /api/admin/users/{id} {email_verified: true}
- *（SMTP 故障兜底；后端记审计。后端 list_users 暂未返回该字段，页面用可选链防御。） */
+ *（SMTP 故障兜底；后端记审计。后端 list_users 已返回该字段（R9 核对 admin.py:163，
+ * 旧注释"暂未返回"已过期）；可选链保留，防御旧后端。） */
 export async function verifyUserEmail(id: number): Promise<void> {
-  if (USE_MOCK) {
-    await sleep(400)
-    const u = MOCK_USERS.find((x) => x.id === id)
-    if (u) {
-      u.email_verified = true
-      MOCK_AUDIT.unshift({
-        id: Date.now(),
-        admin_id: 1,
-        action: 'user.verify_email',
-        target_type: 'user',
-        target_id: String(id),
-        detail: { email_verified: true },
-        ip: '127.0.0.1',
-        created_at: new Date().toISOString(),
-      })
-    }
-    return
-  }
   await req(`/api/admin/users/${id}`, {
     method: 'PATCH',
     body: JSON.stringify({ email_verified: true }),
@@ -342,12 +238,6 @@ export async function verifyUserEmail(id: number): Promise<void> {
 export async function getPayments(
   claimStatus: '' | 'unclaimed' = '',
 ): Promise<PaymentRecord[]> {
-  if (USE_MOCK) {
-    await sleep(300)
-    return claimStatus === 'unclaimed'
-      ? MOCK_PAYMENTS.filter((p) => p.user_id === null)
-      : MOCK_PAYMENTS
-  }
   const params = new URLSearchParams()
   if (claimStatus) params.set('claim_status', claimStatus)
   const q = params.toString()
@@ -369,24 +259,6 @@ export interface PaymentActionOut {
  * （code=has_active_paid_orders），管理员二次确认后带 force=true 重调才真正降档。
  */
 export async function refundPayment(paymentId: number, force = false): Promise<PaymentActionOut> {
-  if (USE_MOCK) {
-    await sleep(400)
-    const p = MOCK_PAYMENTS.find((x) => x.id === paymentId)
-    if (p) {
-      p.status = 'refunded'
-      MOCK_AUDIT.unshift({
-        id: Date.now(),
-        admin_id: 1,
-        action: 'payment.refund',
-        target_type: 'payment',
-        target_id: String(paymentId),
-        detail: { from: 'paid', to: 'refunded', force },
-        ip: '127.0.0.1',
-        created_at: new Date().toISOString(),
-      })
-    }
-    return { ok: true, payment_id: paymentId, payment_status: 'refunded', user: null }
-  }
   return req(`/api/admin/payments/${paymentId}/refund`, {
     method: 'POST',
     body: JSON.stringify({ force }),
@@ -396,47 +268,11 @@ export async function refundPayment(paymentId: number, force = false): Promise<P
 /** F2：关闭金额异常/待认领订单（不处理）——POST /api/admin/payments/{id}/close，
  * status 置 resolved（从待处理队列移除），不绑定用户、不开通档位（页面层二次确认） */
 export async function closePayment(paymentId: number): Promise<PaymentActionOut> {
-  if (USE_MOCK) {
-    await sleep(400)
-    const p = MOCK_PAYMENTS.find((x) => x.id === paymentId)
-    if (p) {
-      p.status = 'resolved'
-      MOCK_AUDIT.unshift({
-        id: Date.now(),
-        admin_id: 1,
-        action: 'payment.close',
-        target_type: 'payment',
-        target_id: String(paymentId),
-        detail: { from: 'amount_mismatch', to: 'resolved' },
-        ip: '127.0.0.1',
-        created_at: new Date().toISOString(),
-      })
-    }
-    return { ok: true, payment_id: paymentId, payment_status: 'resolved' }
-  }
   return req(`/api/admin/payments/${paymentId}/close`, { method: 'POST' })
 }
 
 /** 认领坏账：把未认领订单绑定到用户（写操作，后端记 audit） */
 export async function claimPayment(paymentId: number, userId: number): Promise<void> {
-  if (USE_MOCK) {
-    await sleep(400)
-    const p = MOCK_PAYMENTS.find((x) => x.id === paymentId)
-    if (p) {
-      p.user_id = userId
-      MOCK_AUDIT.unshift({
-        id: Date.now(),
-        admin_id: 1,
-        action: 'payment.claim',
-        target_type: 'payment',
-        target_id: String(paymentId),
-        detail: { user_id: userId },
-        ip: '127.0.0.1',
-        created_at: new Date().toISOString(),
-      })
-    }
-    return
-  }
   await req(`/api/admin/payments/${paymentId}/claim`, {
     method: 'POST',
     body: JSON.stringify({ user_id: userId }),
@@ -445,22 +281,6 @@ export async function claimPayment(paymentId: number, userId: number): Promise<v
 
 /** 系统状态：{engine, apple_cooldown, log_tail} */
 export async function getSystem(): Promise<SystemStatus> {
-  if (USE_MOCK) {
-    await sleep(300)
-    return {
-      engine: {
-        running: true,
-        last_heartbeat: '2026-10-09T00:47:12Z',
-        last_tick_at: '2026-10-09T00:47:12Z',
-        rounds_total: 1024,
-        rounds_ok: 1011,
-        last_error: null,
-      },
-      apple_cooldown: { until: null, reason: '' },
-      log_tail: MOCK_LOGS,
-      peak_mode: false,
-    }
-  }
   return req('/api/admin/system')
 }
 
@@ -472,10 +292,6 @@ export interface PeakModeOut {
 
 /** 高峰模式开关（写操作，后端记 audit；页面层二次确认） */
 export async function setPeakMode(enabled: boolean): Promise<PeakModeOut> {
-  if (USE_MOCK) {
-    await sleep(400)
-    return { ok: true, peak_mode: enabled }
-  }
   return req<PeakModeOut>('/api/admin/system/peak-mode', {
     method: 'POST',
     body: JSON.stringify({ enabled }),
@@ -484,21 +300,7 @@ export async function setPeakMode(enabled: boolean): Promise<PeakModeOut> {
 
 /** 审计日志 */
 export async function getAudit(): Promise<AuditEntry[]> {
-  if (USE_MOCK) {
-    await sleep(200)
-    return MOCK_AUDIT
-  }
   return req('/api/admin/audit')
-}
-
-/** 日志 tail：直接取 GET /api/admin/system 的 log_tail 字段 */
-export async function getLogTail(): Promise<string[]> {
-  if (USE_MOCK) {
-    await sleep(200)
-    return MOCK_LOGS
-  }
-  const s = await getSystem()
-  return s.log_tail ?? []
 }
 
 export const TIER_LABEL: Record<Tier, string> = {
@@ -509,13 +311,25 @@ export const TIER_LABEL: Record<Tier, string> = {
 }
 
 /**
- * P2 时区：后端所有时间都是 UTC ISO8601（带 Z）。后台统一转浏览器本地时间展示，
- * 与前台「页面内所有时间为本地时间」承诺一致；各页在表头/页注标注「本地时间」。
+ * R9-I7：后台所有时间统一按北京时间（Asia/Shanghai）展示，与前台口径一致；
+ * 后端返回 UTC ISO8601（带 Z），这里显式转北京时间。各页在表头/页注标注「北京时间」。
  */
 export function fmtLocalTime(iso: string | null | undefined): string {
   if (!iso) return '—'
-  const d = new Date(iso)
+  // 后端 naive datetime 是 UTC 裸串（SQLite 不存 tzinfo），无后缀时按 UTC 解析，
+  // 否则浏览器按本地时间误读（与前台 api.ts withZ 同一口径）
+  const normalized = /[zZ]|[+-]\d{2}:?\d{2}$/.test(iso) ? iso : `${iso}Z`
+  const d = new Date(normalized)
   if (Number.isNaN(d.getTime())) return '—'
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23', // 午夜按 00 计（hour12:false 在部分实现是 h24，午夜会出 24:00）
+  }).formatToParts(d)
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? ''
+  return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}`
 }

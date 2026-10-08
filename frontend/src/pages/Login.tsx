@@ -54,9 +54,10 @@ export default function Login() {
       } else {
         const res = await api.register(email.trim(), password);
         // 注册成功 → 跳邮箱验证页（6 位验证码）；认领提示先带给验证页，
-        // 验证成功后链到登录页，最终由登录成功统一带到首页
+        // 验证成功后链到登录页，最终由登录成功统一带到首页；
+        // R9-I15：email_sent 透传给验证页（SMTP 瞬断首发失败时前端明确提示重发）
         navigate('/verify', {
-          state: { email: email.trim(), notice: res.notice ?? null },
+          state: { email: email.trim(), notice: res.notice ?? null, emailSent: res.email_sent ?? true },
           replace: true,
         });
       }

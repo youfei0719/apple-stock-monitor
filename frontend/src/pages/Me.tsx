@@ -161,7 +161,9 @@ function ChannelHealthCard() {
                   {c.last_failure_at && (
                     <p className="mt-0.5 text-xs text-bad">
                       最后失败：
+                      {/* R9-I7：全站显式北京时间（与页脚承诺一致） */}
                       {new Date(c.last_failure_at).toLocaleString('zh-CN', {
+                        timeZone: 'Asia/Shanghai',
                         month: '2-digit',
                         day: '2-digit',
                         hour: '2-digit',
@@ -213,24 +215,8 @@ function ChangePasswordCard() {
     }
     setBusy(true);
     try {
-      // api.ts 未导出 PATCH /me，直接调同源接口（Cookie 认证，与 req 一致带 credentials）
-      const base = (import.meta.env.VITE_API_BASE as string | undefined) ?? '/api';
-      const r = await fetch(`${base}/me`, {
-        method: 'PATCH',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ old_password: oldPw, password: newPw }),
-      });
-      if (!r.ok) {
-        let detail = '修改失败';
-        try {
-          const j = await r.json();
-          if (typeof j?.detail === 'string') detail = j.detail;
-        } catch {
-          /* 保留默认文案 */
-        }
-        throw new Error(detail);
-      }
+      // R9-I10：改密走 api.changePassword（统一 req()），不再组件内直调 fetch
+      await api.changePassword(oldPw, newPw);
       setMsg('密码已修改，其他设备的登录将被登出');
       setOk(true);
       setOldPw('');
@@ -323,10 +309,13 @@ export default function Me() {
   // （配额/档位不能因付费记录接口抖动而消失）
   const [plansErr, setPlansErr] = useState<string | null>(null);
   const [paymentsErr, setPaymentsErr] = useState<string | null>(null);
+  // R9-I9：配额加载失败独立错误态（之前 .catch(() => setQuota(null)) 后静默消失）
+  const [quotaErr, setQuotaErr] = useState<string | null>(null);
 
   const load = async () => {
     setPlansErr(null);
     setPaymentsErr(null);
+    setQuotaErr(null);
     // R8-I-11：四个接口独立加载互不阻塞；
     // siteConfig 失败仅影响爱发电链接，配额失败时降级用 /me 的有效档位兜底
     api
@@ -336,7 +325,10 @@ export default function Me() {
     api
       .quota()
       .then(setQuota)
-      .catch(() => setQuota(null));
+      .catch((e) => {
+        setQuota(null);
+        setQuotaErr(e instanceof Error ? e.message : '加载失败');
+      });
     api
       .payments()
       .then(setPayments)
@@ -434,6 +426,18 @@ export default function Me() {
               </p>
             </div>
           )}
+          {/* R9-I9：配额接口失败不再静默消失——独立错误态 + 重试 */}
+          {!quota &&
+            (quotaErr ? (
+              <p className="mt-4 text-xs text-white/70">
+                配额加载失败：{quotaErr}{' '}
+                <button onClick={load} className="underline font-medium">
+                  重试
+                </button>
+              </p>
+            ) : (
+              <p className="mt-4 text-xs text-white/60">配额加载中…</p>
+            ))}
         </Card>
 
         {/* 通道健康 */}
@@ -566,7 +570,10 @@ export default function Me() {
                       </span>
                     </p>
                     <p className="mono text-[11px] text-faint">
-                      {new Date(p.created_at).toLocaleDateString('zh-CN')}
+                      {/* R9-I7：全站显式北京时间（与页脚承诺一致） */}
+                      {new Date(p.created_at).toLocaleDateString('zh-CN', {
+                        timeZone: 'Asia/Shanghai',
+                      })}
                       {' · '}
                       {p.order_id}
                     </p>
