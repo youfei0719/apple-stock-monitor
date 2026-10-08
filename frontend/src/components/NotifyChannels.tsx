@@ -140,7 +140,7 @@ export function NotificationHistory({ taskId }: { taskId?: string | number }) {
                     </p>
                     <p className="mt-1 text-xs text-sub leading-relaxed">{n.body}</p>
                     <p className="mt-1.5 text-xs text-ink font-medium">
-                      请先检查通知渠道配置（Bark key / 邮箱 / webhook），确认能收到通知后再手动恢复任务。
+                      请先检查邮箱配置，确认能收到通知后再手动恢复任务。
                     </p>
                     <p className="mt-1 mono text-[10px] text-faint">
                       {/* R8-U-1：后端返回 UTC 带 Z，显式按北京时间渲染（与 Me/History 一致） */}

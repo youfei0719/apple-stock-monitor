@@ -95,6 +95,10 @@ def _bootstrap_admin():
             db.add(user)
         user.password_hash = hash_password(password)
         user.is_admin = True
+        # R20-P3-4：bootstrap 管理员邮箱直接置已验证——管理员邮箱是部署者
+        # 自己在 .env 配的可信地址，且后台无邮箱验证入口；否则 login 对未
+        # 验证账号 403 email_unverified，首次部署管理员会被挡在后台登录之外。
+        user.email_verified = True
         user.tier = "pro"
         # R6-D3：bootstrap 管理员给远未来到期（+10 年）——否则 5 分钟内就被
         # membership_sweep 按"付费到期"降回 free；sweep 侧同时排除管理员（双保险）

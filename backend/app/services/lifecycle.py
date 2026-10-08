@@ -379,7 +379,7 @@ def membership_sweep(db: Session) -> dict:
         else:
             new = "free"
             stats["downgraded"] += 1
-            action = "已降为免费版（任务上限 3 个、推送 5 次/月）"
+            action = "已降为免费版（任务上限 3 个、每周期推送 5 次，周期为 30 天滚动）"
             # R11-P2-1：降 free 也置 now+30d（与 refund / 手动降档同口径），
             # 不再置 NULL（此前靠 ensure_quota_anchor 懒初始化，口径不一）。
             new_quota = now + timedelta(days=30)

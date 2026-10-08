@@ -2,7 +2,9 @@
 
 import hashlib
 import hmac
+import random
 import secrets
+import time
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Cookie, Depends, Request, Response
@@ -338,6 +340,18 @@ class ResendCodeIn(BaseModel):
     email: EmailStr
 
 
+# R20-P3-5：resend-code 计时侧信道收敛。未注册邮箱分支瞬时返回，已注册
+# 走 SMTP 实发（秒级），响应时长可区分出邮箱是否注册。未注册分支加一段
+# 与发信耗时同量级的随机延迟，两分支时长分布不可区分。元组可被测试 patch
+# 为 (0, 0) 加速单测。
+UNKNOWN_EMAIL_DELAY_RANGE = (1.5, 3.5)
+
+
+def _pad_unknown_email_timing() -> None:
+    lo, hi = UNKNOWN_EMAIL_DELAY_RANGE
+    time.sleep(random.uniform(lo, hi))
+
+
 @router.post("/resend-code")
 def resend_code(data: ResendCodeIn, request: Request, db: Session = Depends(get_db)):
     """重发邮箱验证码（每小时每邮箱限 3 次）。"""
@@ -350,6 +364,8 @@ def resend_code(data: ResendCodeIn, request: Request, db: Session = Depends(get_
     user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
     if not user:
         # R4-P2 防用户枚举：未知邮箱也返回 ok，不可探测邮箱是否注册
+        # R20-P3-5：加随机延迟，与真实发信耗时同量级，收敛计时侧信道
+        _pad_unknown_email_timing()
         return {"ok": True}
     # R19-P2-1 防用户枚举：删掉"已验证"早退，统一走发码流程，一律返回无 flag 的
     # {"ok": true}，不可通过 already 字段区分已验证用户与未注册邮箱

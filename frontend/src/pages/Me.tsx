@@ -65,7 +65,7 @@ function planFeatures(p: Plan): string[] {
 
 function planPeriodLabel(p: Plan): string {
   if (p.price_cny === 0) return '免费';
-  return `¥${p.price_cny} / 月`;
+  return `¥${p.price_cny} / 30天`;
 }
 
 /** 北京时间格式化（配额按购买日 +30 天滚动，展示时标注北京时间） */
@@ -542,7 +542,7 @@ export default function Me() {
         <Card className="p-5 rise-in">
           <p className="font-medium">开通 / 续费会员</p>
           <p className="mt-1.5 text-sm text-sub leading-relaxed">
-            通过爱发电赞助开通，支付成功后系统自动开通对应档位（标准 ¥19/月 · Pro ¥39/月）。
+            通过爱发电赞助开通，支付成功后系统自动开通对应档位（标准 ¥19/30天 · Pro ¥39/30天）。
           </p>
           <div className="mt-4">
             <PrimaryButton onClick={() => window.open(afdianUrl, '_blank', 'noopener')}>
