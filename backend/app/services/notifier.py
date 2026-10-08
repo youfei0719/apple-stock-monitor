@@ -128,9 +128,11 @@ class Notifier:
         """按任务渠道配置逐个发送，每条写库。返回通知记录列表。
 
         付费墙（断裂-23）：按用户有效档位的 channels 过滤。trial 档位只允许
-        "page"（站内展示，走 TaskOut.latest，不经过外部通道），dispatch 遇到
-        trial 用户直接全部跳过并记 skipped。免费/标准/Pro 目前只开放 email，
-        bark/webhook 等未在档位 channels 内的直接记 skipped，不发送。
+        "page"（站内展示，走 TaskOut.latest，不经过外部通道）。
+        F-4（用户拍板 A）：trial 的 page 触达计为一次成功发送并走配额扣减
+        （体验 1 次/月真实生效）；外部渠道仍逐个记 skipped 备查。
+        免费/标准/Pro 目前只开放 email，bark/webhook 等未在档位 channels
+        内的直接记 skipped，不发送。
         """
         if user is None and user_id is not None:
             user = self.db.get(User, user_id)
@@ -138,9 +140,12 @@ class Notifier:
         page_only = allowed == {"page"}
 
         part_number = None
+        device_id = None
         if task_id is not None:
             task = self.db.get(MonitorTask, task_id)
-            part_number = task.part_number if task else None
+            if task:
+                part_number = task.part_number
+                device_id = task.device_id
 
         out: list[Notification] = []
         jobs: list[tuple[str, str]] = []  # (channel, target)
@@ -221,6 +226,25 @@ class Notifier:
                         part_number=part_number,
                     )
                 )
+        if page_only:
+            # F-4：trial 站内触达计 sent。engine 按 sent 条数扣配额，
+            # 体验 1 次/月因此真实生效；外部渠道已在上方逐个记 skipped。
+            log.info("notify_page_touch", task_id=task_id, kind=kind)
+            out.append(
+                self._record(
+                    user_id,
+                    task_id,
+                    kind,
+                    "page",
+                    device_id or "",
+                    title,
+                    body,
+                    link,
+                    "sent",
+                    "站内触达（trial 按次扣减配额）",
+                    part_number=part_number,
+                )
+            )
         return out
 
     def test_channel(self, channel: str, target: str, user_id=None) -> Notification:

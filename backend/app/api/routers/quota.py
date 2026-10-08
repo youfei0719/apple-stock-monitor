@@ -1,21 +1,53 @@
 """配额与会员：当前配额、四档说明（公开）、站点配置。"""
 
-from fastapi import APIRouter, Depends
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, Header
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user
+from app.api.deps import get_optional_user
+from app.api.errors import APIError
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.tiers import TIERS, effective_tier, effective_tier_of
 from app.models.models import MonitorTask, QuotaUsage, User
-from app.services.engine import ensure_quota_anchor, quota_period_key
+from app.services.engine import ensure_quota_anchor, get_config, quota_period_key
 
 router = APIRouter(tags=["quota"])
 
 
 @router.get("/quota")
-def get_quota(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def get_quota(
+    user: User | None = Depends(get_optional_user),
+    db: Session = Depends(get_db),
+    x_device_id: str | None = Header(default=None),
+):
+    settings = get_settings()
+    if user is None:
+        # F-4：匿名 trial 配额查询（Home trialExhausted 横幅用；体验 1 次/月真实生效）
+        if not x_device_id:
+            raise APIError(401, "需要登录或携带 X-Device-Id", "auth_required")
+        info = TIERS["trial"]
+        period = datetime.utcnow().strftime("%Y-%m")
+        used = int(get_config(db, f"trial_quota:{x_device_id}:{period}", {}).get("used", 0))
+        tasks_used = db.execute(
+            select(func.count())
+            .select_from(MonitorTask)
+            .where(MonitorTask.device_id == x_device_id, MonitorTask.user_id.is_(None))
+        ).scalar()
+        return {
+            "tier": "trial",
+            "tier_expires_at": None,
+            "pending_tier": None,
+            "quota_reset_at": None,
+            "push_used": used,
+            "push_limit": info["push_limit"],
+            "tasks_used": tasks_used,
+            "tasks_limit": info["tasks_limit"],
+            "refresh_interval_sec": settings.tier_intervals.get("trial", 300),
+            "period": period,
+        }
     # 有效档位（过期按 free，断裂-1）；配额周期为购买日+30天滚动（不自洽-2）
     ensure_quota_anchor(db, user)
     period = quota_period_key(user)
@@ -27,7 +59,6 @@ def get_quota(user: User = Depends(get_current_user), db: Session = Depends(get_
     tasks_used = db.execute(
         select(func.count()).select_from(MonitorTask).where(MonitorTask.user_id == user.id)
     ).scalar()
-    settings = get_settings()
     return {
         "tier": tier,
         "tier_expires_at": user.tier_expires_at.isoformat() + "Z" if user.tier_expires_at else None,
