@@ -246,6 +246,10 @@ def patch_user(
     if data.tier is not None:
         if data.tier not in VALID_TIERS:
             raise APIError(400, "tier 非法", "bad_tier")
+        # R11-P2-2：free/trial 不允许同时传 tier_expires_at——tier 分支会先
+        # 清空到期时间，随后补单分支又把它设回去，直接造脏状态；直接 400。
+        if data.tier in ("free", "trial") and data.tier_expires_at is not None:
+            raise APIError(400, "free/trial 档位不支持设置 tier_expires_at", "bad_expires_at")
         changes["tier"] = (target.tier, data.tier)
         target.tier = data.tier
         if data.tier in ("standard", "pro"):
@@ -276,6 +280,10 @@ def patch_user(
             target.tier_expires_at = None
             target.pending_tier = None
     if data.tier_expires_at is not None:
+        # R11-P2-2：补单入口仅对付费档位生效——free/trial 用户没有合法的
+        # 到期时间状态；tier 分支同时降档的场景已在上游 400 拒绝。
+        if target.tier not in ("standard", "pro"):
+            raise APIError(400, "仅付费档位可设置 tier_expires_at", "bad_expires_at")
         # 补单入口：手动设定会员到期时间（断裂-17）。传 null 清空暂不支持，
         # 需要清空请走 DB（避免误操作把付费用户变成永久会员）。
         changes["tier_expires_at"] = (

@@ -299,6 +299,9 @@ def membership_sweep(db: Session) -> dict:
             new = "free"
             stats["downgraded"] += 1
             action = "已降为免费版（任务上限 3 个、推送 5 次/月）"
+            # R11-P2-1：降 free 也置 now+30d（与 refund / 手动降档同口径），
+            # 不再置 NULL（此前靠 ensure_quota_anchor 懒初始化，口径不一）。
+            new_quota = now + timedelta(days=30)
         # R5-竞态-1：降级走原子 UPDATE，WHERE 带 tier_expires_at < now（+NULL）
         # 且 tier 未变的双重条件——select 与 commit 之间若 webhook 写入了续费
         # （tier_expires_at 已刷新为未来），WHERE 不命中、rowcount=0，本轮跳过，

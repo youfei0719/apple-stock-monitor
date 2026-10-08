@@ -159,7 +159,7 @@ def _strip_channel_secrets(channels: dict | None) -> tuple[dict, bool]:
     数组。返回 (新 channels, 是否剥离过密钥)。"""
     ch = dict(channels or {})
     had_secrets = False
-    for k in ("bark_key", "email", "sms_to"):
+    for k in ("bark_key", "email"):
         if ch.pop(k, None):
             had_secrets = True
     webhooks = ch.get("webhooks") or []

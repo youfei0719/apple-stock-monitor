@@ -59,6 +59,16 @@ LIFECYCLE_SWEEP_EVERY_N_TICKS = 60
 QUOTA_CYCLE_DAYS = 30
 
 
+def trial_month_key() -> str:
+    """匿名 trial 月度配额键（key 中的月份部分）。
+
+    全库口径：北京时间月份（R10-P2-2 起；此前按 UTC，每月 1 日 0:00–8:00
+    配额错月）。R11-P1-5：从 _trial_quota_state 与 quota.py 匿名分支抽取
+    共用，两处必须同口径，否则试用横幅与引擎扣减错位。
+    """
+    return (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m")
+
+
 def quota_period_key(user) -> str:
     """当前配额周期键 = 锚点（下次重置日）日期。
 
@@ -555,11 +565,11 @@ class Engine:
     def _trial_quota_state(self, db, task: MonitorTask) -> tuple[int, int, str]:
         """返回 (used, limit, key)。匿名 trial 按 device_id 逐月计数。
 
-        R10-P2-2：月界按北京时间（全库口径；此前按 UTC，每月 1 日 0:00–8:00
-        配额错月）。
+        R11-P1-5：月份口径用模块级 trial_month_key()（北京时间）与
+        quota.py 匿名分支共用，不得再各自拼接。
         """
         device_id = task.device_id or "unknown"
-        period = (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m")
+        period = trial_month_key()
         key = f"trial_quota:{device_id}:{period}"
         used = int(get_config(db, key, {}).get("used", 0))
         limit = effective_tier_of(None)["push_limit"]
@@ -745,7 +755,7 @@ class Engine:
                     "task_auto_paused",
                     "监控任务已自动暂停",
                     f"任务「{task.name}」连续 10 次通知发送失败，已自动暂停。"
-                    "请检查通知渠道配置（Bark key / 邮箱 / webhook）后手动恢复任务。",
+                    "请检查通知渠道配置（邮箱）后手动恢复任务。",
                 )
         db.flush()
         return sent, no_channel

@@ -1,7 +1,5 @@
 """配额与会员：当前配额、四档说明（公开）、站点配置。"""
 
-from datetime import datetime
-
 from fastapi import APIRouter, Depends, Header
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -12,7 +10,7 @@ from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.tiers import TIERS, effective_tier, effective_tier_of
 from app.models.models import MonitorTask, QuotaUsage, User
-from app.services.engine import ensure_quota_anchor, get_config, quota_period_key
+from app.services.engine import ensure_quota_anchor, get_config, quota_period_key, trial_month_key
 
 router = APIRouter(tags=["quota"])
 
@@ -29,7 +27,10 @@ def get_quota(
         if not x_device_id:
             raise APIError(401, "需要登录或携带 X-Device-Id", "auth_required")
         info = TIERS["trial"]
-        period = datetime.utcnow().strftime("%Y-%m")
+        # R11-P1-5：匿名 trial 月 key 与引擎 _trial_quota_state 同口径（北京
+        # 时间月份），此前此处用 UTC，每月 1 日 0:00–8:00 展示的 push_used
+        # 与引擎扣减错月、trialExhausted 横幅误判。
+        period = trial_month_key()
         used = int(get_config(db, f"trial_quota:{x_device_id}:{period}", {}).get("used", 0))
         tasks_used = db.execute(
             select(func.count())

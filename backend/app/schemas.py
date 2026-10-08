@@ -183,8 +183,3 @@ class AdminUserPatchIn(BaseModel):
     tier: str | None = None
     is_admin: bool | None = None
     paused_tasks: bool | None = None  # 预留：批量暂停该用户任务
-
-
-class ErrorOut(BaseModel):
-    detail: str
-    code: str = ""
