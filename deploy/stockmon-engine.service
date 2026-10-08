@@ -1,0 +1,17 @@
+[Unit]
+Description=StockMon Monitor Engine
+After=network.target stockmon-api.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/stockmon/backend
+EnvironmentFile=/opt/stockmon/.env
+ExecStart=/opt/stockmon/backend/.venv/bin/python -m app.services.engine
+Restart=always
+RestartSec=10
+StandardOutput=append:/opt/stockmon/logs/engine.out.log
+StandardError=append:/opt/stockmon/logs/engine.err.log
+
+[Install]
+WantedBy=multi-user.target

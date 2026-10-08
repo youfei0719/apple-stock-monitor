@@ -1,0 +1,17 @@
+[Unit]
+Description=StockMon API (FastAPI)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/stockmon/backend
+EnvironmentFile=/opt/stockmon/.env
+ExecStart=/opt/stockmon/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8101 --workers 2
+Restart=always
+RestartSec=5
+StandardOutput=append:/opt/stockmon/logs/api.out.log
+StandardError=append:/opt/stockmon/logs/api.err.log
+
+[Install]
+WantedBy=multi-user.target
