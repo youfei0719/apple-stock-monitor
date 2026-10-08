@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.api.errors import APIError
 from app.core.db import get_db
+from app.core.tiers import effective_tier_of
 from app.models.models import MonitorTask, Notification, User
 from app.schemas import NotifyTestIn
 from app.services.notifier import Notifier
@@ -38,6 +39,18 @@ def notify_test(
         raise APIError(400, "channel 非法", "bad_channel")
     if not data.target.strip():
         raise APIError(400, "target 不能为空", "bad_target")
+    # N14-B：测试走档位校验。当前档位不支持的通道，明确提示不支持而不是显示成功。
+    # 判定在每日限额之前：被拒绝的测试不消耗测试次数。
+    tier_info = effective_tier_of(user)
+    if data.channel not in tier_info["channels"]:
+        _names = {"page": "站内", "email": "邮件", "bark": "Bark", "sms": "短信"}
+        allowed_names = "、".join(_names.get(c, c) for c in tier_info["channels"])
+        raise APIError(
+            400,
+            f"当前档位（{tier_info['name']}）仅支持{allowed_names}通知；"
+            "Bark / 群机器人可配置，但到货不会发送（测试通过≠到货会发）",
+            "channel_not_supported",
+        )
     today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     used_today = db.execute(
         select(func.count())

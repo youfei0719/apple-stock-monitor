@@ -222,6 +222,10 @@ export default function NotifyChannels({
         <p className="-mt-1 text-xs text-faint leading-relaxed">
           到货时按这里的渠道发送通知（按实际发送成功的通知条数扣减配额），通知附带直达商品页链接。
         </p>
+        {/* N14-B：当前档位仅邮件，Bark/群机器人可配但到货不发，明确标注避免误解 */}
+        <p className="-mt-2 text-xs text-bad/90 leading-relaxed bg-bad/5 rounded-card-sm px-2.5 py-2">
+          当前档位仅支持邮件；Bark / 群机器人可配置但到货不会发送（测试通过 ≠ 到货会发）。
+        </p>
 
         {/* Bark */}
         <div>
@@ -229,7 +233,7 @@ export default function NotifyChannels({
             <input
               value={value.bark_key ?? ''}
               onChange={(e) => set({ bark_key: e.target.value })}
-              placeholder="Bark Key（推送到 iPhone，可选）"
+              placeholder="Bark Key（可配置；当前档位到货不发送）"
               className={`${inputCls} mono`}
             />
             <TestButton
@@ -277,7 +281,7 @@ export default function NotifyChannels({
                 <input
                   value={w.url}
                   onChange={(e) => setWebhook(i, { url: e.target.value })}
-                  placeholder="群机器人 webhook URL"
+                  placeholder="群机器人 webhook URL（可配置；当前档位到货不发送）"
                   className={`${inputCls} mono`}
                 />
                 <TestButton
