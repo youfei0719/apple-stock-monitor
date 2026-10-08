@@ -25,6 +25,12 @@ export default defineConfig(
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
+      // R18-P3-1：react-hooks/set-state-in-effect（实验性规则）假设 suspense/库式
+      // 数据获取架构；本后台用原生 fetch + useState，"挂载/筛选变化时拉数据"
+      // 的 effect 是全站既定数据流（overview/payments/system/traffic 四页），
+      // 改写为规则推荐形态需引入整套数据层，收益为零风险极大，故关闭。
+      // react-hooks/purity 保持开启（members 的 Date.now 已按规则抽成模块函数）。
+      'react-hooks/set-state-in-effect': 'off',
       'react-refresh/only-export-components': [
         'warn',
         { allowConstantExport: true },

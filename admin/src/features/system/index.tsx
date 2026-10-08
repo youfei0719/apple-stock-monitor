@@ -92,8 +92,9 @@ function fmtDetail(detail: unknown): string {
 
 /** R8-U-5：审计"操作"列中文映射（未知 action 回退显示原文） */
 const AUDIT_ACTION_LABEL: Record<string, string> = {
+  // R18-P3-4：'user.verify_email' 已删——后端手动验邮统一记 user.patch（admin.py:371），
+  // 该 action 永不产生，留着是死条目
   'user.patch': '会员改级',
-  'user.verify_email': '邮箱手动验证',
   'payment.claim': '订单认领',
   'payment.refund': '订单退款',
   'payment.close': '订单关闭',
@@ -188,7 +189,6 @@ export function System() {
 
   useEffect(() => {
     loadAll()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   async function togglePeakMode(enabled: boolean) {

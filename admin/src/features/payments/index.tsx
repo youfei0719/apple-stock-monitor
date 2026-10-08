@@ -130,7 +130,6 @@ export function Payments() {
 
   useEffect(() => {
     load(unclaimedOnly)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [unclaimedOnly])
 
   // R8-I-14："成功到账合计"按全站全量订单算，切"只看待认领"时不再跟着变

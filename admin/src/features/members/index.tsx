@@ -82,6 +82,13 @@ function toLocalInput(iso: string | null): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
+/** R18-P3-1：react-hooks/purity 不允许在组件 render 作用域内调 Date.now()。
+ * 把"当前时间 +30 天"抽成模块级函数——不纯调用发生在模块函数内，
+ * 事件处理里只调这个纯外壳，render 期不再出现 Date.now()。 */
+function defaultExpiresAtInput(): string {
+  return toLocalInput(new Date(Date.now() + 30 * 86400000).toISOString())
+}
+
 
 
 export function Members() {
@@ -169,7 +176,7 @@ export function Members() {
     if (tier === 'free' || tier === 'trial') {
       setExpiresAt('')
     } else {
-      setExpiresAt(toLocalInput(new Date(Date.now() + 30 * 86400000).toISOString()))
+      setExpiresAt(defaultExpiresAtInput())
     }
   }
 

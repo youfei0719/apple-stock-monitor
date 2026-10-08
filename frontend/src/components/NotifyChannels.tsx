@@ -4,7 +4,7 @@ import { useApp } from './App';
 import { Card, EmptyState, LoadingState } from './ui';
 
 /**
- * 通知渠道配置（五通道）——任务详情 / 添加监控共用
+ * R18-P3-5：通知渠道配置——仅邮件可用，其余通道暂未开放。任务详情 / 添加监控共用
  * - Bark key、邮箱、企微/钉钉/飞书 webhook URL（platform 下拉）
  * - 每个通道独立「发送测试」按钮（POST /notify/test，测试不扣配额）；匿名未登录时置灰
  * - 文案按档位动态：trial → 体验版仅站内通知（在 App 内查看）

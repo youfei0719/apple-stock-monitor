@@ -65,7 +65,8 @@ export interface PaymentRecord {
   created_at: string
 }
 
-export interface EngineStatus {
+// R18-P3-2：knip——仅模块内使用（SystemStatus.engine 字段），去 export
+interface EngineStatus {
   running: boolean
   last_heartbeat: string | null
   last_tick_at: string | null
@@ -129,7 +130,8 @@ export class AdminApiError extends Error {
  * R10-P2-8：会话页内过期（401）跳转登录页后抛出的专用错误。
  * req() 已发起整页跳转，调用方静默吞掉即可——不再 toast"请求失败（401）"一闪。
  */
-export class AuthExpiredError extends AdminApiError {
+// R18-P3-2：knip——仅模块内使用（req() 抛出 + isAuthExpired 判定），去 export
+class AuthExpiredError extends AdminApiError {
   constructor() {
     super('登录已过期，请重新登录', 'AUTH_EXPIRED', 401)
   }

@@ -402,10 +402,12 @@ export const api = {
       body: JSON.stringify({ email }),
     }),
   logout: () => req<void>('/auth/logout', { method: 'POST' }),
-  /** R9-I10：修改密码——PATCH /me {old_password, password}，走统一 req()；
-   * 后端删除该用户其他会话（当前会话保留），成功返回 {ok: true} */
+  /** R9-I10 / R18-P1-1：修改密码——PATCH /auth/me {old_password, password}，
+   * 走统一 req()；注意不是 PATCH /api/me（后端 me_router 只有 GET 别名，
+   * PATCH 调 /api/me 会 405）。后端删除该用户其他会话（当前会话保留），
+   * 成功返回 {ok: true} */
   changePassword: (oldPassword: string, password: string) =>
-    req<{ ok: boolean }>('/me', {
+    req<{ ok: boolean }>('/auth/me', {
       method: 'PATCH',
       body: JSON.stringify({ old_password: oldPassword, password }),
     }),

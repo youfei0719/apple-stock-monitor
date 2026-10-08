@@ -188,8 +188,9 @@ function ChannelHealthCard() {
   );
 }
 
-/** R8-I-15：修改密码卡片——后端 PATCH /me（auth.py:440）已实现，
+/** R8-I-15 / R18-P1-1：修改密码卡片——后端 PATCH /api/auth/me（auth.py:475 patch_me）已实现，
  * body: {old_password, password}，成功返回 {ok: true}；
+ * 注意：后端没有 PATCH /api/me（me_router 只有 GET 别名），调错路径会 405；
  * 后端会删除该用户其他会话（当前会话保留） */
 function ChangePasswordCard() {
   const [open, setOpen] = useState(false);
@@ -600,7 +601,7 @@ export default function Me() {
           </p>
         </section>
 
-        {/* R8-I-15：账号安全——修改密码（后端 PATCH /me，body: old_password + password） */}
+        {/* R8-I-15 / R18-P1-1：账号安全——修改密码（后端 PATCH /api/auth/me，body: old_password + password） */}
         <ChangePasswordCard />
 
         <button

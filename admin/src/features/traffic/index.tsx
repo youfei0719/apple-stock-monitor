@@ -72,7 +72,6 @@ export function Traffic() {
 
   useEffect(() => {
     load(days)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [days])
 
   const loading = data === null && loadError === null

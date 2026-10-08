@@ -13,7 +13,7 @@ Base URL: `https://stock.glint.red/api`（开发环境 `http://localhost:8000/ap
 - `POST /api/auth/login` `{email, password}` → 200 `{ok:true, totp_required:false}` + Set-Cookie（session_token），失败 401；连续 5 次失败锁 IP 15 分钟；**邮箱未验证 → 403 `{code:"email_unverified"}`**（前端据此提示去验证）；登录成功同样迁移同 `X-Device-Id` 匿名任务
 - `POST /api/auth/logout` → 204
 - `GET /api/me` → `{id, email, tier（有效档位）, quota:{push_used, push_limit, tasks_used, tasks_limit}, totp_enabled}`
-- `PATCH /api/auth/me` `{password}` → 200 `{ok:true}`（改密）
+- `PATCH /api/auth/me` `{old_password, password}` → 200 `{ok:true}`（改密；注意后端没有 PATCH /api/me，me_router 只有 GET 别名，调错路径 405）
 - `POST /api/auth/totp/setup` / `POST /api/auth/totp/verify`（管理员强制，普通用户可选）
 
 ## 监控任务
@@ -86,7 +86,7 @@ state ∈ `available | unavailable | unknown | verifying | cooling | paused | ex
 ## 后台（/api/admin/*，需 admin 会话 + TOTP；守卫要求 session totp_verified，否则 403 {code:"totp_required"}）
 - `GET /api/admin/overview` → `{total_users, tier_distribution: {tier: count}（DB 原始值，向后兼容；trial 为匿名体验不落库，用户表只有 free/standard/pro）, effective_tier_distribution: {tier: count}（按有效档位口径：已到期未降档的付费用户计入 free）, paid_members: int（有效付费会员数 = standard + pro 有效档位）, today_pushes, revenue_cny: float, active_tasks, pending_payments: {unclaimed, amount_mismatch}}`
 - `GET /api/admin/traffic?days=30` → 数组元素 `{day: "2026-10-09", pv, uv}`
-- `GET /api/admin/users?q=&tier=` → 数组元素 `{id: int, email, tier（含 trial）, tier_expires_at, is_admin, totp_enabled, created_at}`；`PATCH /api/admin/users/{id}` 接受 `{tier, tier_expires_at?, is_admin?, paused_tasks?, email_verified?}` → `{ok, changes}`（补单时可填到期时间；退款反向操作：`{"tier":"free"}` 手动降级；SMTP 故障时可传 `{"email_verified":true}` 手动验邮，记审计）
+- `GET /api/admin/users?q=&tier=` → 数组元素 `{id: int, email, tier（含 trial）, tier_expires_at, email_verified, is_admin, totp_enabled, created_at}`；`PATCH /api/admin/users/{id}` 接受 `{tier, tier_expires_at?, is_admin?, paused_tasks?, email_verified?}` → `{ok, changes}`（补单时可填到期时间；退款反向操作：`{"tier":"free"}` 手动降级；SMTP 故障时可传 `{"email_verified":true}` 手动验邮，记审计）
 - `GET /api/admin/payments?status=&claim_status=unclaimed` → 数组元素 `{id: int, user_id, order_id, plan（爱发电 plan_id 字符串）, amount_cny, tier_from, tier_to, status（paid/amount_mismatch/unknown_plan/refunded/resolved/cancelled；unknown_plan=爱发电 plan_id 未知，待人工）, remark（从 raw_payload 提取）, created_at}`；`claim_status=unclaimed` 筛出待认领订单；无 email 字段
 - `POST /api/admin/payments/{id}/claim` `{"user_id": int}` → 认领订单：绑定用户 + 按订单档位开通 30 天（到期/锚点同步）+ 回填 `Payment.user_id`；若为 `amount_mismatch` 成功后置 `status='resolved'` 并待处理计数 -1 → `{ok, payment_id, user_id, tier, tier_expires_at, payment_status, pending_count?}`（记审计）
 - `POST /api/admin/payments/{id}/close` → 不予开通直接关闭：`status='resolved'`（出待处理队列，`amount_mismatch` 时待处理计数 -1），不绑定用户、不开通档位（记审计）
