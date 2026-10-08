@@ -1,71 +1,99 @@
 /**
- * 后台 API 客户端（对齐 docs/API_CONTRACT.md 的 /api/admin/* 章节）
+ * 后台 API 客户端：对齐后端 snake_case 契约（backend/app/api/routers/*.py）。
  *
- * ============================================================================
- * TODO(后端联调): 把 USE_MOCK 改为 false 即可切换到真实接口。
- *   - 真实模式下所有请求走同源 `/api/admin/*`，携带 HttpOnly Cookie 会话
- *   - 登录走 `POST /api/auth/login` + `POST /api/auth/totp/verify`（后端校验）
- *   - 会员改级接口契约待后端确认：当前假设 `PATCH /api/admin/users/{id}` {tier}
- *   - 前端不存任何密钥 / token，敏感操作（改级）在页面层做二次确认
- * ============================================================================
+ * 后端是唯一真源；字段名一律 snake_case，不做 camelCase 转换。
+ * 登录走 `POST /api/auth/login`（{email, password} → {ok, totp_required} + Set-Cookie），
+ * 新管理员首次需走 `POST /api/auth/totp/setup` 绑 TOTP 再 verify。
+ * 前端不存任何密钥 / token，敏感操作（改级）在页面层做二次确认。
  */
 export const USE_MOCK = false
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '' // 开发: http://localhost:8000；生产: 同源 ''
 
-export type Tier = 'free' | 'standard' | 'pro'
+export type Tier = 'trial' | 'free' | 'standard' | 'pro' // 对齐后端 VALID_TIERS
 
 export interface OverviewKpi {
-  totalUsers: number
-  tierDist: Record<Tier, number>
-  todayPushes: number
-  revenueCny: number
-  activeTasks: number
+  total_users: number
+  tier_distribution: Record<string, number>
+  today_pushes: number
+  revenue_cny: number
+  active_tasks: number
 }
 
 export interface TrafficPoint {
-  date: string
+  day: string // 后端 GET /api/admin/traffic 字段名
   pv: number
   uv: number
 }
 
 export interface AdminUser {
-  id: string
+  id: number
   email: string
   tier: Tier
-  tasksUsed: number
-  pushUsed: number
-  createdAt: string
-  lastActiveAt: string
+  tier_expires_at: string | null
+  is_admin: boolean
+  totp_enabled: boolean
+  created_at: string
 }
 
 export interface PaymentRecord {
-  id: string
-  afdianOrderNo: string
-  email: string
-  amountCny: number
-  tier: Tier
-  status: 'success' | 'pending' | 'refunded'
-  paidAt: string
+  id: number
+  user_id: number | null
+  order_id: string
+  plan: string
+  amount_cny: number
+  tier_from: string | null
+  tier_to: string | null
+  status: string // 后端实际值：'paid'
+  created_at: string
+}
+
+export interface EngineStatus {
+  running: boolean
+  last_heartbeat: string | null
+  last_tick_at: string | null
+  rounds_total: number
+  rounds_ok: number
+  last_error: string | null
 }
 
 export interface SystemStatus {
-  engine: 'running' | 'degraded' | 'stopped'
-  version: string
-  queue: { pending: number; processing: number; failed24h: number }
-  rateLimit: { appleApiPerMin: string; loginLocks: number; catalogRefresh: string }
-  lastPollAt: string
-  avgPollMs: number
-  successRate: number
+  engine: EngineStatus
+  apple_cooldown: Record<string, unknown>
+  log_tail: string[]
 }
 
 export interface AuditEntry {
-  id: string
-  admin: string
+  id: number
+  admin_id: number
   action: string
-  target: string
-  detail: string
-  at: string
+  target_type: string
+  target_id: string
+  detail: unknown
+  ip: string
+  created_at: string
+}
+
+/** 后端登录返回体：{ok, totp_required} + Set-Cookie（无用户信息字段） */
+export interface LoginOut {
+  ok: boolean
+  totp_required: boolean
+}
+
+/** GET /api/me（MeOut）：仅供登录后判断 TOTP 是否已绑定 */
+export interface MeOut {
+  id: number
+  email: string
+  tier: Tier
+  quota: Record<string, unknown>
+  totp_enabled: boolean
+}
+
+/** POST /api/auth/totp/setup 返回体 */
+export interface TotpSetupOut {
+  secret: string
+  uri: string
+  enabled: boolean
 }
 
 export class AdminApiError extends Error {
@@ -78,7 +106,7 @@ export class AdminApiError extends Error {
   }
 }
 
-// ------------------------------ mock 数据 ------------------------------
+// ------------------------------ mock 数据（契约形状，snake_case） ------------------------------
 
 function seededRand(seed: number) {
   let s = seed
@@ -89,36 +117,25 @@ function seededRand(seed: number) {
 }
 
 const MOCK_USERS: AdminUser[] = [
-  { id: 'u-001', email: 'youfei0719@gmail.com', tier: 'pro', tasksUsed: 18, pushUsed: 320, createdAt: '2026-10-02T03:12:00Z', lastActiveAt: '2026-10-09T00:20:00Z' },
-  { id: 'u-002', email: 'miffy.fan@163.com', tier: 'standard', tasksUsed: 6, pushUsed: 96, createdAt: '2026-10-03T09:40:00Z', lastActiveAt: '2026-10-08T22:10:00Z' },
-  { id: 'u-003', email: 'shenzhen.frank@outlook.com', tier: 'free', tasksUsed: 2, pushUsed: 11, createdAt: '2026-10-04T14:05:00Z', lastActiveAt: '2026-10-08T18:44:00Z' },
-  { id: 'u-004', email: 'kuromi_lover@qq.com', tier: 'standard', tasksUsed: 9, pushUsed: 140, createdAt: '2026-10-05T07:22:00Z', lastActiveAt: '2026-10-07T11:02:00Z' },
-  { id: 'u-005', email: 'baoan.iphone@qq.com', tier: 'free', tasksUsed: 1, pushUsed: 3, createdAt: '2026-10-06T16:58:00Z', lastActiveAt: '2026-10-06T17:30:00Z' },
-  { id: 'u-006', email: 'nanshan.dev@gmail.com', tier: 'pro', tasksUsed: 24, pushUsed: 512, createdAt: '2026-10-06T20:11:00Z', lastActiveAt: '2026-10-09T00:01:00Z' },
-  { id: 'u-007', email: 'watch.s8@163.com', tier: 'free', tasksUsed: 0, pushUsed: 0, createdAt: '2026-10-07T08:33:00Z', lastActiveAt: '2026-10-07T08:35:00Z' },
-  { id: 'u-008', email: 'mac.studio@foxmail.com', tier: 'standard', tasksUsed: 7, pushUsed: 88, createdAt: '2026-10-08T02:47:00Z', lastActiveAt: '2026-10-08T21:19:00Z' },
+  { id: 1, email: 'youfei0719@gmail.com', tier: 'pro', tier_expires_at: '2026-11-08T10:02:11Z', is_admin: true, totp_enabled: true, created_at: '2026-10-02T03:12:00Z' },
+  { id: 2, email: 'miffy.fan@163.com', tier: 'standard', tier_expires_at: '2026-11-08T11:44:02Z', is_admin: false, totp_enabled: false, created_at: '2026-10-03T09:40:00Z' },
+  { id: 3, email: 'shenzhen.frank@outlook.com', tier: 'free', tier_expires_at: null, is_admin: false, totp_enabled: false, created_at: '2026-10-04T14:05:00Z' },
+  { id: 4, email: 'kuromi_lover@qq.com', tier: 'trial', tier_expires_at: null, is_admin: false, totp_enabled: false, created_at: '2026-10-05T07:22:00Z' },
 ]
 
 const MOCK_PAYMENTS: PaymentRecord[] = [
-  { id: 'p-001', afdianOrderNo: 'AFD20261008001', email: 'youfei0719@gmail.com', amountCny: 39, tier: 'pro', status: 'success', paidAt: '2026-10-08T10:02:11Z' },
-  { id: 'p-002', afdianOrderNo: 'AFD20261008002', email: 'miffy.fan@163.com', amountCny: 19, tier: 'standard', status: 'success', paidAt: '2026-10-08T11:44:02Z' },
-  { id: 'p-003', afdianOrderNo: 'AFD20261008003', email: 'kuromi_lover@qq.com', amountCny: 19, tier: 'standard', status: 'success', paidAt: '2026-10-08T15:20:37Z' },
-  { id: 'p-004', afdianOrderNo: 'AFD20261008004', email: 'nanshan.dev@gmail.com', amountCny: 39, tier: 'pro', status: 'success', paidAt: '2026-10-08T19:08:55Z' },
-  { id: 'p-005', afdianOrderNo: 'AFD20261008005', email: 'mac.studio@foxmail.com', amountCny: 19, tier: 'standard', status: 'pending', paidAt: '2026-10-09T00:12:40Z' },
-  { id: 'p-006', afdianOrderNo: 'AFD20261007001', email: 'watch.s8@163.com', amountCny: 19, tier: 'standard', status: 'refunded', paidAt: '2026-10-07T09:31:00Z' },
+  { id: 1, user_id: 1, order_id: 'AFD20261008001', plan: 'afdian_plan_pro', amount_cny: 39, tier_from: 'free', tier_to: 'pro', status: 'paid', created_at: '2026-10-08T10:02:11Z' },
+  { id: 2, user_id: 2, order_id: 'AFD20261008002', plan: 'afdian_plan_standard', amount_cny: 19, tier_from: 'free', tier_to: 'standard', status: 'paid', created_at: '2026-10-08T11:44:02Z' },
 ]
 
 const MOCK_AUDIT: AuditEntry[] = [
-  { id: 'a-001', admin: 'admin', action: '改级', target: 'miffy.fan@163.com', detail: 'free → standard（手动）', at: '2026-10-08T12:00:00Z' },
-  { id: 'a-002', admin: 'admin', action: '登录', target: '-', detail: 'TOTP 校验通过', at: '2026-10-09T00:30:00Z' },
+  { id: 1, admin_id: 1, action: 'user.patch', target_type: 'user', target_id: '2', detail: { tier: { from: 'free', to: 'standard' } }, ip: '127.0.0.1', created_at: '2026-10-08T12:00:00Z' },
 ]
 
 const MOCK_LOGS = [
   '2026-10-09T00:47:12Z [poll] store=R484 part=MJYC4CH/A → unavailable (412ms)',
-  '2026-10-09T00:47:09Z [poll] store=R761 part=MJYC4CH/A → unavailable (388ms)',
-  '2026-10-09T00:47:05Z [poll] store=R793 part=MJYC4CH/A → unavailable (401ms)',
   '2026-10-09T00:46:58Z [notify] bark → u-001: iPhone 18 Pro Max 银色 512GB 有货（R484）',
-  '2026-10-09T00:46:40Z [engine] heartbeat ok, workers=4',
+  '2026-10-09T00:46:40Z [engine] heartbeat ok',
 ]
 
 function mockTraffic(days: number): TrafficPoint[] {
@@ -129,7 +146,7 @@ function mockTraffic(days: number): TrafficPoint[] {
     const d = new Date(now.getTime() - i * 86400000)
     const base = 800 + Math.sin(i / 4) * 200
     const pv = Math.round(base + rand() * 400)
-    out.push({ date: d.toISOString().slice(0, 10), pv, uv: Math.round(pv * (0.35 + rand() * 0.15)) })
+    out.push({ day: d.toISOString().slice(0, 10), pv, uv: Math.round(pv * (0.35 + rand() * 0.15)) })
   }
   return out
 }
@@ -158,42 +175,73 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 
 // ------------------------------ 对外接口 ------------------------------
 
-/** 管理员登录：密码 + TOTP（校验全在后端） */
-export async function adminLogin(password: string, totp: string): Promise<void> {
+/**
+ * 管理员登录第 1 步：邮箱 + 密码（后端 LoginIn 必需 email，只发 password 会 422）。
+ * 返回后端登录体 {ok, totp_required} + Set-Cookie（无用户信息字段）。
+ * 调用方按 totp_required 分流：第 2 步走 totpVerify（已绑定）或 /totp-setup（新管理员先绑定）。
+ */
+export async function adminLoginPassword(email: string, password: string): Promise<LoginOut> {
   if (USE_MOCK) {
     await sleep(600)
-    // mock 行为（便于验证失败/限流提示 UI，真实模式由后端校验）：
-    // 验证码填 000000 时模拟"动态验证码错误" → 401
-    if (totp === '000000') {
-      throw new AdminApiError('动态验证码错误', 'INVALID_TOTP', 401)
-    }
-    return
+    return { ok: true, totp_required: true }
   }
-  await req('/api/auth/login', { method: 'POST', body: JSON.stringify({ password }) })
-  await req('/api/auth/totp/verify', { method: 'POST', body: JSON.stringify({ code: totp }) })
+  return req<LoginOut>('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ email, password }),
+  })
+}
+
+/** 当前登录用户（判断 TOTP 是否已绑定） */
+export async function getMe(): Promise<MeOut> {
+  if (USE_MOCK) {
+    await sleep(200)
+    return { id: 1, email: 'youfei0719@gmail.com', tier: 'pro', quota: {}, totp_enabled: true }
+  }
+  return req('/api/me')
+}
+
+/** TOTP 绑定：返回 secret + otpauth:// uri（前端本地渲染二维码，不经过第三方） */
+export async function totpSetup(): Promise<TotpSetupOut> {
+  if (USE_MOCK) {
+    await sleep(300)
+    return {
+      secret: 'JBSWY3DPEHPK3PXP',
+      uri: 'otpauth://totp/admin?secret=JBSWY3DPEHPK3PXP&issuer=stockmon',
+      enabled: false,
+    }
+  }
+  return req('/api/auth/totp/setup', { method: 'POST' })
+}
+
+/** TOTP 验证码校验（setup 后或登录时） */
+export async function totpVerify(code: string): Promise<{ ok: boolean; totp_enabled: boolean }> {
+  if (USE_MOCK) {
+    await sleep(400)
+    if (code === '000000') throw new AdminApiError('验证码错误', 'bad_totp', 400)
+    return { ok: true, totp_enabled: true }
+  }
+  return req('/api/auth/totp/verify', { method: 'POST', body: JSON.stringify({ code }) })
 }
 
 /** 总览 KPI */
 export async function getOverview(): Promise<OverviewKpi> {
   if (USE_MOCK) {
     await sleep(300)
-    // TODO(后端联调): GET /api/admin/overview
     return {
-      totalUsers: 1284,
-      tierDist: { free: 1096, standard: 142, pro: 46 },
-      todayPushes: 2130,
-      revenueCny: 4827,
-      activeTasks: 96,
+      total_users: 1284,
+      tier_distribution: { trial: 96, free: 1000, standard: 142, pro: 46 },
+      today_pushes: 2130,
+      revenue_cny: 4827,
+      active_tasks: 96,
     }
   }
   return req('/api/admin/overview')
 }
 
-/** 流量：PV/UV 按日 */
+/** 流量：PV/UV 按日（后端字段 day） */
 export async function getTraffic(days = 30): Promise<TrafficPoint[]> {
   if (USE_MOCK) {
     await sleep(300)
-    // TODO(后端联调): GET /api/admin/traffic?days=30
     return mockTraffic(days)
   }
   return req(`/api/admin/traffic?days=${days}`)
@@ -203,7 +251,6 @@ export async function getTraffic(days = 30): Promise<TrafficPoint[]> {
 export async function getUsers(q = '', tier: Tier | '' = ''): Promise<AdminUser[]> {
   if (USE_MOCK) {
     await sleep(300)
-    // TODO(后端联调): GET /api/admin/users?q=&tier=
     return MOCK_USERS.filter(
       (u) =>
         (!q || u.email.toLowerCase().includes(q.toLowerCase())) &&
@@ -217,19 +264,20 @@ export async function getUsers(q = '', tier: Tier | '' = ''): Promise<AdminUser[
 }
 
 /** 会员改级（写操作，页面层二次确认；后端记 audit） */
-export async function updateUserTier(id: string, tier: Tier): Promise<void> {
+export async function updateUserTier(id: number, tier: Tier): Promise<void> {
   if (USE_MOCK) {
     await sleep(400)
-    // TODO(后端联调): PATCH /api/admin/users/{id} {tier}（契约待后端确认）
     const u = MOCK_USERS.find((x) => x.id === id)
     if (u) {
       MOCK_AUDIT.unshift({
-        id: `a-${Date.now()}`,
-        admin: 'admin',
-        action: '改级',
-        target: u.email,
-        detail: `${u.tier} → ${tier}（mock）`,
-        at: new Date().toISOString(),
+        id: Date.now(),
+        admin_id: 1,
+        action: 'user.patch',
+        target_type: 'user',
+        target_id: String(id),
+        detail: { tier: { from: u.tier, to: tier } },
+        ip: '127.0.0.1',
+        created_at: new Date().toISOString(),
       })
       u.tier = tier
     }
@@ -242,25 +290,26 @@ export async function updateUserTier(id: string, tier: Tier): Promise<void> {
 export async function getPayments(): Promise<PaymentRecord[]> {
   if (USE_MOCK) {
     await sleep(300)
-    // TODO(后端联调): GET /api/admin/payments
     return MOCK_PAYMENTS
   }
   return req('/api/admin/payments')
 }
 
-/** 系统状态 */
+/** 系统状态：{engine, apple_cooldown, log_tail} */
 export async function getSystem(): Promise<SystemStatus> {
   if (USE_MOCK) {
     await sleep(300)
-    // TODO(后端联调): GET /api/admin/system
     return {
-      engine: 'running',
-      version: 'v1.0.0-mock',
-      queue: { pending: 12, processing: 4, failed24h: 1 },
-      rateLimit: { appleApiPerMin: '47 / 60', loginLocks: 0, catalogRefresh: '42 分钟前' },
-      lastPollAt: '2026-10-09T00:47:12Z',
-      avgPollMs: 402,
-      successRate: 0.987,
+      engine: {
+        running: true,
+        last_heartbeat: '2026-10-09T00:47:12Z',
+        last_tick_at: '2026-10-09T00:47:12Z',
+        rounds_total: 1024,
+        rounds_ok: 1011,
+        last_error: null,
+      },
+      apple_cooldown: { until: null, reason: '' },
+      log_tail: MOCK_LOGS,
     }
   }
   return req('/api/admin/system')
@@ -270,24 +319,23 @@ export async function getSystem(): Promise<SystemStatus> {
 export async function getAudit(): Promise<AuditEntry[]> {
   if (USE_MOCK) {
     await sleep(200)
-    // TODO(后端联调): GET /api/admin/audit
     return MOCK_AUDIT
   }
   return req('/api/admin/audit')
 }
 
-/** 日志 tail（mock） */
+/** 日志 tail：直接取 GET /api/admin/system 的 log_tail 字段 */
 export async function getLogTail(): Promise<string[]> {
   if (USE_MOCK) {
     await sleep(200)
-    // TODO(后端联调): 并入 GET /api/admin/system 返回
     return MOCK_LOGS
   }
-  const s = await req<SystemStatus & { logs: string[] }>('/api/admin/system')
-  return s.logs ?? []
+  const s = await getSystem()
+  return s.log_tail ?? []
 }
 
 export const TIER_LABEL: Record<Tier, string> = {
+  trial: '体验版',
   free: '免费版',
   standard: '标准会员',
   pro: 'Pro 会员',

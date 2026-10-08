@@ -49,14 +49,22 @@ import {
 } from '@/lib/admin-api'
 
 const TIER_BADGE: Record<Tier, string> = {
+  trial: 'bg-[#ff9f0a]/10 text-[#b26a00]',
   free: 'bg-[#e8e8ed] text-[#1d1d1f]',
   standard: 'bg-[#0071e3]/10 text-[#0071e3]',
   pro: 'bg-[#af52de]/10 text-[#af52de]',
 }
 
+const TIERS: Tier[] = ['trial', 'free', 'standard', 'pro']
+
 interface PendingChange {
   user: AdminUser
   tier: Tier
+}
+
+function fmtTime(iso: string | null): string {
+  if (!iso) return '—'
+  return iso.slice(0, 16).replace('T', ' ')
 }
 
 export function Members() {
@@ -133,9 +141,9 @@ export function Members() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value='all'>全部 tier</SelectItem>
-                  <SelectItem value='free'>免费版</SelectItem>
-                  <SelectItem value='standard'>标准会员</SelectItem>
-                  <SelectItem value='pro'>Pro 会员</SelectItem>
+                  {TIERS.map((t) => (
+                    <SelectItem key={t} value={t}>{TIER_LABEL[t]}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -152,9 +160,10 @@ export function Members() {
                   <TableRow>
                     <TableHead>邮箱</TableHead>
                     <TableHead>等级</TableHead>
-                    <TableHead className='font-mono'>任务</TableHead>
-                    <TableHead className='font-mono'>推送</TableHead>
-                    <TableHead>最近活跃</TableHead>
+                    <TableHead>管理员</TableHead>
+                    <TableHead>TOTP</TableHead>
+                    <TableHead>等级到期</TableHead>
+                    <TableHead>注册时间</TableHead>
                     <TableHead className='text-right'>操作</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -167,10 +176,25 @@ export function Members() {
                           {TIER_LABEL[u.tier]}
                         </Badge>
                       </TableCell>
-                      <TableCell className='font-mono'>{u.tasksUsed}</TableCell>
-                      <TableCell className='font-mono'>{u.pushUsed}</TableCell>
+                      <TableCell>
+                        {u.is_admin ? (
+                          <Badge className='rounded-full bg-[#d70015]/10 text-[#d70015]'>是</Badge>
+                        ) : (
+                          <span className='text-muted-foreground'>—</span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {u.totp_enabled ? (
+                          <Badge className='rounded-full bg-[#34c759]/10 text-[#1f8a3d]'>已绑定</Badge>
+                        ) : (
+                          <span className='text-muted-foreground'>未绑定</span>
+                        )}
+                      </TableCell>
+                      <TableCell className='font-mono text-[13px] text-muted-foreground'>
+                        {fmtTime(u.tier_expires_at)}
+                      </TableCell>
                       <TableCell className='text-muted-foreground'>
-                        {u.lastActiveAt.slice(0, 16).replace('T', ' ')}
+                        {fmtTime(u.created_at)}
                       </TableCell>
                       <TableCell className='text-right'>
                         <Select
@@ -184,9 +208,9 @@ export function Members() {
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value='free'>免费版</SelectItem>
-                            <SelectItem value='standard'>标准会员</SelectItem>
-                            <SelectItem value='pro'>Pro 会员</SelectItem>
+                            {TIERS.map((t) => (
+                              <SelectItem key={t} value={t}>{TIER_LABEL[t]}</SelectItem>
+                            ))}
                           </SelectContent>
                         </Select>
                       </TableCell>
@@ -195,7 +219,7 @@ export function Members() {
                   {rows.length === 0 && (
                     <TableRow>
                       <TableCell
-                        colSpan={6}
+                        colSpan={7}
                         className='py-12 text-center text-muted-foreground'
                       >
                         没有符合条件的会员

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { LogOut, ShieldCheck } from 'lucide-react'
+import { KeyRound, LogOut, ShieldCheck } from 'lucide-react'
 import { useNavigate } from '@tanstack/react-router'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
@@ -52,6 +52,13 @@ export function AdminProfile() {
               </p>
             </div>
           </DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            onClick={() => navigate({ to: '/totp-setup' })}
+          >
+            <KeyRound className='me-2 h-4 w-4' />
+            TOTP 绑定 / 重绑
+          </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={() => setOpen(true)} className='text-destructive'>
             <LogOut className='me-2 h-4 w-4' />

@@ -111,8 +111,9 @@ export function Traffic() {
                 <LineChart data={data} margin={{ left: 0, right: 8, top: 8 }}>
                   <CartesianGrid strokeDasharray='3 3' stroke='#e8e8ed' />
                   <XAxis
-                    dataKey='date'
+                    dataKey='day'
                     tick={{ fontSize: 11, fill: '#86868b' }}
+                    // 后端 day 形如 2026-10-09，取 MM-DD 显示
                     tickFormatter={(v: string) => v.slice(5)}
                     minTickGap={24}
                   />

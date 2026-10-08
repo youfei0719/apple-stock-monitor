@@ -5,7 +5,11 @@ import { USE_MOCK } from '@/lib/admin-api'
 /**
  * 后台路由守卫：未登录一律去 /sign-in。
  * mock 模式用 sessionStorage 标记；真实模式用 HttpOnly Cookie 会话，
- * 以轻量管理接口校验（401/403 → 登录页）。前端不存任何密钥。
+ * 以管理接口校验（401/403 → 登录页）。前端不存任何密钥。
+ *
+ * TOTP 分流：会话有效但未过 TOTP 二次验证（后端 code=totp_required）时，
+ * 未绑定 TOTP 的新管理员 → /totp-setup 扫码绑定；
+ * 已绑定的 → 回 /sign-in 重新走"密码 + TOTP"登录。
  */
 export const Route = createFileRoute('/_authenticated')({
   beforeLoad: async ({ location }) => {
@@ -19,14 +23,25 @@ export const Route = createFileRoute('/_authenticated')({
       if (sessionStorage.getItem('admin-authed') !== '1') toSignIn()
       return
     }
-    let ok = false
     try {
       const res = await fetch('/api/admin/overview', { credentials: 'include' })
-      ok = res.ok
+      if (res.ok) return
+      if (res.status === 403) {
+        const body = await res.json().catch(() => ({}))
+        if (body.code === 'totp_required') {
+          // 会话有效，仅缺 TOTP：查绑定状态决定去向
+          const me = await fetch('/api/me', { credentials: 'include' })
+            .then((r) => (r.ok ? r.json() : null))
+            .catch(() => null)
+          if (me && me.totp_enabled === false) {
+            throw redirect({ to: '/totp-setup' })
+          }
+        }
+      }
     } catch {
-      ok = false
+      // 网络异常等同未授权处理
     }
-    if (!ok) toSignIn()
+    toSignIn()
   },
   component: AuthenticatedLayout,
 })

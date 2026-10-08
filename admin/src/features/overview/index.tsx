@@ -21,10 +21,13 @@ import {
 } from '@/lib/admin-api'
 
 const TIER_COLORS: Record<Tier, string> = {
+  trial: 'bg-[#ff9f0a]',
   free: 'bg-[#86868b]',
   standard: 'bg-[#0071e3]',
   pro: 'bg-[#af52de]',
 }
+const TIER_COLOR_FALLBACK = 'bg-[#c7c7cc]'
+const NON_PAID_TIERS = new Set(['trial', 'free'])
 
 function KpiCard({
   title,
@@ -75,8 +78,12 @@ export function Overview() {
   }, [])
 
   const loading = data === null
-  const total =
-    data == null ? 0 : data.tierDist.free + data.tierDist.standard + data.tierDist.pro
+  // 后端 tier_distribution 是 {tier: count} 对象，键来自 DB（trial/free/standard/pro）
+  const dist = data?.tier_distribution ?? {}
+  const total = Object.values(dist).reduce((s, c) => s + c, 0)
+  const paid = Object.entries(dist)
+    .filter(([t]) => !NON_PAID_TIERS.has(t))
+    .reduce((s, [, c]) => s + c, 0)
 
   return (
     <>
@@ -98,32 +105,28 @@ export function Overview() {
         <div className='grid gap-4 sm:grid-cols-2 lg:grid-cols-4'>
           <KpiCard
             title='注册用户'
-            value={data ? data.totalUsers.toLocaleString() : '—'}
-            sub={`监控任务进行中 ${data?.activeTasks ?? '—'} 个`}
+            value={data ? data.total_users.toLocaleString() : '—'}
+            sub={`监控任务进行中 ${data?.active_tasks ?? '—'} 个`}
             icon={Users}
             loading={loading}
           />
           <KpiCard
             title='付费会员'
-            value={
-              data
-                ? (data.tierDist.standard + data.tierDist.pro).toLocaleString()
-                : '—'
-            }
-            sub='标准 + Pro 合计'
+            value={data ? paid.toLocaleString() : '—'}
+            sub='标准 + Pro 合计（不含体验/免费）'
             icon={Activity}
             loading={loading}
           />
           <KpiCard
             title='今日推送'
-            value={data ? data.todayPushes.toLocaleString() : '—'}
+            value={data ? data.today_pushes.toLocaleString() : '—'}
             sub='到货通知发送量'
             icon={Send}
             loading={loading}
           />
           <KpiCard
             title='累计收入'
-            value={data ? `¥${data.revenueCny.toLocaleString()}` : '—'}
+            value={data ? `¥${data.revenue_cny.toLocaleString()}` : '—'}
             sub='爱发电到账（税后口径）'
             icon={Wallet}
             loading={loading}
@@ -141,25 +144,25 @@ export function Overview() {
             ) : (
               <div className='space-y-4'>
                 <div className='flex h-4 w-full overflow-hidden rounded-full bg-muted'>
-                  {(Object.keys(data!.tierDist) as Tier[]).map((t) => (
+                  {Object.keys(dist).map((t) => (
                     <div
                       key={t}
-                      className={TIER_COLORS[t]}
-                      style={{ width: `${(data!.tierDist[t] / total) * 100}%` }}
-                      title={`${TIER_LABEL[t]}: ${data!.tierDist[t]}`}
+                      className={TIER_COLORS[t as Tier] ?? TIER_COLOR_FALLBACK}
+                      style={{ width: `${total ? (dist[t] / total) * 100 : 0}%` }}
+                      title={`${TIER_LABEL[t as Tier] ?? t}: ${dist[t]}`}
                     />
                   ))}
                 </div>
-                <div className='grid grid-cols-3 gap-4'>
-                  {(Object.keys(data!.tierDist) as Tier[]).map((t) => (
+                <div className='grid grid-cols-2 gap-4 sm:grid-cols-4'>
+                  {Object.keys(dist).map((t) => (
                     <div key={t} className='flex items-center gap-3'>
                       <span
-                        className={`h-3 w-3 rounded-full ${TIER_COLORS[t]}`}
+                        className={`h-3 w-3 rounded-full ${TIER_COLORS[t as Tier] ?? TIER_COLOR_FALLBACK}`}
                       />
                       <div>
-                        <div className='text-sm font-medium'>{TIER_LABEL[t]}</div>
+                        <div className='text-sm font-medium'>{TIER_LABEL[t as Tier] ?? t}</div>
                         <div className='font-mono text-lg font-semibold'>
-                          {data!.tierDist[t].toLocaleString()}
+                          {dist[t].toLocaleString()}
                         </div>
                       </div>
                     </div>

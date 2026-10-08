@@ -62,6 +62,21 @@ function StatCard({
   )
 }
 
+function fmtTime(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  return iso.slice(0, 19).replace('T', ' ')
+}
+
+function fmtDetail(detail: unknown): string {
+  if (detail == null) return '—'
+  if (typeof detail === 'string') return detail
+  try {
+    return JSON.stringify(detail)
+  } catch {
+    return String(detail)
+  }
+}
+
 export function System() {
   const [sys, setSys] = useState<SystemStatus | null>(null)
   const [logs, setLogs] = useState<string[] | null>(null)
@@ -74,7 +89,14 @@ export function System() {
   }, [])
 
   const loading = sys === null
-  const engineOk = sys?.engine === 'running'
+  // 后端 engine 是 dict：{running, last_heartbeat, last_tick_at, rounds_total, rounds_ok, last_error}
+  const engine = sys?.engine
+  const engineOk = engine?.running === true
+  const okRate =
+    engine && engine.rounds_total > 0
+      ? `${((engine.rounds_ok / engine.rounds_total) * 100).toFixed(1)}%`
+      : '—'
+  const cooldownEntries = sys ? Object.entries(sys.apple_cooldown ?? {}) : []
 
   return (
     <>
@@ -87,7 +109,7 @@ export function System() {
         <div className='mb-6'>
           <h1 className='text-2xl font-bold tracking-tight'>系统状态</h1>
           <p className='text-sm text-muted-foreground'>
-            引擎 / 队列 / 限流 / 日志 / 管理员审计
+            引擎 / Apple 冷却 / 日志 / 管理员审计
             {USE_MOCK && '（mock 数据，待后端联调）'}
           </p>
         </div>
@@ -109,29 +131,34 @@ export function System() {
                 <Badge
                   className={`rounded-full text-sm ${engineOk ? 'bg-[#34c759]/10 text-[#1f8a3d]' : 'bg-[#ff9f0a]/10 text-[#b26a00]'}`}
                 >
-                  ● {engineOk ? '运行中' : sys?.engine}
+                  ● {engineOk ? '运行中' : '已停止'}
                 </Badge>
               )}
               <p className='mt-2 font-mono text-xs text-muted-foreground'>
-                {sys?.version ?? '—'}
+                上次心跳 {fmtTime(engine?.last_heartbeat)} UTC
               </p>
+              {engine?.last_error && (
+                <p className='mt-1 font-mono text-xs text-[#d70015]'>
+                  错误：{engine.last_error}
+                </p>
+              )}
             </CardContent>
           </Card>
           <StatCard
-            title='队列待处理'
-            value={sys ? `${sys.queue.pending}` : '—'}
+            title='轮询总轮次'
+            value={engine ? `${engine.rounds_total}` : '—'}
             icon={Inbox}
             loading={loading}
           />
           <StatCard
-            title='平均轮询耗时'
-            value={sys ? `${sys.avgPollMs}ms` : '—'}
+            title='轮询成功轮次'
+            value={engine ? `${engine.rounds_ok}` : '—'}
             icon={Gauge}
             loading={loading}
           />
           <StatCard
-            title='轮询成功率'
-            value={sys ? `${(sys.successRate * 100).toFixed(1)}%` : '—'}
+            title='轮次成功率'
+            value={okRate}
             icon={ShieldCheck}
             loading={loading}
           />
@@ -140,38 +167,29 @@ export function System() {
         <div className='mt-4 grid gap-4 lg:grid-cols-2'>
           <Card className='rounded-3xl'>
             <CardHeader>
-              <CardTitle>限流状态</CardTitle>
-              <CardDescription>各关键路径的当前配额使用</CardDescription>
+              <CardTitle>Apple 接口冷却</CardTitle>
+              <CardDescription>后端 apple_cooldown 配置快照</CardDescription>
             </CardHeader>
             <CardContent>
               {loading ? (
                 <Skeleton className='h-32 w-full rounded-2xl' />
+              ) : cooldownEntries.length === 0 ? (
+                <p className='py-6 text-center text-sm text-muted-foreground'>
+                  当前无冷却配置
+                </p>
               ) : (
                 <dl className='space-y-3 text-sm'>
-                  <div className='flex justify-between rounded-2xl bg-muted px-4 py-3'>
-                    <dt className='text-muted-foreground'>Apple 查询接口</dt>
-                    <dd className='font-mono font-semibold'>
-                      {sys!.rateLimit.appleApiPerMin} / 分钟
-                    </dd>
-                  </div>
-                  <div className='flex justify-between rounded-2xl bg-muted px-4 py-3'>
-                    <dt className='text-muted-foreground'>登录锁定 IP</dt>
-                    <dd className='font-mono font-semibold'>
-                      {sys!.rateLimit.loginLocks} 个
-                    </dd>
-                  </div>
-                  <div className='flex justify-between rounded-2xl bg-muted px-4 py-3'>
-                    <dt className='text-muted-foreground'>目录上次刷新</dt>
-                    <dd className='font-mono font-semibold'>
-                      {sys!.rateLimit.catalogRefresh}
-                    </dd>
-                  </div>
-                  <div className='flex justify-between rounded-2xl bg-muted px-4 py-3'>
-                    <dt className='text-muted-foreground'>24h 失败任务</dt>
-                    <dd className='font-mono font-semibold'>
-                      {sys!.queue.failed24h}
-                    </dd>
-                  </div>
+                  {cooldownEntries.map(([k, v]) => (
+                    <div
+                      key={k}
+                      className='flex justify-between gap-4 rounded-2xl bg-muted px-4 py-3'
+                    >
+                      <dt className='font-mono text-muted-foreground'>{k}</dt>
+                      <dd className='font-mono font-semibold break-all'>
+                        {typeof v === 'string' ? v : JSON.stringify(v)}
+                      </dd>
+                    </div>
+                  ))}
                 </dl>
               )}
             </CardContent>
@@ -181,12 +199,16 @@ export function System() {
             <CardHeader>
               <CardTitle>日志 tail</CardTitle>
               <CardDescription>
-                最近引擎日志（上次轮询 {sys?.lastPollAt.slice(11, 19) ?? '—'} UTC）
+                后端 GET /api/admin/system 的 log_tail（最近引擎日志）
               </CardDescription>
             </CardHeader>
             <CardContent>
               {logs === null ? (
                 <Skeleton className='h-40 w-full rounded-2xl' />
+              ) : logs.length === 0 ? (
+                <p className='py-6 text-center text-sm text-muted-foreground'>
+                  暂无日志
+                </p>
               ) : (
                 <pre className='max-h-56 overflow-auto rounded-2xl bg-[#1d1d1f] p-4 font-mono text-[12px] leading-relaxed text-[#f5f5f7]'>
                   {logs.map((l, i) => (
@@ -211,32 +233,40 @@ export function System() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>时间</TableHead>
-                    <TableHead>管理员</TableHead>
+                    <TableHead className='font-mono'>管理员 ID</TableHead>
                     <TableHead>操作</TableHead>
                     <TableHead>对象</TableHead>
                     <TableHead>详情</TableHead>
+                    <TableHead className='font-mono'>IP</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {audit.map((a) => (
                     <TableRow key={a.id}>
                       <TableCell className='font-mono text-[13px] text-muted-foreground'>
-                        {a.at.slice(0, 16).replace('T', ' ')}
+                        {fmtTime(a.created_at)}
                       </TableCell>
-                      <TableCell className='font-medium'>{a.admin}</TableCell>
+                      <TableCell className='font-mono text-[13px]'>{a.admin_id}</TableCell>
                       <TableCell>
                         <Badge className='rounded-full bg-[#0071e3]/10 text-[#0071e3]'>
                           {a.action}
                         </Badge>
                       </TableCell>
-                      <TableCell>{a.target}</TableCell>
-                      <TableCell className='text-muted-foreground'>{a.detail}</TableCell>
+                      <TableCell className='font-mono text-[13px]'>
+                        {a.target_type}:{a.target_id}
+                      </TableCell>
+                      <TableCell className='max-w-64 truncate text-muted-foreground' title={fmtDetail(a.detail)}>
+                        {fmtDetail(a.detail)}
+                      </TableCell>
+                      <TableCell className='font-mono text-[13px] text-muted-foreground'>
+                        {a.ip}
+                      </TableCell>
                     </TableRow>
                   ))}
                   {audit.length === 0 && (
                     <TableRow>
                       <TableCell
-                        colSpan={5}
+                        colSpan={6}
                         className='py-12 text-center text-muted-foreground'
                       >
                         暂无审计记录

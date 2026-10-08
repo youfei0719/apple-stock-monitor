@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useNavigate, useSearch } from '@tanstack/react-router'
-import { AlertTriangle, Loader2, LogIn, ShieldCheck } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, Loader2, LogIn, ShieldCheck } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   Card,
@@ -24,30 +24,48 @@ import { Input } from '@/components/ui/input'
 import { PasswordInput } from '@/components/password-input'
 import { Button } from '@/components/ui/button'
 import { AuthLayout } from '../auth-layout'
-import { adminLogin, AdminApiError, USE_MOCK } from '@/lib/admin-api'
+import {
+  adminLoginPassword,
+  getMe,
+  totpVerify,
+  AdminApiError,
+  USE_MOCK,
+} from '@/lib/admin-api'
 
-const formSchema = z.object({
+const step1Schema = z.object({
+  email: z.string().email('请输入有效的管理员邮箱'),
   password: z.string().min(1, '请输入管理员密码'),
-  totp: z.string().regex(/^\d{6}$/, '请输入 6 位动态验证码'),
+})
+const step2Schema = z.object({
+  totp: z.string().regex(/^\d{6,8}$/, '请输入 6–8 位动态验证码'),
 })
 
-const MAX_FAILS = 5 // 与后端契约一致：连续 5 次失败锁 IP 15 分钟
-const COOLDOWN_SEC = 60 // 前端侧演示冷却（真实 15 分钟锁定由后端执行）
+const MAX_FAILS = 5 // 与后端契约一致：连续失败锁 IP（时长由后端执行）
+const COOLDOWN_SEC = 60 // 前端侧演示冷却（真实锁定由后端执行）
 
 /**
- * 后台登录：密码 + TOTP 两步。
+ * 后台登录（两步，对齐后端 auth.py）：
+ *  1. 邮箱 + 密码 → POST /api/auth/login → {ok, totp_required} + Set-Cookie
+ *  2. totp_required=false → 直接进后台；
+ *     已绑定 TOTP → 输验证码走 POST /api/auth/totp/verify；
+ *     未绑定（新管理员）→ 跳 /totp-setup 扫码绑定后再进。
  * 校验全部在后端；前端只做失败计数与限流提示（防爆破 UX），不存任何密钥。
  */
 export function SignIn() {
   const { redirect } = useSearch({ from: '/(auth)/sign-in' })
   const navigate = useNavigate()
+  const [step, setStep] = useState<1 | 2>(1)
   const [isLoading, setIsLoading] = useState(false)
   const [failCount, setFailCount] = useState(0)
   const [cooldown, setCooldown] = useState(0)
 
-  const form = useForm<z.infer<typeof formSchema>>({
-    resolver: zodResolver(formSchema),
-    defaultValues: { password: '', totp: '' },
+  const form1 = useForm<z.infer<typeof step1Schema>>({
+    resolver: zodResolver(step1Schema),
+    defaultValues: { email: '', password: '' },
+  })
+  const form2 = useForm<z.infer<typeof step2Schema>>({
+    resolver: zodResolver(step2Schema),
+    defaultValues: { totp: '' },
   })
 
   function startCooldown() {
@@ -64,27 +82,56 @@ export function SignIn() {
     }, 1000)
   }
 
-  async function onSubmit(data: z.infer<typeof formSchema>) {
+  /** 失败计数（登录/验证码失败共用；连续 MAX_FAILS 次触发前端冷却） */
+  function registerFail(e: unknown, fallbackMsg: string) {
+    const n = failCount + 1
+    setFailCount(n)
+    toast.error(e instanceof AdminApiError ? e.message : fallbackMsg)
+    if (n >= MAX_FAILS) startCooldown()
+  }
+
+  function loginDone() {
+    // 登录成功：mock 模式记一个本地标记；真实模式靠 HttpOnly Cookie。
+    // 前端不存任何 token / 密钥。
+    sessionStorage.setItem('admin-authed', '1')
+    setFailCount(0)
+    toast.success('登录成功')
+    navigate({ to: redirect || '/', replace: true })
+  }
+
+  async function onSubmitStep1(data: z.infer<typeof step1Schema>) {
     if (cooldown > 0) return
     setIsLoading(true)
     try {
-      await adminLogin(data.password, data.totp)
-      // 登录成功：mock 模式记一个本地标记；真实模式靠 HttpOnly Cookie。
-      // 前端不存任何 token / 密钥。
-      sessionStorage.setItem('admin-authed', '1')
-      setFailCount(0)
-      toast.success('登录成功')
-      navigate({ to: redirect || '/', replace: true })
-    } catch (e) {
-      const n = failCount + 1
-      setFailCount(n)
-      const msg =
-        e instanceof AdminApiError ? e.message : '登录失败，请检查密码与验证码'
-      toast.error(msg)
-      if (n >= MAX_FAILS) {
-        // 连续 5 次失败：按契约后端会锁 IP 15 分钟；前端同时冷却 60 秒防继续爆破
-        startCooldown()
+      const login = await adminLoginPassword(data.email, data.password)
+      if (!login.totp_required) {
+        loginDone()
+        return
       }
+      // 管理员会话需要 TOTP 二次验证：已绑定 → 第 2 步输码；未绑定 → 引导绑定
+      const me = await getMe()
+      if (!me.totp_enabled) {
+        sessionStorage.setItem('admin-authed', '1')
+        toast.info('首次登录：请先绑定 TOTP 动态验证码')
+        navigate({ to: '/totp-setup', replace: true })
+        return
+      }
+      setStep(2)
+    } catch (e) {
+      registerFail(e, '登录失败，请检查邮箱与密码')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  async function onSubmitStep2(data: z.infer<typeof step2Schema>) {
+    if (cooldown > 0) return
+    setIsLoading(true)
+    try {
+      await totpVerify(data.totp)
+      loginDone()
+    } catch (e) {
+      registerFail(e, '验证码错误，请重试')
     } finally {
       setIsLoading(false)
     }
@@ -101,8 +148,10 @@ export function SignIn() {
           </span>
           <CardTitle className='text-lg tracking-tight'>管理员登录</CardTitle>
           <CardDescription>
-            密码 + TOTP 两步验证
-            {USE_MOCK && '（mock 模式：任意密码可登录；验证码填 000000 可模拟失败）'}
+            {step === 1
+              ? '第 1 步：邮箱 + 密码'
+              : '第 2 步：TOTP 动态验证码'}
+            {USE_MOCK && '（mock：任意邮箱密码可登录；验证码填 000000 可模拟失败）'}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -118,76 +167,125 @@ export function SignIn() {
               <div>
                 {locked ? (
                   <>
-                    已连续 {MAX_FAILS} 次失败，触发限流：当前 IP 将被锁定 15
-                    分钟。
+                    已连续 {MAX_FAILS} 次失败，触发限流：当前 IP 将被锁定。
                     <br />
                     请 {cooldown} 秒后再试。
                   </>
                 ) : (
                   <>
                     登录失败（第 {failCount} 次）。连续 {MAX_FAILS}{' '}
-                    次失败将锁定当前 IP 15 分钟。
+                    次失败将锁定当前 IP。
                   </>
                 )}
               </div>
             </div>
           )}
-          <Form {...form}>
-            <form
-              onSubmit={form.handleSubmit(onSubmit)}
-              className='grid gap-4'
-            >
-              <FormField
-                control={form.control}
-                name='password'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>管理员密码</FormLabel>
-                    <FormControl>
-                      <PasswordInput
-                        placeholder='请输入密码'
-                        autoComplete='current-password'
-                        className='rounded-2xl'
-                        {...field}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name='totp'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>TOTP 动态验证码</FormLabel>
-                    <FormControl>
-                      <Input
-                        placeholder='6 位数字'
-                        inputMode='numeric'
-                        maxLength={6}
-                        autoComplete='one-time-code'
-                        className='rounded-2xl font-mono tracking-[0.3em]'
-                        {...field}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <Button
-                className='mt-1 rounded-2xl bg-[#0071e3] hover:bg-[#0071e3]/90'
-                disabled={isLoading || locked}
+          {step === 1 ? (
+            <Form {...form1}>
+              <form
+                onSubmit={form1.handleSubmit(onSubmitStep1)}
+                className='grid gap-4'
               >
-                {isLoading ? (
-                  <Loader2 className='animate-spin' />
-                ) : (
-                  <LogIn />
-                )}
-                {locked ? `${cooldown} 秒后重试` : '登录'}
-              </Button>
-            </form>
-          </Form>
+                <FormField
+                  control={form1.control}
+                  name='email'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>管理员邮箱</FormLabel>
+                      <FormControl>
+                        <Input
+                          placeholder='admin@example.com'
+                          type='email'
+                          autoComplete='username'
+                          className='rounded-2xl'
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form1.control}
+                  name='password'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>管理员密码</FormLabel>
+                      <FormControl>
+                        <PasswordInput
+                          placeholder='请输入密码'
+                          autoComplete='current-password'
+                          className='rounded-2xl'
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <Button
+                  className='mt-1 rounded-2xl bg-[#0071e3] hover:bg-[#0071e3]/90'
+                  disabled={isLoading || locked}
+                >
+                  {isLoading ? (
+                    <Loader2 className='animate-spin' />
+                  ) : (
+                    <LogIn />
+                  )}
+                  {locked ? `${cooldown} 秒后重试` : '下一步'}
+                </Button>
+              </form>
+            </Form>
+          ) : (
+            <Form {...form2}>
+              <form
+                onSubmit={form2.handleSubmit(onSubmitStep2)}
+                className='grid gap-4'
+              >
+                <FormField
+                  control={form2.control}
+                  name='totp'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>TOTP 动态验证码</FormLabel>
+                      <FormControl>
+                        <Input
+                          placeholder='6 位数字'
+                          inputMode='numeric'
+                          maxLength={8}
+                          autoComplete='one-time-code'
+                          className='rounded-2xl font-mono tracking-[0.3em]'
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <Button
+                  className='mt-1 rounded-2xl bg-[#0071e3] hover:bg-[#0071e3]/90'
+                  disabled={isLoading || locked}
+                >
+                  {isLoading ? (
+                    <Loader2 className='animate-spin' />
+                  ) : (
+                    <LogIn />
+                  )}
+                  {locked ? `${cooldown} 秒后重试` : '登录'}
+                </Button>
+                <Button
+                  type='button'
+                  variant='ghost'
+                  className='rounded-2xl'
+                  disabled={isLoading}
+                  onClick={() => setStep(1)}
+                >
+                  <ArrowLeft className='h-4 w-4' />
+                  返回上一步
+                </Button>
+              </form>
+            </Form>
+          )}
         </CardContent>
       </Card>
     </AuthLayout>
