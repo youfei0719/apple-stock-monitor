@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Header, Query, Request
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import _client_ip, get_current_user, get_optional_user
 from app.api.errors import APIError
@@ -30,10 +30,6 @@ DISPLAY_STATE_ORDER = (
     "paused",
     "expired",
 )
-
-# auto_retire DB 列是否已存在（models.py 归属其他 worker，加列需 migration；
-# 列缺失时开关按默认值 True 生效，显式关闭会报 501，见下）。
-HAS_AUTO_RETIRE_COL = hasattr(MonitorTask, "auto_retire")
 
 # 匿名体验任务最长存活 24h（服务端强制，不信任客户端传的 expires_at）
 TRIAL_MAX_TTL = timedelta(hours=24)
@@ -76,7 +72,9 @@ def _display_state(task: MonitorTask, row: StockState | None) -> str:
 
 
 def _task_out(task: MonitorTask, db: Session) -> TaskOut:
-    rows = db.execute(select(StockState).where(StockState.task_id == task.id)).scalars().all()
+    # R4-P1-B5：list_tasks 用 selectinload 预加载 states，这里直接读关系，
+    # 其他入口（create/get）走懒加载，不再每任务一次 StockState 查询
+    rows = task.states
     by_store: dict[str, dict] = {}
     for r in rows:
         by_store.setdefault(r.store_number, {})[r.part_number] = {
@@ -174,7 +172,12 @@ def list_tasks(
 ):
     if status not in ("active", "expired", "all"):
         raise APIError(400, "status 必须为 active、expired 或 all", "bad_status")
-    q = select(MonitorTask).order_by(MonitorTask.created_at.desc())
+    # R4-P1-B5：selectinload 预加载 states，_task_out 不再每任务查一次 StockState
+    q = (
+        select(MonitorTask)
+        .options(selectinload(MonitorTask.states))
+        .order_by(MonitorTask.created_at.desc())
+    )
     if user:
         q = q.where(MonitorTask.user_id == user.id)
     elif x_device_id:
@@ -232,14 +235,8 @@ def create_task(
         repeat_interval_sec=data.repeat_interval_sec,
         channels=data.channels.model_dump(exclude_none=True),
         expires_at=_clamp_expires(data.expires_at, anonymous=user is None),
+        auto_retire=data.auto_retire,
     )
-    if HAS_AUTO_RETIRE_COL:
-        task_kwargs["auto_retire"] = data.auto_retire
-    elif data.auto_retire is not True:
-        # 列尚未建：只能接受默认值 True，显式关闭必须等 DB 迁移
-        raise APIError(
-            501, "auto_retire 开关后端尚未启用（需 DB 迁移），暂只支持默认开启", "not_implemented"
-        )
     task = MonitorTask(**task_kwargs)
     db.add(task)
     db.commit()
@@ -255,6 +252,9 @@ def batch_create(
     db: Session = Depends(get_db),
 ):
     """门店 × 型号批量生成任务。"""
+    # R4-P1-B6：复用 _validate_task_in 校验 mode + category（此前只判 mode，
+    # category 非法会直接入库）
+    _validate_task_in(data)
     tier = effective_tier_of(user)
     existing = db.execute(
         select(func.count()).select_from(MonitorTask).where(MonitorTask.user_id == user.id)
@@ -266,8 +266,6 @@ def batch_create(
             f"批量生成将超出任务上限（{tier['tasks_limit']}），本次 {len(combos)} 个",
             "task_limit",
         )
-    if data.mode not in ("instant", "confirmed"):
-        raise APIError(400, "mode 必须为 instant 或 confirmed", "bad_mode")
     # 断裂-8：批量内去重 + 与已有任务查重（409）；N7：门店号归一化后再查重
     seen: set[tuple[str, frozenset]] = set()
     combos_norm = [(part.strip().upper(), store.strip().upper()) for part, store in combos]
@@ -322,6 +320,10 @@ def patch_task(
     x_device_id: str | None = Header(default=None),
 ):
     task = _get_owned(task_id, user, x_device_id, db)
+    # R4-P2：先校验后 setattr（此前 mode 非法时已 setattr，commit 前才 400，
+    # 虽未落库但对象状态已脏）
+    if data.mode is not None and data.mode not in ("instant", "confirmed"):
+        raise APIError(400, "mode 必须为 instant 或 confirmed", "bad_mode")
     fields = ("name", "group", "paused", "mode", "repeat_interval_sec")
     for field in fields:
         v = getattr(data, field)
@@ -330,15 +332,10 @@ def patch_task(
     if data.channels is not None:
         task.channels = data.channels.model_dump(exclude_none=True)
     if data.auto_retire is not None:
-        if HAS_AUTO_RETIRE_COL:
-            task.auto_retire = data.auto_retire
-        else:
-            raise APIError(501, "auto_retire 开关后端尚未启用（需 DB 迁移）", "not_implemented")
+        task.auto_retire = data.auto_retire
     if data.expires_at is not None:
         # 匿名任务同样强制 24h 上限
         task.expires_at = _clamp_expires(data.expires_at, anonymous=user is None)
-    if data.mode is not None and data.mode not in ("instant", "confirmed"):
-        raise APIError(400, "mode 必须为 instant 或 confirmed", "bad_mode")
     db.add(task)
     db.commit()
     db.refresh(task)
@@ -364,12 +361,15 @@ def renew_task(
     db: Session = Depends(get_db),
     x_device_id: str | None = Header(default=None),
 ):
-    """一键续期：expires_at = now + 30 天（断裂-7）。
+    """一键续期：expires_at = max(now, 原 expires_at) + 30 天（断裂-7）。
 
+    R4-P2：提前续期不再丢剩余天数（此前一律 now+30d，剩 20 天时续期反而亏）。
     只延长时间，不改 paused/配额状态。匿名 trial 任务同样受 24h 上限钳制。
     """
     task = _get_owned(task_id, user, x_device_id, db)
-    task.expires_at = _clamp_expires(datetime.utcnow() + timedelta(days=30), anonymous=user is None)
+    now = datetime.utcnow()
+    base = max(now, task.expires_at) if task.expires_at else now
+    task.expires_at = _clamp_expires(base + timedelta(days=30), anonymous=user is None)
     db.add(task)
     db.commit()
     db.refresh(task)

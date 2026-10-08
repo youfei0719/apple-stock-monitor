@@ -10,6 +10,7 @@
 import asyncio
 import math
 import random
+import sys
 import time
 from collections import deque
 from datetime import datetime, timedelta
@@ -168,6 +169,8 @@ class Engine:
         # Apple 请求预算窗口（断裂-20）：key -> deque[timestamp]，60s 滚动窗口；
         # key="global" 为全局，其余为 "u:<user_id>" / "d:<device_id>"（trial）
         self._req_windows: dict[str, deque] = {}
+        # 预算跳过累计计数（R4-P0-4：只记内存，不写 notifications 表）
+        self.budget_skips_total = 0
 
     # ---- 生命周期 ----
     async def start(self) -> None:
@@ -186,23 +189,6 @@ class Engine:
             except asyncio.CancelledError:
                 pass
         log.info("engine_stopped")
-
-    def status(self) -> dict:
-        stale = True
-        if self.last_heartbeat:
-            stale = (datetime.utcnow() - self.last_heartbeat).total_seconds() > 60
-
-        def _iso(dt):
-            return dt.isoformat() + "Z" if dt else None
-
-        return {
-            "running": self.running and not stale,
-            "last_heartbeat": _iso(self.last_heartbeat),
-            "last_tick_at": _iso(self.last_tick_at),
-            "rounds_total": self.rounds_total,
-            "rounds_ok": self.rounds_ok,
-            "last_error": self.last_error,
-        }
 
     # ---- 主循环 ----
     async def _loop(self) -> None:
@@ -320,6 +306,8 @@ class Engine:
     def _apply_budgets(
         self, db, due: list[MonitorTask], now_ts: float
     ) -> list[MonitorTask]:
+        """请求预算过滤。R4-P0-4：被预算跳过的任务只记内存计数 + 日志，
+        不再写 notifications 表（此前每 5 秒重复写行，表无限膨胀）。"""
         kept: list[MonitorTask] = []
         skipped = 0
         for t in due:
@@ -328,9 +316,6 @@ class Engine:
             ukey = self._user_key(t)
             # 1) 单用户预算：60s 窗口内计数 + 本轮预计 > 上限 → 跳过
             if self._window_count(ukey) + est > self.settings.per_user_req_limit(tier):
-                self._record_skipped(
-                    db, t, "", "", channel="budget", error="per_user_rate_limit"
-                )
                 log.warning(
                     "budget_skip_per_user", task_id=t.id, tier=tier, est=est
                 )
@@ -342,16 +327,13 @@ class Engine:
                 > self.settings.GLOBAL_APPLE_REQ_PER_MIN
                 and tier != "pro"
             ):
-                self._record_skipped(
-                    db, t, "", "", channel="budget", error="global_rate_limit"
-                )
                 log.warning("budget_skip_global", task_id=t.id, tier=tier, est=est)
                 skipped += 1
                 continue
             kept.append(t)
         if skipped:
-            # _due_tasks 可能返回空导致本轮无 commit，这里先落库 skipped 记录
-            db.commit()
+            self.budget_skips_total += skipped
+            log.info("budget_skips", skipped=skipped, total=self.budget_skips_total)
         return kept
 
     def _peak_mode(self, db) -> bool:
@@ -824,7 +806,16 @@ async def _amain() -> None:
     """独立进程入口（deploy/stockmon-engine.service 的 ExecStart 目标）。
 
     常驻运行监控引擎主循环，直到收到 SIGINT/SIGTERM 后优雅停止。
+
+    R4-P0-1：fail-fast 检查 ENGINE_ENABLED。开关关闭时直接退出并打印说明，
+    防止有人在 shell 手动 `python -m app.services.engine` 绕过开关启动
+    第二个引擎（双引擎重复轮询/重复通知）。
     """
+    if not get_settings().ENGINE_ENABLED:
+        print("ENGINE_ENABLED=false：拒绝启动监控引擎。")
+        print("引擎只能由独立进程 stockmon-engine.service（ENGINE_ENABLED=true）运行；")
+        print("API 进程内不再启动引擎，手动 python -m app.services.engine 也不会绕过开关。")
+        sys.exit(1)
     await engine.start()
     try:
         await asyncio.Event().wait()
