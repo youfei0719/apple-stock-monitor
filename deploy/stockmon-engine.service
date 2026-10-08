@@ -9,6 +9,9 @@ WorkingDirectory=/opt/stockmon/backend
 EnvironmentFile=/opt/stockmon/.env
 # D1：本进程是唯一的引擎运行者（API 进程 ENGINE_ENABLED=false 不启动引擎）。
 Environment ENGINE_ENABLED=true
+# R7 日志方案(a)：engine 进程写 stockmon-engine.log（与 API 进程分开，
+# 避开 TimedRotatingFileHandler 双进程午夜 rollover 竞态）。
+Environment=STOCKMON_LOG_NAME=stockmon-engine.log
 ExecStart=/opt/stockmon/backend/.venv/bin/python -m app.services.engine
 Restart=always
 RestartSec=10

@@ -8,7 +8,54 @@ DST_DIR=/opt/stockmon/backups
 DAY=$(date +%F)
 mkdir -p "$DST_DIR"
 
-[ -f "$ENV_FILE" ] || { echo "[$DAY] backup FAIL: $ENV_FILE 不存在" >&2; exit 1; }
+# ===== R7-D：备份失败自动告警（SMTP） =====
+# Bark 是用户级通知渠道（bark_key 存各用户的任务配置里），没有运维全局 key；
+# 备份是运维层任务，这里只走 SMTP（配置复用 .env 的 SMTP_HOST/USER/PASSWORD，
+# prod 下 deploy.sh 已做硬门槛校验，部署脚本上下文里一定拿得到）。
+# 收件人优先级：BACKUP_ALERT_TO > SSL_EMAIL > SMTP_USER；任一缺失则跳过告警只记日志。
+alert() {
+  local msg="$1" to host port user pass from from_addr subj scheme
+  to=$(env_val BACKUP_ALERT_TO)
+  [ -z "$to" ] && to=$(env_val SSL_EMAIL)
+  [ -z "$to" ] && to=$(env_val SMTP_USER)
+  host=$(env_val SMTP_HOST); port=$(env_val SMTP_PORT); user=$(env_val SMTP_USER)
+  pass=$(env_val SMTP_PASSWORD); from=$(env_val SMTP_FROM)
+  [ -z "$port" ] && port=465
+  if [ -z "$host" ] || [ -z "$user" ] || [ -z "$pass" ] || [ -z "$to" ]; then
+    echo "[$DAY] alert SKIP: SMTP/收件人配置缺失（需 SMTP_HOST/SMTP_USER/SMTP_PASSWORD + 收件人 BACKUP_ALERT_TO/SSL_EMAIL/SMTP_USER），仅记日志" >&2
+    return 0
+  fi
+  # --mail-from 要裸地址：从 "Name <addr>" 里剥出 addr
+  case "$from" in
+    *"<"*">") from_addr=$(printf '%s' "$from" | sed -E 's/.*<([^<>]+)>.*/\1/') ;;
+    *) from_addr="$from" ;;
+  esac
+  # 465=隐式 TLS，其余端口走 STARTTLS
+  scheme="smtp"; extra="--ssl-reqd"
+  if [ "$port" = "465" ]; then scheme="smtps"; extra=""; fi
+  # 中文主题走 RFC2047 base64，避免裸 UTF-8 被拒收
+  subj=$(printf '%s' "[StockMon] 每日备份失败 $DAY" | base64 | tr -d '\n')
+  if printf 'From: %s\r\nTo: %s\r\nSubject: =?UTF-8?B?%s?=\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n%s\r\n' \
+      "$from" "$to" "$subj" "$msg" \
+    | curl -sS --max-time 30 "$scheme://$host:$port" $extra \
+        --mail-from "$from_addr" --mail-rcpt "$to" \
+        --user "$user:$pass" -T - >/dev/null 2>&1; then
+    echo "[$DAY] alert sent -> $to"
+  else
+    echo "[$DAY] alert FAIL: 邮件发送失败（curl smtp），仅记日志" >&2
+  fi
+  return 0
+}
+
+# 失败统一出口：记日志 + 发告警 + 非零退出（让 cron 感知）
+fail() {
+  local msg="$1"
+  echo "[$DAY] backup FAIL: $msg" >&2
+  alert "$msg"
+  exit 1
+}
+
+[ -f "$ENV_FILE" ] || fail "$ENV_FILE 不存在"
 
 # ===== R5-D-1/D-2：.env 提取器（与 deploy.sh 同逻辑：先去行尾注释再取值，支持 export 前缀） =====
 # R6-P2-6：重复键取最后一个（与 `source` 语义一致）；R6-P2-1：最终清理只去首尾
@@ -42,10 +89,10 @@ env_val() {
 
 # ===== P0-26：从 .env 的 DATABASE_URL 解析 sqlite 真实路径（只支持 sqlite） =====
 DB_URL=$(env_val DATABASE_URL)
-[ -n "$DB_URL" ] || { echo "[$DAY] backup FAIL: $ENV_FILE 缺少 DATABASE_URL" >&2; exit 1; }
+[ -n "$DB_URL" ] || fail "$ENV_FILE 缺少 DATABASE_URL"
 case "$DB_URL" in
   sqlite:///*) ;;
-  *) echo "[$DAY] backup FAIL: 仅支持 sqlite 备份，当前 DATABASE_URL=$DB_URL" >&2; exit 1 ;;
+  *) fail "仅支持 sqlite 备份，当前 DATABASE_URL=$DB_URL" ;;
 esac
 DB_PATH="${DB_URL#sqlite:///}"
 case "$DB_PATH" in
@@ -54,19 +101,17 @@ case "$DB_PATH" in
   *)   SRC="$APP_DIR/$DB_PATH" ;;       # sqlite:///data/app.db（相对 backend）
 esac
 
-[ -f "$SRC" ] || { echo "[$DAY] backup FAIL: 数据库文件不存在: $SRC" >&2; exit 1; }
+[ -f "$SRC" ] || fail "数据库文件不存在: $SRC"
 
 # ===== R4-P1-D7：备份连接加 busy_timeout（3:10 可能与引擎写锁撞车） =====
 # .backup 失败时 sqlite3 进程可能仍退出 0，所以产物必须做非空 + 完整性检查，
-# 失败写日志并以非零退出，让 cron 能感知（不能静默"备份成功"）。
+# 失败走 fail()：写日志 + SMTP 告警 + 非零退出，让 cron 能感知（不能静默"备份成功"）。
 sqlite3 "$SRC" "PRAGMA busy_timeout=15000;" ".backup '$DST_DIR/app-$DAY.db'"
 if [ ! -s "$DST_DIR/app-$DAY.db" ]; then
-  echo "[$DAY] backup FAIL: 备份产物为空或缺失: $DST_DIR/app-$DAY.db（可能与引擎写锁撞车，busy_timeout=15s 仍超时）" >&2
-  exit 1
+  fail "备份产物为空或缺失: $DST_DIR/app-$DAY.db（可能与引擎写锁撞车，busy_timeout=15s 仍超时）"
 fi
 if ! sqlite3 "$DST_DIR/app-$DAY.db" "PRAGMA quick_check;" | grep -q '^ok'; then
-  echo "[$DAY] backup FAIL: 备份文件完整性校验未通过: $DST_DIR/app-$DAY.db" >&2
-  exit 1
+  fail "备份文件完整性校验未通过: $DST_DIR/app-$DAY.db"
 fi
 chmod 600 "$DST_DIR/app-$DAY.db"
 

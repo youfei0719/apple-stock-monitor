@@ -11,6 +11,9 @@ EnvironmentFile=/opt/stockmon/.env
 # 引擎由独立 stockmon-engine.service 进程运行（ENGINE_ENABLED=true），避免双引擎
 # 重复轮询、重复通知和配额 double-count。
 Environment ENGINE_ENABLED=false
+# R7 日志方案(a)：API 进程写 stockmon-api.log（与 engine 进程分开，
+# 避开 TimedRotatingFileHandler 双进程午夜 rollover 竞态）。
+Environment=STOCKMON_LOG_NAME=stockmon-api.log
 ExecStart=/opt/stockmon/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8101 --workers 1
 Restart=always
 RestartSec=5

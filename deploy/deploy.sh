@@ -73,9 +73,10 @@ _need_cmd curl curl
 _need_cmd sqlite3 sqlite3
 _need_cmd rsync rsync
 _need_cmd certbot certbot
+_need_cmd crontab crontab   # R7：本脚本末尾用 crontab 安装 backup 定时任务，缺 crontab 部署到最后才报错
 if [ -n "$MISSING_SW" ]; then
   echo "ERROR: 缺少以下前置软件:$MISSING_SW"
-  echo "请先安装（如 Debian/Ubuntu：apt install -y git python3-venv nodejs npm nginx curl sqlite3 rsync certbot），再重新运行本脚本。"
+  echo "请先安装（如 Debian/Ubuntu：apt install -y git python3-venv nodejs npm nginx curl sqlite3 rsync certbot cron），再重新运行本脚本。"
   exit 1
 fi
 # ===== R6-D8：node 主版本号 ≥18 校验（vite 6 硬要求） =====
@@ -185,9 +186,13 @@ if [ ! -d "/etc/letsencrypt/live/$DOMAIN" ]; then
   }
   echo "[deploy] 为 $DOMAIN 申请证书（certonly --standalone，不改写 nginx conf）..."
   systemctl stop nginx || true
+  # R7：certbot 失败时 set -e 会直接退出，此前已 stop 了 nginx；用 ERR trap 保证
+  # 失败分支也恢复 nginx，不会留一个停掉的 nginx。成功后取消 trap。
+  trap 'systemctl start nginx || true' ERR
   certbot certonly --non-interactive --agree-tos -m "$SSL_EMAIL_VAL" \
     --standalone -d "$DOMAIN" \
     --deploy-hook "systemctl reload nginx"
+  trap - ERR
   systemctl start nginx
   echo "[deploy] 证书申请完成"
 else

@@ -9,9 +9,18 @@ import structlog
 _configured = False
 
 
-def configure_logging(log_dir: str = "logs") -> structlog.stdlib.BoundLogger:
+def configure_logging(log_dir: str = "logs", filename: str | None = None) -> structlog.stdlib.BoundLogger:
     global _configured
     os.makedirs(log_dir, exist_ok=True)
+    if filename is None:
+        # R7 日志方案(a)：API 进程与 engine 进程各写各的日志文件。
+        # TimedRotatingFileHandler 非多进程安全：双进程同时持有 app.log，
+        # 午夜 rollover 时会竞态（互相截断/覆盖对方的轮转文件）。
+        # systemd unit 通过 STOCKMON_LOG_NAME 传入进程身份
+        # （stockmon-api.service → stockmon-api.log，
+        #  stockmon-engine.service → stockmon-engine.log）；
+        # 本地直跑未设置时回退到 app.log（与旧行为一致）。
+        filename = os.environ.get("STOCKMON_LOG_NAME", "app.log")
 
     timestamper = structlog.processors.TimeStamper(fmt="iso", utc=True)
     structlog.configure(
@@ -33,7 +42,7 @@ def configure_logging(log_dir: str = "logs") -> structlog.stdlib.BoundLogger:
     if not _configured:
         fmt = logging.Formatter("%(message)s")
         file_handler = TimedRotatingFileHandler(
-            os.path.join(log_dir, "app.log"),
+            os.path.join(log_dir, filename),
             when="midnight",
             interval=1,
             backupCount=30,

@@ -5,7 +5,7 @@ Base URL: `https://stock.glint.red/api`（开发环境 `http://localhost:8000/ap
 所有时间：UTC ISO8601。错误格式：`{"detail": "...", "code": "..."}`。
 
 ## 健康检查
-- `GET /healthz` → `{"status":"ok","db":true,"engine":"running","version":"..."}`（无需认证）
+- `GET /healthz` → 200 `{"status":"ok","db":true,"engine":"running","engine_in_api":false,"version":"..."}`（无需认证）；**DB 挂时返回 503** `{"status":"degraded","db":false,"engine":"<state>","engine_in_api":false,"version":"..."}`（deploy 健康检查据此判失败）
 
 ## 认证 / 用户
 - `POST /api/auth/register` `{email, password}` → 201 `{id, email, tier:"free"}`；注册后发 6 位邮箱验证码（10 分钟有效），同 `X-Device-Id` 的匿名任务自动迁移绑定到新用户（迁移后原行 `device_id` 清空）。prod 启动硬门槛：`SMTP_HOST/SMTP_USER/SMTP_PASSWORD` 缺失则拒绝启动（防止验证码发不出导致用户永远 403 登录的死胡同）
@@ -32,6 +32,7 @@ Task: `{id, name, group, category, part_number, product_name, color, capacity, s
 ## 目录（公开）
 - `GET /api/catalog/stores?refresh=0` → `[{number, name, city, province}]`（全国直营店，refresh=1 触发在线刷新）
 - `GET /api/catalog/products?category=iphone|ipad|mac|watch` → `[{part_number, name, color, capacity, price_cny}]`
+- `GET /api/catalog/anchors` → `[城市名, ...]`（城市锚点列表，调试/管理用；空库时自动播种种子锚点）
 
 ## 库存状态（六态，前端展示用，全部 snake_case）
 state ∈ `available | unavailable | unknown | verifying | cooling | paused`
@@ -40,6 +41,7 @@ state ∈ `available | unavailable | unknown | verifying | cooling | paused`
 ## 通知
 - `POST /api/notify/test` `{channel, target}` → 发送测试通知，返回成功/失败（链路测试）
 - `GET /api/notifications?task_id=` → 通知历史
+- `GET /api/notify/channels/health`（需登录）→ `{channels: [{key, name, configured, configured_basis, success_rate_7d, last_failure_at, last_failure_reason}]}`（各通道近 7 天成功率 + 最后失败原因；五通道：bark/wecom（企微）/dingtalk（钉钉）/feishu（飞书）/email；`success_rate_7d` 只统计 sent/failed，skipped 不计入，无数据时为 `null`；`configured` 为近似口径：用户任务里配过该通道，或近 30 天有该通道的通知记录）
 - 通知直达链接由后端生成：`https://www.apple.com.cn/shop/buy-iphone/...` 或购物袋 URL
 - 系统通知 kind（不扣配额）：`quota_warning`（配额 80%/100% 预警）· `quota_exhausted`（配额耗尽自动暂停）· `task_auto_paused`（连续 10 次发送失败自动暂停，走邮件兜底）；配额口径为**实际发送成功的通知条数**，失败回滚不扣、重试成功不重复扣
 
