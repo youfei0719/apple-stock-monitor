@@ -339,6 +339,18 @@ def patch_task(
     return _task_out(task, db)
 
 
+@router.get("/{task_id}", response_model=TaskOut)
+def get_task(
+    task_id: int,
+    user: User | None = Depends(get_optional_user),
+    db: Session = Depends(get_db),
+    x_device_id: str | None = Header(default=None),
+):
+    """取单个任务详情（含 channels，供任务详情页通知渠道配置用）。"""
+    task = _get_owned(task_id, user, x_device_id, db)
+    return _task_out(task, db)
+
+
 @router.post("/{task_id}/renew", response_model=TaskOut)
 def renew_task(
     task_id: int,

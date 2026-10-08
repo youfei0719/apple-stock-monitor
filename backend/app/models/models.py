@@ -86,6 +86,8 @@ class MonitorTask(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # 连续通知失败次数；全通道失败+1、全成功清零；>=10 自动暂停（不断裂-6）
     consecutive_failures: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # 连续 90 天无货是否自动暂停（僵尸任务清理，断裂-11）；默认开，用户可关
+    auto_retire: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     last_polled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_poll_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     last_poll_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -145,6 +147,10 @@ class Notification(Base):
     part_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="sent", nullable=False)
     error: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    # 发送失败重试（断裂-5）：retry_count=已重试次数（上限 3，含 tick 内立即重试 1 次）；
+    # retry_at=下次重试时间；engine 每 tick 捞 retry_at<=now AND status='failed' 重发
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
 
 

@@ -8,6 +8,9 @@ X-Afdian-Signature 比对（头名经社区 afdianbot 用法确认）。
 确认算法一致后再启用。若对拍不符，按官方文档修正本函数。
 
 验签为 fail-closed：AFDIAN_TOKEN 为空、签名缺失或不符一律拒绝。
+
+对账兜底：webhook 丢失 / 金额异常 / 退款无承接 → 设计见
+docs/reviews/reconciliation-plan.md（首版只留文档，未实现）。
 """
 
 import hashlib
@@ -24,7 +27,8 @@ from app.api.errors import APIError
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.logging import get_logger
-from app.models.models import Payment, User
+from app.core.tiers import effective_tier
+from app.models.models import Payment, SystemConfig, User
 
 router = APIRouter(tags=["pay"])
 log = get_logger("pay")
@@ -32,6 +36,71 @@ settings = get_settings()
 
 # 档位期望金额（单位：分）。standard=¥19，pro=¥39。
 EXPECTED_AMOUNT_FEN = {"standard": 1900, "pro": 3900}
+
+# 档位高低：用于判断 webhook 是升级还是降级（升级立即生效、降级到期生效）
+TIER_RANK = {"trial": 0, "free": 1, "standard": 2, "pro": 3}
+
+# 金额异常待处理计数 key（admin 待处理视图展示，断裂-15）
+AMOUNT_MISMATCH_PENDING_KEY = "payments_amount_mismatch_pending"
+
+
+def _resolve_user(db: Session, remark: str, user_id_raw: str) -> User | None:
+    """关联用户：优先 remark 中填写的 user_id / email，再看回调自带 user_id。"""
+    user: User | None = None
+    if remark.isdigit():
+        user = db.get(User, int(remark))
+    if not user and "@" in remark:
+        user = db.execute(select(User).where(User.email == remark)).scalar_one_or_none()
+    if not user and str(user_id_raw).isdigit():
+        user = db.get(User, int(str(user_id_raw)))
+    return user
+
+
+def _bump_amount_mismatch_pending(db: Session) -> int:
+    """金额异常待处理数 +1，返回最新值。"""
+    row = db.execute(
+        select(SystemConfig).where(SystemConfig.key == AMOUNT_MISMATCH_PENDING_KEY)
+    ).scalar_one_or_none()
+    n = int((row.value or {}).get("count", 0)) + 1 if row else 1
+    if row:
+        row.value = {"count": n}
+        db.add(row)
+    else:
+        db.add(SystemConfig(key=AMOUNT_MISMATCH_PENDING_KEY, value={"count": n}))
+    return n
+
+
+def apply_tier_grant(db: Session, user: User, tier_to: str) -> str:
+    """按 webhook/补单口径授予档位（可单独单元测试）。
+
+    返回 "granted"（升级/续费立即生效）或 "downgrade_pending"（降级到期生效，
+    只写 pending_tier，到期 sweep 再切换；不自洽-1）。
+    配额锚点与会员周期对齐（购买日+30天滚动）。
+    """
+    now = datetime.utcnow()
+    base = user.tier_expires_at if user.tier_expires_at and user.tier_expires_at > now else now
+    if TIER_RANK.get(tier_to, 0) < TIER_RANK.get(effective_tier(user), 0):
+        user.pending_tier = tier_to
+        db.add(user)
+        log.info(
+            "tier_downgrade_pending",
+            user_id=user.id,
+            tier_from=effective_tier(user),
+            pending_tier=tier_to,
+        )
+        return "downgrade_pending"
+    user.tier = tier_to
+    user.tier_expires_at = base + timedelta(days=30)
+    user.quota_reset_at = base + timedelta(days=30)
+    user.pending_tier = None
+    db.add(user)
+    log.info(
+        "tier_granted",
+        user_id=user.id,
+        tier_to=tier_to,
+        tier_expires_at=user.tier_expires_at.isoformat(),
+    )
+    return "granted"
 
 
 def verify_afdian_signature(raw_body: bytes, signature: str | None) -> bool:
@@ -91,7 +160,8 @@ async def afdian_webhook(request: Request, db: Session = Depends(get_db)):
         log.warning("afdian_unknown_plan", plan_id=plan_id, order_id=order_id)
         raise APIError(400, f"未知 plan_id: {plan_id}", "unknown_plan")
 
-    # 金额与档位价比对：不符说明回调异常或档位配置错误，直接拒绝并告警
+    # 金额与档位价比对：不符不再直接 400 拒绝（断裂-15）。
+    # 爱发电已扣款（不退），拒绝会导致"钱货两空"黑洞；改为落库待人工处理。
     expected_fen = EXPECTED_AMOUNT_FEN[tier_to]
     if amount_fen != expected_fen:
         log.error(
@@ -102,29 +172,49 @@ async def afdian_webhook(request: Request, db: Session = Depends(get_db)):
             amount_fen=amount_fen,
             expected_fen=expected_fen,
         )
-        raise APIError(
-            400,
-            f"回调金额与档位不符（实付 {amount_fen} 分，档位应为 {expected_fen} 分）",
-            "amount_mismatch",
+        user = _resolve_user(db, remark, user_id_raw)
+        db.add(
+            Payment(
+                user_id=user.id if user else None,
+                order_id=order_id,
+                plan=plan_id,
+                amount_cny=amount_fen / 100,
+                tier_from=effective_tier(user) if user else "",
+                tier_to=tier_to,
+                status="amount_mismatch",
+                raw_payload=payload,
+            )
         )
+        pending = _bump_amount_mismatch_pending(db)
+        db.commit()
+        log.error(
+            "afdian_amount_mismatch_recorded",
+            order_id=order_id,
+            user_id=user.id if user else None,
+            pending_count=pending,
+        )
+        return {
+            "ok": True,
+            "status": "amount_mismatch",
+            "user_id": user.id if user else None,
+            "pending_count": pending,
+            "detail": "实付金额与档位不符，已记录待人工处理（admin 待处理视图）",
+        }
 
     # 关联用户：优先 remark 中填写的 user_id / email
-    user: User | None = None
-    if remark.isdigit():
-        user = db.get(User, int(remark))
-    if not user and "@" in remark:
-        user = db.execute(select(User).where(User.email == remark)).scalar_one_or_none()
-    if not user and str(user_id_raw).isdigit():
-        user = db.get(User, int(str(user_id_raw)))
+    user = _resolve_user(db, remark, user_id_raw)
 
-    tier_from = user.tier if user else ""
-    months = 1
+    tier_from = effective_tier(user) if user else ""
     if user:
-        now = datetime.utcnow()
-        base = user.tier_expires_at if user.tier_expires_at and user.tier_expires_at > now else now
-        user.tier = tier_to
-        user.tier_expires_at = base + timedelta(days=30 * months)
-        db.add(user)
+        result = apply_tier_grant(db, user, tier_to)
+        if result == "downgrade_pending":
+            log.info(
+                "afdian_downgrade_pending",
+                order_id=order_id,
+                user_id=user.id,
+                tier_from=tier_from,
+                pending_tier=tier_to,
+            )
 
     db.add(
         Payment(

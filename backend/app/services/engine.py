@@ -8,25 +8,67 @@
 """
 
 import asyncio
+import math
 import random
 import time
-from datetime import datetime
+from collections import deque
+from datetime import datetime, timedelta
 
 from sqlalchemy import select
 
 from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.logging import get_logger
-from app.core.tiers import tier_of
+from app.core.tiers import effective_tier, effective_tier_of
 from app.models.models import MonitorTask, Notification, QuotaUsage, StockState, SystemConfig
 from app.services.apple_client import AppleClient, AppleError, AppleRateLimitError
-from app.services.notifier import Notifier, build_product_link
+from app.services.notifier import (
+    Notifier,
+    build_product_link,
+    send_bark,
+    send_email,
+    send_sms,
+    send_webhook,
+)
 
 log = get_logger("engine")
 
 COOLDOWN_KEY = "apple_cooldown"
 CONFIRMED_ROUNDS = 2
 MAX_COOLDOWN_SEC = 3600
+
+# ---- 通知失败重试（断裂-5） ----
+MAX_NOTIFY_RETRIES = 3  # 含 tick 内立即重试 1 次 + 定时重试 2 次
+# retry_count(已重试次数) -> 下次重试延迟秒数
+RETRY_BACKOFF_SEC = {1: 30, 2: 120}
+
+# ---- 高峰模式（对标-1）：system_config key ----
+PEAK_MODE_KEY = "peak_mode"
+
+# ---- 配额周期：购买日+30天滚动（不自洽-2 修完口径） ----
+QUOTA_CYCLE_DAYS = 30
+
+
+def quota_period_key(user) -> str:
+    """当前配额周期键 = 锚点（下次重置日）日期。
+
+    锚点滚动后键自动变化，老周期行自然失效，无需删除。
+    """
+    anchor = getattr(user, "quota_reset_at", None)
+    return anchor.strftime("%Y-%m-%d") if anchor else "legacy"
+
+
+def ensure_quota_anchor(db, user) -> None:
+    """保证用户有配额锚点（注册/老用户首次访问时初始化：注册日=免费锚点）。
+
+    初始化时直接 commit（GET 接口调用时也需要落库）。
+    """
+    if user is None:
+        return
+    if getattr(user, "quota_reset_at", None) is None:
+        user.quota_reset_at = datetime.utcnow() + timedelta(days=QUOTA_CYCLE_DAYS)
+        db.add(user)
+        db.commit()
 
 
 def evaluate_transition(
@@ -79,6 +121,9 @@ class Engine:
         self.rounds_total = 0
         self.rounds_ok = 0
         self._task: asyncio.Task | None = None
+        # Apple 请求预算窗口（断裂-20）：key -> deque[timestamp]，60s 滚动窗口；
+        # key="global" 为全局，其余为 "u:<user_id>" / "d:<device_id>"（trial）
+        self._req_windows: dict[str, deque] = {}
 
     # ---- 生命周期 ----
     async def start(self) -> None:
@@ -130,6 +175,10 @@ class Engine:
         self.last_tick_at = self.last_heartbeat
         db = SessionLocal()
         try:
+            from app.services.lifecycle import run_lifecycle_sweep  # 延迟 import 防循环引用
+
+            run_lifecycle_sweep(db)
+            self._retry_pending_notifications(db)
             if self._in_cooldown(db):
                 return
             tasks = self._due_tasks(db)
@@ -151,6 +200,9 @@ class Engine:
 
     def _due_tasks(self, db) -> list[MonitorTask]:
         now = datetime.utcnow()
+        now_ts = time.time()
+        self._prune_req_windows(now_ts)
+        peak = self._peak_mode(db)
         q = (
             select(MonitorTask)
             .where(MonitorTask.paused.is_(False))
@@ -159,8 +211,11 @@ class Engine:
         tasks = list(db.execute(q).scalars().all())
         due = []
         for t in tasks:
-            tier = t.user.tier if t.user else "trial"
+            tier = effective_tier(t.user)
             interval = tier_interval(tier, self.settings)
+            if peak and tier in ("trial", "free"):
+                # 高峰模式：trial/free 刷新间隔强制拉长 ×4（对标-1）
+                interval *= 4
             jitter = random.uniform(0, self.settings.ENGINE_POLL_JITTER_SEC)
             if t.last_polled_at is None:
                 due.append(t)
@@ -168,8 +223,79 @@ class Engine:
                 due.append(t)
         # Pro 优先通道：tier 越高越先轮询
         priority = {"pro": 0, "standard": 1, "free": 2, "trial": 3}
-        due.sort(key=lambda t: priority.get(t.user.tier if t.user else "trial", 3))
-        return due
+        due.sort(key=lambda t: priority.get(effective_tier(t.user), 3))
+        # 请求预算：per-user 本轮计数 + 全局每分钟上限（断裂-20）
+        return self._apply_budgets(db, due, now_ts)
+
+    # ---- 请求预算（断裂-20） ----
+    @staticmethod
+    def _user_key(task: MonitorTask) -> str:
+        if task.user_id is not None:
+            return f"u:{task.user_id}"
+        return f"d:{task.device_id or 'unknown'}"
+
+    def _estimate_requests(self, task: MonitorTask) -> int:
+        """该任务本轮预计 Apple 请求数 = ceil(门店数 / 每请求上限)。"""
+        n = len(task.store_numbers or [])
+        return max(1, math.ceil(n / self.settings.APPLE_MAX_STORES_PER_REQ))
+
+    def _prune_req_windows(self, now_ts: float) -> None:
+        cutoff = now_ts - 60
+        for key in list(self._req_windows.keys()):
+            dq = self._req_windows[key]
+            while dq and dq[0] < cutoff:
+                dq.popleft()
+            if not dq:
+                del self._req_windows[key]
+
+    def _window_count(self, key: str) -> int:
+        return len(self._req_windows.get(key, ()))
+
+    def _note_apple_request(self, now_ts: float, user_keys: set[str]) -> None:
+        dq = self._req_windows.setdefault("global", deque())
+        dq.append(now_ts)
+        for k in user_keys:
+            self._req_windows.setdefault(k, deque()).append(now_ts)
+
+    def _apply_budgets(
+        self, db, due: list[MonitorTask], now_ts: float
+    ) -> list[MonitorTask]:
+        kept: list[MonitorTask] = []
+        skipped = 0
+        for t in due:
+            tier = effective_tier(t.user)
+            est = self._estimate_requests(t)
+            ukey = self._user_key(t)
+            # 1) 单用户预算：60s 窗口内计数 + 本轮预计 > 上限 → 跳过
+            if self._window_count(ukey) + est > self.settings.per_user_req_limit(tier):
+                self._record_skipped(
+                    db, t, "", "", channel="budget", error="per_user_rate_limit"
+                )
+                log.warning(
+                    "budget_skip_per_user", task_id=t.id, tier=tier, est=est
+                )
+                skipped += 1
+                continue
+            # 2) 全局预算：超限时 trial/free/standard 先降速（跳过），pro 优先
+            if (
+                self._window_count("global") + est
+                > self.settings.GLOBAL_APPLE_REQ_PER_MIN
+                and tier != "pro"
+            ):
+                self._record_skipped(
+                    db, t, "", "", channel="budget", error="global_rate_limit"
+                )
+                log.warning("budget_skip_global", task_id=t.id, tier=tier, est=est)
+                skipped += 1
+                continue
+            kept.append(t)
+        if skipped:
+            # _due_tasks 可能返回空导致本轮无 commit，这里先落库 skipped 记录
+            db.commit()
+        return kept
+
+    def _peak_mode(self, db) -> bool:
+        return bool(get_config(db, PEAK_MODE_KEY, {}).get("enabled", False))
 
     @staticmethod
     def _group_tasks(
@@ -198,6 +324,7 @@ class Engine:
         for chunk in chunks:
             started = time.time()
             try:
+                self._note_apple_request(time.time(), {self._user_key(t) for t in tasks})
                 result = self.client.query(list(parts), chunk)
                 self.rounds_total += 1
                 self.rounds_ok += 1
@@ -256,11 +383,20 @@ class Engine:
                     row.store_pick_eligible = r.store_pick_eligible
                     row.pickup_search_quote = r.pickup_search_quote
                 if notify:
+                    # 配额口径：按实际发送成功的通知条数扣减（断裂-5）
                     if self._check_quota(db, task):
-                        self._fire(db, task, store, part, r)
+                        sent = self._fire(db, task, store, part, r)
+                        self._consume_quota(db, task, sent)
+                        self._maybe_quota_warning(db, task)
                         row.last_event_at = now
                     else:
                         self._record_skipped(db, task, store, part)
+                        # 配额耗尽：自动暂停 + 发耗尽通知（不扣配额，断裂-4/断裂-9）
+                        if not task.paused:
+                            task.paused = True
+                            db.add(task)
+                            db.commit()
+                            self._send_quota_exhausted(db, task)
                 db.add(row)
 
     def _get_state(self, db, task_id: int, store: str, part: str) -> StockState:
@@ -286,47 +422,174 @@ class Engine:
                 row.confirmed_count = 0
                 db.add(row)
 
-    # ---- 配额 ----
-    def _check_quota(self, db, task: MonitorTask) -> bool:
-        if task.user_id is None:
-            return self._check_trial_quota(db, task)
-        period = datetime.utcnow().strftime("%Y-%m")
+    # ---- 配额（购买日+30天滚动；按实际发送成功条数扣减） ----
+    def _roll_quota_anchor(self, db, user, now: datetime) -> None:
+        """锚点滚动：now >= quota_reset_at 则清零并锚点 += 30天（可跨多周期）。"""
+        ensure_quota_anchor(db, user)
+        while user.quota_reset_at is not None and now >= user.quota_reset_at:
+            user.quota_reset_at = user.quota_reset_at + timedelta(days=QUOTA_CYCLE_DAYS)
+            db.add(user)
+
+    def _get_usage(self, db, user_id: int, period: str) -> QuotaUsage:
         usage = db.execute(
             select(QuotaUsage).where(
-                QuotaUsage.user_id == task.user_id, QuotaUsage.period == period
+                QuotaUsage.user_id == user_id, QuotaUsage.period == period
             )
         ).scalar_one_or_none()
         if usage is None:
-            usage = QuotaUsage(user_id=task.user_id, period=period, push_count=0)
+            usage = QuotaUsage(user_id=user_id, period=period, push_count=0)
             db.add(usage)
             db.flush()
-        limit = tier_of(task.user.tier if task.user else "free")["push_limit"]
+        return usage
+
+    def _check_quota(self, db, task: MonitorTask) -> bool:
+        """只检查不扣减。耗尽返回 False（调用方自动暂停任务，断裂-4）。"""
+        if task.user_id is None or task.user is None:
+            return self._check_trial_quota(db, task)
+        user = task.user
+        now = datetime.utcnow()
+        self._roll_quota_anchor(db, user, now)
+        usage = self._get_usage(db, user.id, quota_period_key(user))
+        limit = effective_tier_of(user)["push_limit"]
         if usage.push_count >= limit:
-            log.warning("quota_exceeded", user_id=task.user_id, task_id=task.id)
+            log.warning("quota_exceeded", user_id=user.id, task_id=task.id)
             return False
-        usage.push_count += 1
-        db.add(usage)
         return True
 
-    def _check_trial_quota(self, db, task: MonitorTask) -> bool:
-        """匿名体验配额：按 device_id 逐月计数，真正扣减（trial push_limit）。
+    def _consume_quota(self, db, task: MonitorTask, n: int) -> None:
+        """按实际发送成功的通知条数扣减（断裂-5）；失败回滚不扣。"""
+        if n <= 0:
+            return
+        if task.user_id is None or task.user is None:
+            self._consume_trial_quota(db, task, n)
+            return
+        user = task.user
+        self._roll_quota_anchor(db, user, datetime.utcnow())
+        usage = self._get_usage(db, user.id, quota_period_key(user))
+        usage.push_count += n
+        db.add(usage)
 
-        匿名任务没有 user_id，无法使用 quota_usage 表，配额计数持久化在
-        system_config（key=trial_quota:<device_id>:<YYYY-MM>），随引擎走。
-        """
+    def _trial_quota_state(self, db, task: MonitorTask) -> tuple[int, int, str]:
+        """返回 (used, limit, key)。匿名 trial 按 device_id 逐月计数。"""
         device_id = task.device_id or "unknown"
         period = datetime.utcnow().strftime("%Y-%m")
         key = f"trial_quota:{device_id}:{period}"
         used = int(get_config(db, key, {}).get("used", 0))
-        limit = tier_of("trial")["push_limit"]
+        limit = effective_tier_of(None)["push_limit"]
+        return used, limit, key
+
+    def _check_trial_quota(self, db, task: MonitorTask) -> bool:
+        """匿名体验配额：按 device_id 逐月计数，只检查不扣减。"""
+        used, limit, _key = self._trial_quota_state(db, task)
         if used >= limit:
-            log.warning("trial_quota_exceeded", device_id=device_id, task_id=task.id)
+            log.warning(
+                "trial_quota_exceeded",
+                device_id=task.device_id,
+                task_id=task.id,
+            )
             return False
-        set_config(db, key, {"used": used + 1})
         return True
 
+    def _consume_trial_quota(self, db, task: MonitorTask, n: int) -> None:
+        used, _limit, key = self._trial_quota_state(db, task)
+        set_config(db, key, {"used": used + n})
+
+    def _maybe_quota_warning(self, db, task: MonitorTask) -> None:
+        """配额 80%/100% 预警（不扣配额；按周期+档位去重，断裂-4）。"""
+        user = task.user
+        if user is None or task.user_id is None:
+            return
+        usage = self._get_usage(db, user.id, quota_period_key(user))
+        limit = effective_tier_of(user)["push_limit"]
+        if limit <= 0:
+            return
+        ratio = usage.push_count / limit
+        level = "100" if ratio >= 1.0 else ("80" if ratio >= 0.8 else None)
+        if level is None:
+            return
+        key = f"quota_warning:{user.id}:{quota_period_key(user)}:{level}"
+        if get_config(db, key, {}).get("sent"):
+            return  # 本周期已发过，不重复
+        set_config(db, key, {"sent": True, "at": datetime.utcnow().isoformat() + "Z"})
+        tier_name = effective_tier(user)
+        if level == "100":
+            title = "推送配额已用完"
+            body = (
+                f"你的{effective_tier_of(user)['name']}档本月推送配额（{limit} 次）已用完，"
+                "新配额将在下个周期开始时恢复。"
+            )
+        else:
+            title = "推送配额已使用 80%"
+            body = (
+                f"你的{effective_tier_of(user)['name']}档本月推送配额已使用 "
+                f"{usage.push_count}/{limit} 次（80%），请留意剩余次数。"
+            )
+        log.info("quota_warning", user_id=user.id, level=level, tier=tier_name)
+        self._send_system_notice(db, task, "quota_warning", title, body)
+
+    def _send_quota_exhausted(self, db, task: MonitorTask) -> None:
+        """配额耗尽自动暂停通知（不扣配额，断裂-4/断裂-9）。"""
+        if task.user_id is None:
+            title = "体验推送已用完"
+            body = (
+                f"任务「{task.name}」：体验版 1 次推送已用完，任务已自动暂停。"
+                "注册 / 升级会员后可手动恢复并继续监控。"
+            )
+        else:
+            info = effective_tier_of(task.user)
+            title = "推送配额已耗尽，任务已自动暂停"
+            body = (
+                f"任务「{task.name}」：{info['name']}档本月推送配额（{info['push_limit']} 次）"
+                "已耗尽，任务已自动暂停。下个配额周期开始后可手动恢复，或升级档位。"
+            )
+        log.info("quota_exhausted_pause", task_id=task.id, user_id=task.user_id)
+        self._send_system_notice(db, task, "quota_exhausted", title, body)
+
+    def _send_system_notice(
+        self, db, task: MonitorTask, kind: str, title: str, body: str
+    ) -> None:
+        """系统通知（配额预警/耗尽/自动暂停）：走用户邮箱直发，不扣配额。
+
+        匿名 trial 无邮箱可达：只记账（status=skipped），不伪造发送成功。
+        """
+        user = task.user
+        channels: dict = {}
+        if user is not None and getattr(user, "email", None):
+            channels = {"email": user.email}
+        if channels:
+            records = Notifier(db).dispatch(
+                task.user_id, task.id, channels, title, body, "", kind=kind
+            )
+            for n in records:
+                n.part_number = task.part_number
+                db.add(n)
+        else:
+            db.add(
+                Notification(
+                    user_id=task.user_id,
+                    task_id=task.id,
+                    kind=kind,
+                    channel="page",
+                    target=task.device_id or "",
+                    title=title,
+                    body=body,
+                    link="",
+                    part_number=task.part_number,
+                    status="skipped",
+                    error="no_channel",
+                )
+            )
+        db.commit()
+
     # ---- 通知触发 ----
-    def _fire(self, db, task: MonitorTask, store: str, part: str, r) -> None:
+    def _fire(self, db, task: MonitorTask, store: str, part: str, r) -> int:
+        """发送到货通知，返回实际发送成功的通知条数（断裂-5：按成功扣减）。
+
+        - 每条 channel 发送成功计 1 次；失败回滚不扣。
+        - 失败 tick 内立即重试 1 次；仍失败记 retry_at 由后续 tick 重发（最多 3 次）。
+        - 发通知时把 part_number 写入 Notification 快照字段（不自洽-4）。
+        - consecutive_failures：全通道失败+1、全成功清零；>=10 自动暂停（断裂-6）。
+        """
         store_name = next(
             (s.get("name", store) for s in (task.stores or []) if s.get("number") == store), store
         )
@@ -336,21 +599,137 @@ class Engine:
             body += f"（{task.color} {task.capacity}）".strip()
         link = build_product_link(task.category, part)
         log.info("stock_event", task_id=task.id, store=store, part=part)
-        Notifier(db).dispatch(task.user_id, task.id, task.channels or {}, title, body, link)
+        records = Notifier(db).dispatch(
+            task.user_id, task.id, task.channels or {}, title, body, link
+        )
+        now = datetime.utcnow()
+        for n in records:
+            n.part_number = part
+            db.add(n)
+        # 失败 tick 内立即重试 1 次
+        for n in records:
+            if n.status == "failed" and (n.retry_count or 0) < MAX_NOTIFY_RETRIES:
+                ok = self._resend_record(n)
+                n.retry_count = (n.retry_count or 0) + 1
+                if ok:
+                    n.status = "sent"
+                    n.error = None
+                    n.retry_at = None
+                else:
+                    n.retry_at = now + timedelta(
+                        seconds=RETRY_BACKOFF_SEC.get(n.retry_count, 600)
+                    )
+                db.add(n)
+        sent = sum(1 for n in records if n.status == "sent")
+        if records:
+            n_failed = sum(1 for n in records if n.status == "failed")
+            if n_failed == len(records):
+                task.consecutive_failures = (task.consecutive_failures or 0) + 1
+            elif sent == len(records):
+                task.consecutive_failures = 0
+            # 部分成功：保持计数不变（不断裂-6 字面：只定义了全失败+1/全成功清零）
+            db.add(task)
+            if task.consecutive_failures >= 10 and not task.paused:
+                task.paused = True
+                db.add(task)
+                log.warning(
+                    "task_auto_paused",
+                    task_id=task.id,
+                    consecutive_failures=task.consecutive_failures,
+                )
+                db.commit()
+                self._send_system_notice(
+                    db,
+                    task,
+                    "task_auto_paused",
+                    "监控任务已自动暂停",
+                    f"任务「{task.name}」连续 10 次通知发送失败，已自动暂停。"
+                    "请检查通知渠道配置（Bark key / 邮箱 / webhook）后手动恢复任务。",
+                )
+        db.commit()
+        return sent
 
-    def _record_skipped(self, db, task: MonitorTask, store: str, part: str) -> None:
+    # ---- 失败通知定时重试（断裂-5） ----
+    @staticmethod
+    def _resend_record(n: Notification) -> bool:
+        """用通知行自带的 channel/target/title/body/link 重发一次。"""
+        try:
+            channel, target = n.channel, n.target
+            if channel == "bark":
+                send_bark(target, n.title, n.body, n.link)
+            elif channel in ("wecom", "dingtalk", "feishu"):
+                send_webhook(channel, target, n.title, n.body + f"\n{n.link}")
+            elif channel == "email":
+                send_email(target, n.title, f"{n.body}\n\n{n.link}")
+            elif channel == "sms":
+                send_sms(target, n.body)
+            else:
+                raise ValueError(f"unsupported channel: {channel}")
+            log.info("notify_retry_ok", notification_id=n.id, channel=channel)
+            return True
+        except Exception as e:
+            n.error = str(e)[:1024]
+            log.warning(
+                "notify_retry_failed", notification_id=n.id, channel=n.channel, error=str(e)
+            )
+            return False
+
+    def _retry_pending_notifications(self, db) -> None:
+        """每 tick 捞 retry_at<=now AND status='failed' 的通知重发（最多 3 次）。
+
+        重试成功不重复扣配额（配额只在 _fire 返回的 sent 条数上扣）。
+        """
+        now = datetime.utcnow()
+        rows = (
+            db.execute(
+                select(Notification)
+                .where(Notification.status == "failed")
+                .where(Notification.retry_at.is_not(None))
+                .where(Notification.retry_at <= now)
+                .where(Notification.retry_count < MAX_NOTIFY_RETRIES)
+                .limit(100)
+            )
+            .scalars()
+            .all()
+        )
+        for n in rows:
+            ok = self._resend_record(n)
+            n.retry_count = (n.retry_count or 0) + 1
+            if ok:
+                n.status = "sent"
+                n.error = None
+                n.retry_at = None
+            else:
+                n.retry_at = now + timedelta(
+                    seconds=RETRY_BACKOFF_SEC.get(n.retry_count, 600)
+                )
+            db.add(n)
+        if rows:
+            db.commit()
+            log.info("notify_retry_batch", retried=len(rows))
+
+    def _record_skipped(
+        self,
+        db,
+        task: MonitorTask,
+        store: str,
+        part: str,
+        channel: str = "quota",
+        error: str = "quota_exceeded",
+    ) -> None:
         db.add(
             Notification(
                 user_id=task.user_id,
                 task_id=task.id,
                 kind="stock_alert",
-                channel="quota",
+                channel=channel,
                 target="",
-                title="配额耗尽，已跳过推送",
+                title="已跳过推送" if channel == "budget" else "配额耗尽，已跳过推送",
                 body=f"task={task.id} store={store} part={part}",
                 link="",
+                part_number=part or None,
                 status="skipped",
-                error="quota_exceeded",
+                error=error,
             )
         )
 

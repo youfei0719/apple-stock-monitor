@@ -1,6 +1,4 @@
-"""配额与会员：当前配额、四档说明（公开）。"""
-
-from datetime import datetime
+"""配额与会员：当前配额、四档说明（公开）、站点配置。"""
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
@@ -9,37 +7,44 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.core.config import get_settings
 from app.core.db import get_db
-from app.core.tiers import TIERS, tier_of
+from app.core.tiers import TIERS, effective_tier, effective_tier_of
 from app.models.models import MonitorTask, QuotaUsage, User
+from app.services.engine import ensure_quota_anchor, quota_period_key
 
 router = APIRouter(tags=["quota"])
 
 
 @router.get("/quota")
 def get_quota(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    period = datetime.utcnow().strftime("%Y-%m")
+    # 有效档位（过期按 free，断裂-1）；配额周期为购买日+30天滚动（不自洽-2）
+    ensure_quota_anchor(db, user)
+    period = quota_period_key(user)
     usage = db.execute(
         select(QuotaUsage).where(QuotaUsage.user_id == user.id, QuotaUsage.period == period)
     ).scalar_one_or_none()
-    tier = tier_of(user.tier)
+    tier = effective_tier(user)
+    info = effective_tier_of(user)
     tasks_used = db.execute(
         select(func.count()).select_from(MonitorTask).where(MonitorTask.user_id == user.id)
     ).scalar()
     settings = get_settings()
     return {
-        "tier": user.tier,
+        "tier": tier,
         "tier_expires_at": user.tier_expires_at.isoformat() + "Z" if user.tier_expires_at else None,
+        # 配额周期锚点（ISO 时间，前端按北京时间展示）；period 为锚点日期
+        "quota_reset_at": user.quota_reset_at.isoformat() + "Z" if user.quota_reset_at else None,
         "push_used": usage.push_count if usage else 0,
-        "push_limit": tier["push_limit"],
+        "push_limit": info["push_limit"],
         "tasks_used": tasks_used,
-        "tasks_limit": tier["tasks_limit"],
-        "refresh_interval_sec": settings.tier_intervals.get(user.tier, 300),
+        "tasks_limit": info["tasks_limit"],
+        "refresh_interval_sec": settings.tier_intervals.get(tier, 300),
         "period": period,
     }
 
 
 @router.get("/plans")
 def list_plans():
+    # 不再返回 trial：trial 只用于未登录匿名体验，注册用户拿不到（不自洽-9）
     settings = get_settings()
     return [
         {
@@ -54,4 +59,12 @@ def list_plans():
             "refresh_interval_sec": settings.tier_intervals.get(tier),
         }
         for tier, info in TIERS.items()
+        if tier != "trial"
     ]
+
+
+@router.get("/site-config")
+def site_config():
+    """站点公开配置：爱发电赞助页 URL（断裂-14：前端付费指引跳转用）。"""
+    settings = get_settings()
+    return {"afdian_page_url": settings.AFDIAN_PAGE_URL}

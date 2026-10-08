@@ -345,6 +345,9 @@ export const api = {
   notifications: (task_id?: string | number) =>
     req<NotificationRecord[]>(
       `/notifications${task_id ? `?task_id=${encodeURIComponent(String(task_id))}` : ''}`,
+    ).then((list) =>
+      // 后端字段名为 error，前端统一为 failure_reason
+      list.map((n) => ({ ...n, failure_reason: n.failure_reason ?? (n as { error?: string | null }).error ?? null })),
     ),
   channelHealth: () =>
     req<{ channels: ChannelHealth[] }>('/notify/channels/health'),

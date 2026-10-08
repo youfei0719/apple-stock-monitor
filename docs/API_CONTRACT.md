@@ -8,10 +8,11 @@ Base URL: `https://stock.glint.red/api`（开发环境 `http://localhost:8000/ap
 - `GET /healthz` → `{"status":"ok","db":true,"engine":"running","version":"..."}`（无需认证）
 
 ## 认证 / 用户
-- `POST /api/auth/register` `{email, password}` → 201 `{id, email, tier:"free"}`
-- `POST /api/auth/login` `{email, password}` → 200 `{ok:true, totp_required:false}` + Set-Cookie（session_token），失败 401；连续 5 次失败锁 IP 15 分钟
+- `POST /api/auth/register` `{email, password}` → 201 `{id, email, tier:"free"}`；注册后发 6 位邮箱验证码（10 分钟有效），同 `X-Device-Id` 的匿名任务自动迁移绑定到新用户
+- `POST /api/auth/verify-email` `{email, code}` → `{ok:true}`（验证码通过后 `email_verified=true`）
+- `POST /api/auth/login` `{email, password}` → 200 `{ok:true, totp_required:false}` + Set-Cookie（session_token），失败 401；连续 5 次失败锁 IP 15 分钟；**邮箱未验证 → 403 `{code:"email_unverified"}`**（前端据此提示去验证）；登录成功同样迁移同 `X-Device-Id` 匿名任务
 - `POST /api/auth/logout` → 204
-- `GET /api/me` → `{id, email, tier, quota:{push_used, push_limit, tasks_used, tasks_limit}, totp_enabled}`
+- `GET /api/me` → `{id, email, tier（有效档位）, quota:{push_used, push_limit, tasks_used, tasks_limit}, totp_enabled}`
 - `PATCH /api/auth/me` `{password}` → 200 `{ok:true}`（改密）
 - `POST /api/auth/totp/setup` / `POST /api/auth/totp/verify`（管理员强制，普通用户可选）
 
@@ -40,6 +41,7 @@ state ∈ `available | unavailable | unknown | verifying | cooling | paused`
 - `POST /api/notify/test` `{channel, target}` → 发送测试通知，返回成功/失败（链路测试）
 - `GET /api/notifications?task_id=` → 通知历史
 - 通知直达链接由后端生成：`https://www.apple.com.cn/shop/buy-iphone/...` 或购物袋 URL
+- 系统通知 kind（不扣配额）：`quota_warning`（配额 80%/100% 预警）· `quota_exhausted`（配额耗尽自动暂停）· `task_auto_paused`（连续 10 次发送失败自动暂停，走邮件兜底）；配额口径为**实际发送成功的通知条数**，失败回滚不扣、重试成功不重复扣
 
 ## 历史与数据（全部 snake_case）
 - `GET /api/history/events?part_number=&store=&days=30` → 有货事件（活动日志）：`[{id, task_id, part_number, title, body, link, channel, created_at}]`
@@ -50,21 +52,39 @@ state ∈ `available | unavailable | unknown | verifying | cooling | paused`
 - `GET /api/stats/poll` → 上次查询/成功率/平均响应（按用户任务聚合）：`{tasks, polled_tasks, success_rate, avg_response_ms, last_poll_at, engine}`
 
 ## 配额与会员
-- `GET /api/quota` → `{tier, tier_expires_at, push_used, push_limit, tasks_used, tasks_limit, refresh_interval_sec, period}`
-- `GET /api/plans` → 四档说明（公开）：`[{tier, name, price_cny, tasks_limit, push_limit, channels[], history, priority, refresh_interval_sec}]`
-  - trial：体验（免费） · free：免费 · standard：标准（¥19/月） · pro：Pro（¥39/月）
+- `GET /api/quota` → `{tier（有效档位，过期按 free）, tier_expires_at, quota_reset_at（配额周期锚点 ISO，前端按北京时间展示）, push_used, push_limit, tasks_used, tasks_limit, refresh_interval_sec, period（锚点日期 YYYY-MM-DD）}`；配额周期为购买日+30天滚动
+- `GET /api/plans` → 三档说明（公开，**不再返回 trial**）：`[{tier, name, price_cny, tasks_limit, push_limit, channels[], history, priority, refresh_interval_sec}]`
+  - free：免费 · standard：标准（¥19/月） · pro：Pro（¥39/月）；trial 只用于未登录匿名体验，不可购买
   - 前端渲染注意：无 `features`/`period`/`id` 字段；档位名用 `name`，价格用 `price_cny`，周期文案前端自拼（`price_cny>0` → "¥X / 月"）；"当前"徽章用 `p.tier === me.tier` 判断。
+- `GET /api/site-config`（公开）→ `{afdian_page_url}`：爱发电自家赞助页 URL（前端付费指引跳转用，`AFDIAN_PAGE_URL` 环境变量配置）
+
+### "完整历史"档位语义（2026-10-09 定稿，精确到接口）
+
+`tiers.py` 中 `history: True/False` 的门控**只作用于一个接口**，其余数据接口对所有登录用户开放：
+
+| 接口 | 档位门控 | 说明 |
+|---|---|---|
+| `GET /api/history/releases`（放货记录：按天×机型聚合） | ✅ standard/pro 才可见；trial/free → 403 `{code:"tier_required"}` | 这就是"完整历史"所指的全部含义 |
+| `GET /api/history/events?days=`（有货事件活动日志，days 1–365，默认 30） | ❌ 无门控（含 free） | 只返回自己任务成功发送过的到货通知 |
+| `GET /api/analytics/ranking`（城市放货排行） | ❌ 无门控 | 按当前用户自己的有货通知聚合，非全站榜单 |
+| `GET /api/analytics/overview` | ❌ 无门控 | 同上，本用户数据摘要 |
+| `GET /api/stats/poll` | ❌ 无门控 | 按用户任务聚合的查询统计 |
+
+- 降级后历史数据仅被 403 隐藏、不删除（断裂-1 修完后到期降级路径可达）。
+- 注意实现细节：`history.py` 当前门控用的是 `tier_of(user.tier)`（见断裂-1，有效档位应走 `effective_tier()`），后端 worker 修完后此处语义不变（"完整历史"= `/history/releases` 可见性）。
 
 ## 支付（爱发电）
-- `POST /api/pay/afdian-webhook`（签名校验）→ 自动开通/续期会员，写 payments 表
+- `POST /api/pay/afdian-webhook`（签名校验）→ 自动开通/续期会员，写 payments 表；升级/续费立即生效（配额锚点同步+30天），**降级到期生效**（只写 `pending_tier`，到期 sweep 切换）；金额与档位不符时仍落库 `status='amount_mismatch'` 待人工处理（返回 200 + `pending_count`）
 - `GET /api/payments` → 当前用户付费记录
 
 ## 后台（/api/admin/*，需 admin 会话 + TOTP；守卫要求 session totp_verified，否则 403 {code:"totp_required"}）
-- `GET /api/admin/overview` → `{total_users, tier_distribution: {tier: count}（含 trial）, today_pushes, revenue_cny: float, active_tasks}`
+- `GET /api/admin/overview` → `{total_users, tier_distribution: {tier: count}（含 trial）, today_pushes, revenue_cny: float, active_tasks, pending_payments: {unclaimed, amount_mismatch}}`
 - `GET /api/admin/traffic?days=30` → 数组元素 `{day: "2026-10-09", pv, uv}`
-- `GET /api/admin/users?q=&tier=` → 数组元素 `{id: int, email, tier（含 trial）, tier_expires_at, is_admin, totp_enabled, created_at}`；`PATCH /api/admin/users/{id}` 接受 `{tier, is_admin?, paused_tasks?}` → `{ok, changes}`
-- `GET /api/admin/payments` → 数组元素 `{id: int, user_id, order_id, plan（爱发电 plan_id 字符串）, amount_cny, tier_from, tier_to, status（仅 'paid'）, created_at}`；无 email 字段
-- `GET /api/admin/system` → `{engine: {running, last_heartbeat, last_tick_at, rounds_total, rounds_ok, last_error}, apple_cooldown: dict, log_tail: string[]}`
+- `GET /api/admin/users?q=&tier=` → 数组元素 `{id: int, email, tier（含 trial）, tier_expires_at, is_admin, totp_enabled, created_at}`；`PATCH /api/admin/users/{id}` 接受 `{tier, tier_expires_at?, is_admin?, paused_tasks?}` → `{ok, changes}`（补单时可填到期时间；退款反向操作：`{"tier":"free"}` 手动降级）
+- `GET /api/admin/payments?status=&claim_status=unclaimed` → 数组元素 `{id: int, user_id, order_id, plan（爱发电 plan_id 字符串）, amount_cny, tier_from, tier_to, status（paid/refunded/cancelled/amount_mismatch）, remark（从 raw_payload 提取）, created_at}`；`claim_status=unclaimed` 筛出待认领订单；无 email 字段
+- `POST /api/admin/payments/{id}/claim` `{"user_id": int}` → 认领订单：绑定用户 + 按订单档位开通 30 天（到期/锚点同步）+ 回填 `Payment.user_id` → `{ok, payment_id, user_id, tier, tier_expires_at, payment_status}`（记审计）
+- `GET /api/admin/system` → `{engine: {running, last_heartbeat, last_tick_at, rounds_total, rounds_ok, last_error}, apple_cooldown: dict, peak_mode: bool, log_tail: string[]}`
+- `POST /api/admin/system/peak-mode` `{"enabled": bool}` → 高峰模式开关（开启后 trial/free 刷新间隔 ×4；记审计）
 - `GET /api/admin/audit` → 数组元素 `{id, admin_id, action, target_type, target_id, detail, ip, created_at}`
 - `POST /api/auth/totp/setup` → `{secret, uri, enabled}`；`POST /api/auth/totp/verify {code}` → `{ok, totp_enabled}`（verify 后当前 session 标 totp_verified）
 - 所有写操作记 audit log。

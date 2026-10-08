@@ -1,8 +1,10 @@
-"""认证 / 用户：注册、登录（含失败锁 IP）、登出、me、改密、TOTP。"""
+"""认证 / 用户：注册、登录（含失败锁 IP）、登出、me、改密、TOTP、邮箱验证。"""
 
+import secrets
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Cookie, Depends, Request, Response
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -26,8 +28,8 @@ from app.core.security import (
     verify_password,
     verify_totp,
 )
-from app.core.tiers import tier_of
-from app.models.models import MonitorTask, QuotaUsage, User
+from app.core.tiers import effective_tier_of
+from app.models.models import MonitorTask, QuotaUsage, SystemConfig, User
 from app.models.models import Session as DbSession
 from app.schemas import (
     LoginIn,
@@ -37,10 +39,21 @@ from app.schemas import (
     TotpVerifyIn,
     UserOut,
 )
+from app.services.engine import ensure_quota_anchor, quota_period_key
+from app.services.notifier import send_email
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 log = get_logger("auth")
 settings = get_settings()
+
+# 邮箱验证码：10 分钟有效，存 system_config（key=email_code:<email>）
+EMAIL_CODE_TTL_MIN = 10
+EMAIL_CODE_KEY_PREFIX = "email_code:"
+
+
+class VerifyEmailIn(BaseModel):
+    email: EmailStr
+    code: str = Field(min_length=6, max_length=6)
 
 
 def _set_session_cookie(response: Response, token: str) -> None:
@@ -55,12 +68,56 @@ def _set_session_cookie(response: Response, token: str) -> None:
     )
 
 
-def _queue_email_verification(user: User) -> None:
-    # TODO: 邮箱验证尚未实现。当前注册直接开通账号，未验证邮箱所有权，
-    # 不要静默无验证地上线：上线前必须实现验证邮件发送 → 用户点击链接 →
-    # 置 user.email_verified=True，并在 /auth/me 返回未验证状态提示。
-    # 当前为占位逻辑，仅记日志。
-    log.warning("email_verification_not_implemented", user_id=user.id, email=user.email)
+def _email_code_key(email: str) -> str:
+    return f"{EMAIL_CODE_KEY_PREFIX}{email}"
+
+
+def _send_verification_code(db: Session, user: User) -> bool:
+    """生成 6 位验证码并邮件发送（断裂-22；复用 notifier.send_email）。"""
+    code = f"{secrets.randbelow(900000) + 100000:06d}"
+    expires_at = datetime.utcnow() + timedelta(minutes=EMAIL_CODE_TTL_MIN)
+    key = _email_code_key(user.email)
+    row = db.execute(select(SystemConfig).where(SystemConfig.key == key)).scalar_one_or_none()
+    value = {"code": code, "expires_at": expires_at.isoformat() + "Z"}
+    if row:
+        row.value = value
+        db.add(row)
+    else:
+        db.add(SystemConfig(key=key, value=value))
+    db.commit()
+    try:
+        send_email(
+            user.email,
+            "StockMon 邮箱验证码",
+            f"你的邮箱验证码是 {code}，{EMAIL_CODE_TTL_MIN} 分钟内有效。",
+        )
+        log.info("verify_email_sent", user_id=user.id)
+        return True
+    except Exception as e:
+        log.warning("verify_email_send_failed", user_id=user.id, error=str(e))
+        return False
+
+
+def _claim_device_tasks(db: Session, request: Request, user: User) -> int:
+    """登录/注册成功后，把同 X-Device-Id 的匿名任务迁移绑定到新登录用户（断裂-10）。"""
+    device_id = request.headers.get("x-device-id")
+    if not device_id:
+        return 0
+    rows = (
+        db.execute(
+            select(MonitorTask).where(
+                MonitorTask.user_id.is_(None), MonitorTask.device_id == device_id
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for t in rows:
+        t.user_id = user.id
+        db.add(t)
+    if rows:
+        log.info("device_tasks_claimed", user_id=user.id, device_id=device_id, count=len(rows))
+    return len(rows)
 
 
 @router.post("/register", response_model=UserOut, status_code=201)
@@ -72,13 +129,66 @@ def register(data: RegisterIn, request: Request, db: Session = Depends(get_db)):
     exists = db.execute(select(User).where(User.email == data.email)).scalar_one_or_none()
     if exists:
         raise APIError(400, "邮箱已注册", "email_taken")
-    user = User(email=data.email, password_hash=hash_password(data.password), tier="free")
+    # 注册即初始化配额锚点（注册日=免费锚点，购买日+30天滚动口径）
+    user = User(
+        email=data.email,
+        password_hash=hash_password(data.password),
+        tier="free",
+        email_verified=False,
+        quota_reset_at=datetime.utcnow() + timedelta(days=30),
+    )
     db.add(user)
     db.commit()
     db.refresh(user)
-    _queue_email_verification(user)
-    log.info("user_registered", user_id=user.id)
+    claimed = _claim_device_tasks(db, request, user)
+    db.commit()
+    email_sent = _send_verification_code(db, user)
+    log.info("user_registered", user_id=user.id, claimed_tasks=claimed, email_sent=email_sent)
     return UserOut(id=user.id, email=user.email, tier=user.tier, totp_enabled=user.totp_enabled)
+
+
+@router.post("/verify-email")
+def verify_email(data: VerifyEmailIn, db: Session = Depends(get_db)):
+    """邮箱验证：校验 6 位验证码（10 分钟有效），通过后置 email_verified=True。"""
+    user = db.execute(select(User).where(User.email == data.email)).scalar_one_or_none()
+    if not user:
+        raise APIError(404, "用户不存在", "not_found")
+    if user.email_verified:
+        return {"ok": True, "already": True}
+    key = _email_code_key(user.email)
+    row = db.execute(select(SystemConfig).where(SystemConfig.key == key)).scalar_one_or_none()
+    if not row or (row.value or {}).get("code") != data.code:
+        raise APIError(400, "验证码错误", "bad_code")
+    expires_at = datetime.fromisoformat((row.value or {}).get("expires_at", "").rstrip("Z"))
+    if datetime.utcnow() > expires_at:
+        raise APIError(400, "验证码已过期，请重新注册获取", "code_expired")
+    user.email_verified = True
+    db.add(user)
+    db.delete(row)
+    db.commit()
+    log.info("email_verified", user_id=user.id)
+    return {"ok": True}
+
+
+class ResendCodeIn(BaseModel):
+    email: EmailStr
+
+
+@router.post("/resend-code")
+def resend_code(data: ResendCodeIn, request: Request, db: Session = Depends(get_db)):
+    """重发邮箱验证码（每小时每邮箱限 3 次）。"""
+    email = data.email.strip().lower()
+    if not check_rate_limit(f"resend_code:{email}", limit=3, window_sec=3600):
+        raise APIError(429, "发送过于频繁，请稍后再试", "rate_limited")
+    user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
+    if not user:
+        raise APIError(404, "用户不存在", "not_found")
+    if user.email_verified:
+        return {"ok": True, "already": True}
+    ok = _send_verification_code(db, user)
+    if not ok:
+        raise APIError(500, "邮件发送失败，请稍后重试", "email_failed")
+    return {"ok": True}
 
 
 @router.post("/login")
@@ -92,6 +202,9 @@ def login(data: LoginIn, request: Request, response: Response, db: Session = Dep
         fails = record_login_failure(ip)
         log.warning("login_failed", email=data.email, ip=ip, fails=fails)
         raise APIError(401, "邮箱或密码错误", "bad_credentials")
+    # 邮箱未验证不许登录（断裂-22；前端据此 code 提示去验证）
+    if not user.email_verified:
+        raise APIError(403, "邮箱尚未验证，请先完成邮箱验证", "email_unverified")
     record_login_success(ip)
     token = new_session_token()
     s = DbSession(
@@ -102,9 +215,10 @@ def login(data: LoginIn, request: Request, response: Response, db: Session = Dep
         expires_at=datetime.utcnow() + timedelta(hours=settings.SESSION_EXPIRE_HOURS),
     )
     db.add(s)
+    claimed = _claim_device_tasks(db, request, user)
     db.commit()
     _set_session_cookie(response, token)
-    log.info("login_ok", user_id=user.id, ip=ip)
+    log.info("login_ok", user_id=user.id, ip=ip, claimed_tasks=claimed)
     return {"ok": True, "totp_required": bool(user.is_admin and settings.ADMIN_TOTP_REQUIRED)}
 
 
@@ -124,21 +238,23 @@ def logout(
 
 
 def _quota_for(db: Session, user: User) -> dict:
-    period = datetime.utcnow().strftime("%Y-%m")
+    # 有效档位 + 购买日+30天滚动配额周期（断裂-1/不自洽-2）
+    ensure_quota_anchor(db, user)
+    period = quota_period_key(user)
     usage = db.execute(
         select(QuotaUsage).where(QuotaUsage.user_id == user.id, QuotaUsage.period == period)
     ).scalar_one_or_none()
     push_used = usage.push_count if usage else 0
-    tier = tier_of(user.tier)
+    info = effective_tier_of(user)
     tasks_used = db.execute(
         select(MonitorTask).where(MonitorTask.user_id == user.id, MonitorTask.paused.is_(False))
     ).scalars()
     tasks_used_n = len(list(tasks_used))
     return {
         "push_used": push_used,
-        "push_limit": tier["push_limit"],
+        "push_limit": info["push_limit"],
         "tasks_used": tasks_used_n,
-        "tasks_limit": tier["tasks_limit"],
+        "tasks_limit": info["tasks_limit"],
     }
 
 

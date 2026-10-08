@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     # --- 爱发电 ---
     AFDIAN_USER_ID: str = ""
     AFDIAN_TOKEN: str = ""
+    # 自家爱发电赞助页 URL（前端付费指引跳转用；默认占位，生产环境在 .env 配真实地址）
+    AFDIAN_PAGE_URL: str = "https://afdian.com"
     # 占位默认值已移除：prod 启动时若为空直接拒绝启动（见 main.lifespan）
     AFDIAN_PLAN_STANDARD: str = ""
     AFDIAN_PLAN_PRO: str = ""
@@ -61,8 +63,17 @@ class Settings(BaseSettings):
 
     # --- 监控引擎 ---
     ENGINE_POLL_JITTER_SEC: int = 3
-    ENGINE_MAX_WORKERS: int = 4
+    # 注意：引擎为单线程串行 tick（round2 审查不自洽-14：原 ENGINE_MAX_WORKERS
+    # 定义了但从未被引用，已删除；pro 的 10s 刷新为尽力目标，tick 超时记 warning）。
     ENGINE_TICK_SEC: int = 5
+
+    # --- Apple 请求预算（反薅，断裂-20）：单用户/分钟上限按有效档位，trial 最严 ---
+    MAX_APPLE_REQ_PER_USER_PER_MIN_PRO: int = 30
+    MAX_APPLE_REQ_PER_USER_PER_MIN_STANDARD: int = 20
+    MAX_APPLE_REQ_PER_USER_PER_MIN_FREE: int = 10
+    MAX_APPLE_REQ_PER_USER_PER_MIN_TRIAL: int = 3
+    # 全局每分钟上限；超限时 trial/free 先降速（跳过），pro 优先
+    GLOBAL_APPLE_REQ_PER_MIN: int = 120
 
     # --- 会员档位刷新间隔（秒），可在 .env 覆盖 ---
     TIER_INTERVAL_TRIAL: int = 300
@@ -86,6 +97,15 @@ class Settings(BaseSettings):
             "standard": self.TIER_INTERVAL_STANDARD,
             "pro": self.TIER_INTERVAL_PRO,
         }
+
+    def per_user_req_limit(self, tier: str) -> int:
+        """单用户每分钟 Apple 请求上限（按有效档位）。"""
+        return {
+            "pro": self.MAX_APPLE_REQ_PER_USER_PER_MIN_PRO,
+            "standard": self.MAX_APPLE_REQ_PER_USER_PER_MIN_STANDARD,
+            "free": self.MAX_APPLE_REQ_PER_USER_PER_MIN_FREE,
+            "trial": self.MAX_APPLE_REQ_PER_USER_PER_MIN_TRIAL,
+        }.get(tier, self.MAX_APPLE_REQ_PER_USER_PER_MIN_FREE)
 
     @property
     def trusted_proxies(self) -> list[str]:
