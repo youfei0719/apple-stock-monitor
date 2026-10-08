@@ -11,7 +11,7 @@
 
 from datetime import datetime, timedelta
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.logging import get_logger
@@ -122,24 +122,6 @@ def _sys_notify(
     )
     db.add(n)
     return n
-
-
-def _notified_today(
-    db: Session, user_id: int | None, kind: str, task_id: int | None = None
-) -> bool:
-    """同一 user/task + kind 今天是否已记过提醒（按天去重，避免重发）。"""
-    q = (
-        select(func.count())
-        .select_from(Notification)
-        .where(
-            Notification.user_id == user_id,
-            Notification.kind == kind,
-            Notification.created_at >= _today_start(_utcnow()),
-        )
-    )
-    if task_id is not None:
-        q = q.where(Notification.task_id == task_id)
-    return db.execute(q).scalar() > 0
 
 
 def _notified_today_user_ids(db: Session, kind: str, user_ids: list[int]) -> set[int]:

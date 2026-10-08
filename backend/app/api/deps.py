@@ -46,14 +46,6 @@ def get_session(
     return s
 
 
-def _session_dep(
-    request: Request,
-    db: Session = Depends(get_db),
-    session_token: str | None = Cookie(default=None),
-) -> DbSession | None:
-    return get_session(request, db, session_token)
-
-
 def get_current_user(
     request: Request,
     db: Session = Depends(get_db),

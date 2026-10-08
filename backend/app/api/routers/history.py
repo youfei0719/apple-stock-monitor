@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -40,13 +40,21 @@ def events(
         .order_by(desc(Notification.created_at))
     )
     if part_number:
-        q = q.where(MonitorTask.part_number == part_number)
+        # R5-B-N2：用 part_number 快照列过滤——任务删除后 task_id 置 NULL、
+        # join 不到 MonitorTask，只有快照能命中
+        q = q.where(
+            or_(
+                Notification.part_number == part_number,
+                MonitorTask.part_number == part_number,
+            )
+        )
     if store:
         q = q.where(Notification.body.like(f"%{store}%"))
     q = q.limit(limit)
     out = []
     for n, t in db.execute(q).all():
-        pn = t.part_number if t else ""
+        # R5-B-N2：part_number 取通知创建时的快照列，任务删除后仍有型号信息
+        pn = n.part_number or (t.part_number if t else "") or ""
         out.append(
             {
                 "id": n.id,
@@ -75,18 +83,21 @@ def releases(
         from app.api.errors import APIError
 
         raise APIError(403, "完整历史数据需要标准版及以上", "tier_required")
+    # R5-B-N2：按快照列聚合——任务删除后 join 不到 MonitorTask，
+    # coalesce 保证已删任务的通知仍按原型号归组
+    pn_col = func.coalesce(Notification.part_number, MonitorTask.part_number)
     rows = db.execute(
         select(
             func.date(Notification.created_at).label("day"),
-            MonitorTask.part_number,
+            pn_col.label("part_number"),
             func.count().label("events"),
         )
-        .join(MonitorTask, Notification.task_id == MonitorTask.id)
+        .join(MonitorTask, Notification.task_id == MonitorTask.id, isouter=True)
         .where(Notification.user_id == user.id)
         .where(Notification.kind == "stock_alert")
         .where(Notification.status == "sent")
         .where(Notification.created_at >= _since(days))
-        .group_by(func.date(Notification.created_at), MonitorTask.part_number)
+        .group_by(func.date(Notification.created_at), pn_col)
         .order_by(desc("day"))
     ).all()
     return [{"day": str(r.day), "part_number": r.part_number, "events": r.events} for r in rows]

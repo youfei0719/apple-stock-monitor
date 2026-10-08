@@ -92,7 +92,9 @@ def _bootstrap_admin():
         user.is_admin = True
         user.tier = "pro"
         db.commit()
-        log.info("admin_bootstrapped", email=email)
+        # R5-B-N4：管理员邮箱不明文打日志，只记 sha256 前 8 位（可关联不泄露）
+        email_hash = hashlib.sha256(email.encode()).hexdigest()[:8]
+        log.info("admin_bootstrapped", email_hash=email_hash)
     except Exception as e:
         db.rollback()
         log.warning("admin_bootstrap_failed", error=str(e))

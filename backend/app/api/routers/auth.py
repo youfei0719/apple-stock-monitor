@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Cookie, Depends, Request, Response
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -31,7 +31,7 @@ from app.core.security import (
     verify_totp,
 )
 from app.core.tiers import effective_tier, effective_tier_of
-from app.models.models import MonitorTask, QuotaUsage, SystemConfig, User
+from app.models.models import MonitorTask, Notification, QuotaUsage, SystemConfig, User
 from app.models.models import Session as DbSession
 from app.schemas import (
     LoginIn,
@@ -101,7 +101,11 @@ def _send_verification_code(db: Session, user: User) -> bool:
 
 
 def _claim_device_tasks(db: Session, request: Request, user: User) -> int:
-    """登录/注册成功后，把同 X-Device-Id 的匿名任务迁移绑定到新登录用户（断裂-10）。"""
+    """登录/注册成功后，把同 X-Device-Id 的匿名任务迁移绑定到新登录用户（断裂-10）。
+
+    R5-F-N4：认领时同步把这些任务下 user_id 为空的通知一并过户——否则历史
+    /通知仍挂在匿名名下，用户在「历史」里看不到认领前发出的到货通知。
+    """
     device_id = request.headers.get("x-device-id")
     if not device_id:
         return 0
@@ -120,6 +124,14 @@ def _claim_device_tasks(db: Session, request: Request, user: User) -> int:
         t.device_id = None
         db.add(t)
     if rows:
+        db.execute(
+            update(Notification)
+            .where(
+                Notification.task_id.in_([t.id for t in rows]),
+                Notification.user_id.is_(None),
+            )
+            .values(user_id=user.id)
+        )
         log.info("device_tasks_claimed", user_id=user.id, device_id=device_id, count=len(rows))
     return len(rows)
 
@@ -269,10 +281,10 @@ def _quota_for(db: Session, user: User) -> dict:
     push_used = usage.push_count if usage else 0
     info = effective_tier_of(user)
     # R4-P2：用 func.count() 代替 len(list())，避免把全表行拉进 Python
+    # R5-F-N1：tasks_used 口径统一为全量（含已暂停），与 _check_task_limit、
+    # GET /quota 的计数一致（此前这里只计 paused=false，三处口径打架）
     tasks_used_n = db.execute(
-        select(func.count())
-        .select_from(MonitorTask)
-        .where(MonitorTask.user_id == user.id, MonitorTask.paused.is_(False))
+        select(func.count()).select_from(MonitorTask).where(MonitorTask.user_id == user.id)
     ).scalar()
     return {
         "push_used": push_used,

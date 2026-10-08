@@ -6,7 +6,7 @@
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Header, Query, Request
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import _client_ip, get_current_user, get_optional_user
@@ -15,7 +15,7 @@ from app.core.db import get_db
 from app.core.logging import get_logger
 from app.core.ratelimit import check_rate_limit
 from app.core.tiers import effective_tier_of, tier_of
-from app.models.models import MonitorTask, StockState, User
+from app.models.models import MonitorTask, Notification, StockState, User
 from app.schemas import TaskBatchIn, TaskCreateIn, TaskOut, TaskPatchIn
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -385,6 +385,11 @@ def delete_task(
     x_device_id: str | None = Header(default=None),
 ):
     task = _get_owned(task_id, user, x_device_id, db)
+    # R5-B-2：db.py 未设 PRAGMA foreign_keys=ON，SQLite 层 FK 的 ondelete="SET NULL"
+    # 不会触发——删任务前显式把关联通知的 task_id 置 NULL（通知靠 part_number
+    # 快照列保留型号信息，见 B-N2），否则通知悬空、历史 join 丢数据。
+    # （StockState 有 ORM cascade="all,delete" 兜底，无需显式处理。）
+    db.execute(update(Notification).where(Notification.task_id == task.id).values(task_id=None))
     db.delete(task)
     db.commit()
     log.info("task_deleted", task_id=task_id)

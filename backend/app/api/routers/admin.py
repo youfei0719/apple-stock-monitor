@@ -180,11 +180,25 @@ def patch_user(
     if not target:
         raise APIError(404, "用户不存在", "not_found")
     changes = {}
+    notices = []
     if data.tier is not None:
         if data.tier not in VALID_TIERS:
             raise APIError(400, "tier 非法", "bad_tier")
         changes["tier"] = (target.tier, data.tier)
         target.tier = data.tier
+        if data.tier in ("standard", "pro"):
+            # R5-B-N1：设付费档必须有时限——未传 tier_expires_at 且当前无有效到期
+            # 时间时，默认 +30 天并在响应里提示（NULL 永不到期是幽灵会员；
+            # membership_sweep 也会回收 NULL 到期的付费用户作兜底）
+            if data.tier_expires_at is None and (
+                target.tier_expires_at is None or target.tier_expires_at < datetime.utcnow()
+            ):
+                target.tier_expires_at = datetime.utcnow() + timedelta(days=30)
+                changes["tier_expires_at"] = (
+                    None,
+                    target.tier_expires_at.isoformat(),
+                )
+                notices.append("未传 tier_expires_at，已默认设为 +30 天")
         if data.tier == "free":
             # R4-P1-D2：手动降回 free 时同步清空 tier_expires_at/pending_tier，
             # 与 /payments/{id}/refund 语义一致（否则用户再买时 apply_tier_grant
@@ -223,13 +237,16 @@ def patch_user(
     audit(db, admin, "user.patch", "user", user_id, changes, _client_ip(request))
     db.commit()
     log.info("admin_user_patch", admin_id=admin.id, user_id=user_id, changes=changes)
-    return {
+    out = {
         "ok": True,
         "changes": {
             k: ({"from": v[0], "to": v[1]} if isinstance(v, tuple) else v)
             for k, v in changes.items()
         },
     }
+    if notices:
+        out["notices"] = notices
+    return out
 
 
 # 金额异常待处理计数 key（与 pay.py 的 AMOUNT_MISMATCH_PENDING_KEY 同源）
@@ -391,7 +408,9 @@ def close_payment(
         raise APIError(404, "订单不存在", "not_found")
     # R5-B-4：已开通的 paid 订单拒绝关闭，提示走退款流程
     if p.status == "paid":
-        raise APIError(400, "订单已开通，请走退款流程（POST /payments/{id}/refund）", "use_refund_flow")
+        raise APIError(
+            400, "订单已开通，请走退款流程（POST /payments/{id}/refund）", "use_refund_flow"
+        )
     if p.status not in ("amount_mismatch", "unknown_plan"):
         raise APIError(400, f"订单状态 {p.status} 不可关闭", "bad_status")
     old_status = p.status
@@ -473,6 +492,7 @@ def refund_payment(
                     "确认继续降档请传 force=true",
                     "has_active_paid_orders",
                 )
+            old = (user.tier, user.tier_expires_at.isoformat() if user.tier_expires_at else None)
             user.tier = "free"
             user.tier_expires_at = None
             user.pending_tier = None

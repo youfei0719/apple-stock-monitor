@@ -19,7 +19,7 @@ import json
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Request
-from sqlalchemy import desc, select
+from sqlalchemy import desc, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -29,7 +29,7 @@ from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.logging import get_logger
 from app.core.tiers import effective_tier
-from app.models.models import Payment, SystemConfig, User
+from app.models.models import Payment, User
 
 router = APIRouter(tags=["pay"])
 log = get_logger("pay")
@@ -58,17 +58,25 @@ def _resolve_user(db: Session, remark: str, user_id_raw: str) -> User | None:
 
 
 def _bump_amount_mismatch_pending(db: Session) -> int:
-    """金额异常待处理数 +1，返回最新值。"""
+    """金额异常待处理数 +1，返回最新值。
+
+    R5-竞态-2：改原子递增——单条 INSERT...ON CONFLICT...UPDATE，无
+    read-modify-write（并发 webhook 同时落库 amount_mismatch/unknown_plan 时
+    计数不再丢）。RETURNING 取回递增后的最新值。
+    """
     row = db.execute(
-        select(SystemConfig).where(SystemConfig.key == AMOUNT_MISMATCH_PENDING_KEY)
-    ).scalar_one_or_none()
-    n = int((row.value or {}).get("count", 0)) + 1 if row else 1
-    if row:
-        row.value = {"count": n}
-        db.add(row)
-    else:
-        db.add(SystemConfig(key=AMOUNT_MISMATCH_PENDING_KEY, value={"count": n}))
-    return n
+        text(
+            "INSERT INTO system_config (key, value, updated_at) "
+            'VALUES (:key, \'{"count": 1}\', :now) '
+            "ON CONFLICT(key) DO UPDATE SET "
+            "value = json_set(system_config.value, '$.count', "
+            "COALESCE(json_extract(system_config.value, '$.count'), 0) + 1), "
+            "updated_at = excluded.updated_at "
+            "RETURNING json_extract(value, '$.count') AS count"
+        ),
+        {"key": AMOUNT_MISMATCH_PENDING_KEY, "now": datetime.utcnow()},
+    ).first()
+    return int(row[0]) if row else 0
 
 
 def apply_tier_grant(db: Session, user: User, tier_to: str) -> str:
