@@ -9,7 +9,9 @@ import structlog
 _configured = False
 
 
-def configure_logging(log_dir: str = "logs", filename: str | None = None) -> structlog.stdlib.BoundLogger:
+def configure_logging(
+    log_dir: str = "logs", filename: str | None = None
+) -> structlog.stdlib.BoundLogger:
     global _configured
     os.makedirs(log_dir, exist_ok=True)
     if filename is None:
