@@ -1,3 +1,4 @@
+# 生产依赖（部署用，deploy.sh 会安装）
 fastapi==0.115.12
 uvicorn[standard]==0.34.0
 sqlalchemy==2.0.36
@@ -9,4 +10,4 @@ structlog==24.4.0
 httpx==0.28.1
 python-multipart==0.0.20
 email-validator==2.2.0
-pytest==8.3.4
+ruff==0.14.5

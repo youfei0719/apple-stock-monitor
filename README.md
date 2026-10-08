@@ -25,7 +25,7 @@ cd ../frontend && npm ci && npm run dev
 
 ## 部署
 
-见 `deploy/README.md`（systemd + nginx，一键重部署脚本）。
+见 `docs/运维手册.md`；一键重部署：在服务器上以 root 执行 `/opt/stockmon/deploy/deploy.sh`（bootstrap + systemd + nginx + 备份 cron 全自动）。
 
 ## 工程规范（验收线）
 
