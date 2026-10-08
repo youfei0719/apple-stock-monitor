@@ -19,6 +19,8 @@ export default function TaskDetail() {
   const [channels, setChannels] = useState<TaskChannels>({});
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  // R8-U-10：保存成功/失败用布尔状态判颜色，不再用 saveMsg.includes('已保存') 文本匹配
+  const [saveOk, setSaveOk] = useState<boolean | null>(null);
   const [renewing, setRenewing] = useState(false);
   const [renewMsg, setRenewMsg] = useState<string | null>(null);
   // F-N5：匿名 trial 任务后端续期钳制到 now+24h，文案按实际 expires_at 动态显示
@@ -57,12 +59,15 @@ export default function TaskDetail() {
     if (!id) return;
     setSaving(true);
     setSaveMsg(null);
+    setSaveOk(null);
     try {
       const t = await api.updateTask(id, { channels });
       setTask(t);
       setSaveMsg('通知渠道已保存');
+      setSaveOk(true);
     } catch (e) {
       setSaveMsg(e instanceof Error ? e.message : '保存失败');
+      setSaveOk(false);
     } finally {
       setSaving(false);
     }
@@ -176,7 +181,7 @@ export default function TaskDetail() {
               {saving ? '保存中…' : '保存通知渠道'}
             </button>
             {saveMsg && (
-              <p className={`mt-1.5 text-xs text-center ${saveMsg.includes('已保存') ? 'text-ok' : 'text-bad'}`}>
+              <p className={`mt-1.5 text-xs text-center ${saveOk ? 'text-ok' : 'text-bad'}`}>
                 {saveMsg}
               </p>
             )}

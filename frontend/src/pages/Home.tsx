@@ -35,6 +35,10 @@ function TaskCard({
   const [busy, setBusy] = useState(false);
   // R6-U3：续期失败用行内错误文案（参考 TaskDetail 的 renewMsg 模式），不再弹原生 alert
   const [renewMsg, setRenewMsg] = useState<string | null>(null);
+  // R8-I-16：暂停/恢复失败用行内错误文案，不再 unhandled rejection
+  const [actionMsg, setActionMsg] = useState<string | null>(null);
+  // R8-U-8：删除确认用应用内弹窗（A·零售式明亮克制风格），不再用 window.confirm
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const { state, availableCount, total, updatedAt, partialUnknown } = summarizeTask(task);
   const expired = state === 'expired';
   const remaining = daysLeft(task.expires_at);
@@ -42,22 +46,28 @@ function TaskCard({
 
   const togglePause = async () => {
     setBusy(true);
+    setActionMsg(null);
     try {
       await api.updateTask(task.id, { paused: !task.paused });
       await onChanged();
+    } catch (e) {
+      // R8-I-16：暂停/恢复失败给行内反馈，不再静默 unhandled rejection
+      setActionMsg(e instanceof Error ? e.message : '操作失败');
     } finally {
       setBusy(false);
     }
   };
 
   const remove = async () => {
-    if (!window.confirm(`删除监控任务「${task.name}」？`)) return;
     setBusy(true);
     try {
       await api.deleteTask(task.id);
       await onChanged();
+    } catch (e) {
+      setActionMsg(e instanceof Error ? e.message : '删除失败');
     } finally {
       setBusy(false);
+      setConfirmingDelete(false);
     }
   };
 
@@ -146,6 +156,17 @@ function TaskCard({
         )}
       </Link>
       <div className="mt-3 pt-3 border-t border-line">
+        {/* R8-I-12：3 天内到期也渲染续期按钮，与详情页规则（expired || days<=3）一致；
+            暂停按钮保留在下方第二排，不挤占 */}
+        {expiringSoon && (
+          <button
+            onClick={renew}
+            disabled={busy}
+            className="w-full mb-2 py-2 rounded-card-sm bg-accent text-white text-[13px] font-medium active:scale-[0.98] transition disabled:opacity-40"
+          >
+            {busy ? '续期中…' : `一键续期（${anonymous ? '+24 小时' : '+30 天'}）· 剩余 ${remaining} 天`}
+          </button>
+        )}
         <div className="flex gap-2">
           {expired ? (
             <button
@@ -165,7 +186,7 @@ function TaskCard({
             </button>
           )}
           <button
-            onClick={remove}
+            onClick={() => setConfirmingDelete(true)}
             disabled={busy}
             className="flex-1 py-2 rounded-card-sm bg-bg text-[13px] font-medium text-bad active:scale-[0.98] transition disabled:opacity-40"
           >
@@ -175,7 +196,44 @@ function TaskCard({
         {renewMsg && (
           <p className="mt-1.5 text-[11px] text-center text-bad">{renewMsg}</p>
         )}
+        {/* R8-I-16：暂停/恢复、删除失败的行内错误文案 */}
+        {actionMsg && (
+          <p className="mt-1.5 text-[11px] text-center text-bad">{actionMsg}</p>
+        )}
       </div>
+      {/* R8-U-8：应用内删除确认（底部弹出卡片），替代 window.confirm */}
+      {confirmingDelete && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 px-4 pb-10"
+          onClick={() => !busy && setConfirmingDelete(false)}
+        >
+          <div
+            className="w-full max-w-lg bg-white rounded-card shadow-card-lg p-5 rise-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="font-medium">删除监控任务</p>
+            <p className="mt-2 text-sm text-sub leading-relaxed">
+              确定删除「{task.name}」？删除后不再监控，有货也不会再通知，该操作不可恢复。
+            </p>
+            <div className="mt-4 flex gap-2">
+              <button
+                onClick={() => setConfirmingDelete(false)}
+                disabled={busy}
+                className="flex-1 py-2.5 rounded-card-sm bg-bg text-sm font-medium active:scale-[0.98] transition disabled:opacity-40"
+              >
+                取消
+              </button>
+              <button
+                onClick={remove}
+                disabled={busy}
+                className="flex-1 py-2.5 rounded-card-sm bg-bad text-white text-sm font-medium active:scale-[0.98] transition disabled:opacity-40"
+              >
+                {busy ? '删除中…' : '确认删除'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </Card>
   );
 }

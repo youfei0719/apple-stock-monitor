@@ -21,11 +21,14 @@ export default function Login() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [unverified, setUnverified] = useState(false);
+  // R8-U-2：管理员账号触发 totp_required 时给后台登录入口
+  const [totpRequired, setTotpRequired] = useState(false);
   const [resending, setResending] = useState(false);
 
   const submit = async () => {
     setError(null);
     setUnverified(false);
+    setTotpRequired(false);
     if (!email.trim() || !password) {
       setError('请填写邮箱和密码');
       return;
@@ -38,6 +41,7 @@ export default function Login() {
         // 管理员账号请前往后台完成 TOTP 验证
         if (res.totp_required === true) {
           setError('管理员请前往后台登录完成 TOTP 验证');
+          setTotpRequired(true);
           return;
         }
         // R7：登录/注册认领了匿名 device 任务时后端返回 notice 文案，
@@ -128,6 +132,18 @@ export default function Login() {
             />
           </div>
           {error && <p className="mt-3 text-sm text-bad text-center">{error}</p>}
+          {/* R8-U-2：totp_required 时给"前往后台登录"按钮（后台是独立应用，/admin 不在前端路由里，
+              用整页跳转而不是 react-router Link，避免被 catch-all 劫持到首页） */}
+          {totpRequired && (
+            <div className="mt-4 text-center">
+              <a
+                href="/admin"
+                className="inline-block px-8 py-2.5 rounded-card-sm bg-island text-white text-sm font-medium active:scale-[0.98] transition"
+              >
+                前往后台登录
+              </a>
+            </div>
+          )}
           {unverified && (
             <div className="mt-4 rounded-card-sm bg-bg p-4 text-center">
               <p className="text-sm text-sub">该邮箱尚未验证，验证后才能登录。</p>

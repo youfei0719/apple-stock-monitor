@@ -186,40 +186,177 @@ function ChannelHealthCard() {
   );
 }
 
+/** R8-I-15：修改密码卡片——后端 PATCH /me（auth.py:440）已实现，
+ * body: {old_password, password}，成功返回 {ok: true}；
+ * 后端会删除该用户其他会话（当前会话保留） */
+function ChangePasswordCard() {
+  const [open, setOpen] = useState(false);
+  const [oldPw, setOldPw] = useState('');
+  const [newPw, setNewPw] = useState('');
+  const [confirmPw, setConfirmPw] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [ok, setOk] = useState<boolean | null>(null);
+
+  const submit = async () => {
+    setMsg(null);
+    setOk(null);
+    if (!oldPw || !newPw || !confirmPw) {
+      setMsg('请填写完整');
+      setOk(false);
+      return;
+    }
+    if (newPw !== confirmPw) {
+      setMsg('两次输入的新密码不一致');
+      setOk(false);
+      return;
+    }
+    setBusy(true);
+    try {
+      // api.ts 未导出 PATCH /me，直接调同源接口（Cookie 认证，与 req 一致带 credentials）
+      const base = (import.meta.env.VITE_API_BASE as string | undefined) ?? '/api';
+      const r = await fetch(`${base}/me`, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ old_password: oldPw, password: newPw }),
+      });
+      if (!r.ok) {
+        let detail = '修改失败';
+        try {
+          const j = await r.json();
+          if (typeof j?.detail === 'string') detail = j.detail;
+        } catch {
+          /* 保留默认文案 */
+        }
+        throw new Error(detail);
+      }
+      setMsg('密码已修改，其他设备的登录将被登出');
+      setOk(true);
+      setOldPw('');
+      setNewPw('');
+      setConfirmPw('');
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : '修改失败');
+      setOk(false);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section>
+      <h2 className="text-[13px] font-semibold text-sub mb-2">账号安全</h2>
+      <Card className="p-4 rise-in">
+        {!open ? (
+          <button
+            onClick={() => setOpen(true)}
+            className="w-full py-2.5 rounded-card-sm bg-bg text-sm font-medium active:scale-[0.98] transition"
+          >
+            修改密码
+          </button>
+        ) : (
+          <div className="space-y-3">
+            <input
+              type="password"
+              value={oldPw}
+              onChange={(e) => setOldPw(e.target.value)}
+              placeholder="当前密码"
+              autoComplete="current-password"
+              className="w-full px-3 py-2.5 rounded-card-sm bg-bg text-sm outline-none placeholder:text-faint"
+            />
+            <input
+              type="password"
+              value={newPw}
+              onChange={(e) => setNewPw(e.target.value)}
+              placeholder="新密码"
+              autoComplete="new-password"
+              className="w-full px-3 py-2.5 rounded-card-sm bg-bg text-sm outline-none placeholder:text-faint"
+            />
+            <input
+              type="password"
+              value={confirmPw}
+              onChange={(e) => setConfirmPw(e.target.value)}
+              placeholder="再次输入新密码"
+              autoComplete="new-password"
+              className="w-full px-3 py-2.5 rounded-card-sm bg-bg text-sm outline-none placeholder:text-faint"
+            />
+            {msg && (
+              <p className={`text-xs text-center ${ok ? 'text-ok' : 'text-bad'}`}>{msg}</p>
+            )}
+            <div className="flex gap-2">
+              <button
+                onClick={() => {
+                  setOpen(false);
+                  setMsg(null);
+                  setOk(null);
+                }}
+                className="flex-1 py-2.5 rounded-card-sm bg-bg text-sm font-medium active:scale-[0.98] transition"
+              >
+                取消
+              </button>
+              <button
+                onClick={submit}
+                disabled={busy}
+                className="flex-1 py-2.5 rounded-card-sm bg-island text-white text-sm font-medium active:scale-[0.98] transition disabled:opacity-40"
+              >
+                {busy ? '提交中…' : '确认修改'}
+              </button>
+            </div>
+          </div>
+        )}
+      </Card>
+    </section>
+  );
+}
+
 export default function Me() {
   const navigate = useNavigate();
-  const { me } = useApp();
+  // R8-B0-4：退出登录走 App 层的 logout（先清 me/tasks state 再调后端），
+  // 避免后退回 /me 看到旧用户数据
+  const { me, logout } = useApp();
   const [plans, setPlans] = useState<Plan[] | null>(null);
   const [quota, setQuota] = useState<Quota | null>(null);
   const [payments, setPayments] = useState<Payment[] | null>(null);
   const [afdianUrl, setAfdianUrl] = useState<string>('https://afdian.com');
-  const [error, setError] = useState<string | null>(null);
+  // R8-I-11：各接口错误态独立——任一接口失败不再吃掉整页
+  // （配额/档位不能因付费记录接口抖动而消失）
+  const [plansErr, setPlansErr] = useState<string | null>(null);
+  const [paymentsErr, setPaymentsErr] = useState<string | null>(null);
 
   const load = async () => {
-    setError(null);
-    try {
-      const [p, q, pay, cfg] = await Promise.all([
-        api.plans(),
-        api.quota(),
-        api.payments(),
-        api.siteConfig().catch(() => null),
-      ]);
-      // /plans 不再含 trial；防御性过滤掉体验档
-      setPlans(p.filter((x) => x.tier !== 'trial'));
-      setQuota(q);
-      setPayments(pay);
-      if (cfg?.afdian_page_url) setAfdianUrl(cfg.afdian_page_url);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '加载失败');
-    }
+    setPlansErr(null);
+    setPaymentsErr(null);
+    // R8-I-11：四个接口独立加载互不阻塞；
+    // siteConfig 失败仅影响爱发电链接，配额失败时降级用 /me 的有效档位兜底
+    api
+      .plans()
+      .then((p) => setPlans(p.filter((x) => x.tier !== 'trial')))
+      .catch((e) => setPlansErr(e instanceof Error ? e.message : '加载失败'));
+    api
+      .quota()
+      .then(setQuota)
+      .catch(() => setQuota(null));
+    api
+      .payments()
+      .then(setPayments)
+      .catch((e) => setPaymentsErr(e instanceof Error ? e.message : '加载失败'));
+    api
+      .siteConfig()
+      .then((cfg) => {
+        if (cfg?.afdian_page_url) setAfdianUrl(cfg.afdian_page_url);
+      })
+      .catch(() => {
+        /* 爱发电链接失败时保留默认 */
+      });
   };
 
   useEffect(() => {
     load();
   }, []);
 
-  const logout = async () => {
-    await api.logout();
+  const onLogout = async () => {
+    await logout();
     navigate('/login', { replace: true });
   };
 
@@ -247,7 +384,7 @@ export default function Me() {
   }
 
   // N2：展示档位统一用 /quota 的有效档位（quota.tier，过期按 free 算）；
-  // /me 的原始 tier 在后端未改为有效档位前只做兜底（需后端配合项，见汇报）
+  // /me 已由后端返回有效档位（auth.py:425 effective_tier，过期按 free 算），这里只做兜底
   const displayTier = quota?.tier ?? me.tier;
   const tierLabel = `${TIER_LABEL[displayTier] ?? displayTier}版`;
   const expiry = quota ? fmtBeijingDate(quota.tier_expires_at) : null;
@@ -311,13 +448,13 @@ export default function Me() {
         {/* 会员档位 */}
         <section>
           <h2 className="text-[13px] font-semibold text-sub mb-2">会员档位</h2>
-          {error && <ErrorState message={error} onRetry={load} />}
-          {!error && plans === null && <LoadingState rows={2} />}
-          {!error && plans !== null && plans.length === 0 && (
+          {plansErr && <ErrorState message={plansErr} onRetry={load} />}
+          {!plansErr && plans === null && <LoadingState rows={2} />}
+          {!plansErr && plans !== null && plans.length === 0 && (
             <EmptyState title="暂无档位信息" action={null} />
           )}
           {/* UI-4：被 admin 授予 trial 的登录用户——/plans 不含 trial，单独渲染体验卡，不直接过滤掉 */}
-          {!error && plans !== null && displayTier === 'trial' && (
+          {!plansErr && plans !== null && displayTier === 'trial' && (
             <div className="grid grid-cols-2 gap-2.5">
               <Card className="p-4 rise-in ring-2 ring-accent">
                 <div className="flex items-center justify-between">
@@ -352,7 +489,7 @@ export default function Me() {
               </Card>
             </div>
           )}
-          {!error && plans !== null && plans.length > 0 && (
+          {!plansErr && plans !== null && plans.length > 0 && (
             <div className="grid grid-cols-2 gap-2.5">
               {plans.map((p) => {
                 const current = p.tier === displayTier;
@@ -405,7 +542,10 @@ export default function Me() {
         {/* 付费记录 */}
         <section>
           <h2 className="text-[13px] font-semibold text-sub mb-2">付费记录</h2>
-          {!payments ? (
+          {paymentsErr ? (
+            // R8-I-11：付费记录接口失败独立报错，不连带吃掉配额/档位展示
+            <ErrorState message={paymentsErr} onRetry={load} />
+          ) : !payments ? (
             <LoadingState rows={1} />
           ) : payments.length === 0 ? (
             <EmptyState title="暂无付费记录" action={null} />
@@ -436,10 +576,17 @@ export default function Me() {
               ))}
             </div>
           )}
+          {/* R8-U-9：退款指引——退款走爱发电平台操作，本站不收钱 */}
+          <p className="mt-2 text-[11px] text-faint leading-relaxed">
+            付款通过爱发电完成；如需退款，请在爱发电的赞助订单中申请，退款成功后对应会员档位将被收回。
+          </p>
         </section>
 
+        {/* R8-I-15：账号安全——修改密码（后端 PATCH /me，body: old_password + password） */}
+        <ChangePasswordCard />
+
         <button
-          onClick={logout}
+          onClick={onLogout}
           className="w-full py-3 rounded-card-sm bg-white text-bad text-[15px] font-medium shadow-card active:scale-[0.98] transition"
         >
           退出登录

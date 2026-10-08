@@ -134,7 +134,9 @@ export function NotificationHistory({ taskId }: { taskId?: string | number }) {
                       请先检查通知渠道配置（Bark key / 邮箱 / webhook），确认能收到通知后再手动恢复任务。
                     </p>
                     <p className="mt-1 mono text-[10px] text-faint">
+                      {/* R8-U-1：后端返回 UTC 带 Z，显式按北京时间渲染（与 Me/History 一致） */}
                       {new Date(n.created_at).toLocaleString('zh-CN', {
+                        timeZone: 'Asia/Shanghai',
                         month: '2-digit',
                         day: '2-digit',
                         hour: '2-digit',
@@ -156,7 +158,9 @@ export function NotificationHistory({ taskId }: { taskId?: string | number }) {
                     <p className="mt-0.5 mono text-[10px] text-faint">
                       {CHANNEL_LABEL[n.channel] ?? n.channel}
                       {' · '}
+                      {/* R8-U-1：后端返回 UTC 带 Z，显式按北京时间渲染（与 Me/History 一致） */}
                       {new Date(n.created_at).toLocaleString('zh-CN', {
+                        timeZone: 'Asia/Shanghai',
                         month: '2-digit',
                         day: '2-digit',
                         hour: '2-digit',

@@ -60,6 +60,15 @@ export default function App() {
     setMe(m);
   }, []);
 
+  // R8-B0-4：退出登录时先清 App 层身份/任务状态，再调后端注销，
+  // 避免后退回 /me 或 / 看到旧用户数据（旧代码只 navigate 到 /login，state 残留）
+  const logout = useCallback(async () => {
+    setMe(null);
+    setTasks([]);
+    setTasksError(null);
+    await api.logout();
+  }, []);
+
   const refreshTasks = useCallback(async (status: TaskStatusFilter = 'all') => {
     // R6-D5：异常向上抛（调用方 Home.reload 的 catch 才能感知并渲染 ErrorState），
     // 不再吞掉所有异常误导成"还没有监控任务"
@@ -162,7 +171,7 @@ export default function App() {
           </div>
         )}
       <main className="mx-auto max-w-lg pb-24">
-        <Outlet context={{ me, tasks, refreshTasks, tasksError, refreshMe }} />
+        <Outlet context={{ me, tasks, refreshTasks, tasksError, refreshMe, logout }} />
         {location.pathname !== '/login' && location.pathname !== '/verify' && (
           <footer className="px-4 pt-2 pb-6 text-center text-[11px] text-faint">
             页面内所有时间为本地时间
@@ -182,6 +191,8 @@ export interface AppContext {
   tasksError: string | null;
   /** R7：重新拉取 /me（登录成功后刷新身份，代替全页刷新） */
   refreshMe: () => Promise<void>;
+  /** R8-B0-4：退出登录——先清 App 层 me/tasks state，再调后端 /auth/logout */
+  logout: () => Promise<void>;
 }
 
 export function useApp(): AppContext {
