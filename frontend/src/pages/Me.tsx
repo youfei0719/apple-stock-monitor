@@ -14,6 +14,7 @@ const TIER_LABEL: Record<string, string> = {
 
 const CHANNEL_LABEL: Record<string, string> = {
   page: '站内',
+  system: '站内',
   email: '邮件',
   sms: '短信',
   bark: 'Bark',
@@ -22,13 +23,21 @@ const CHANNEL_LABEL: Record<string, string> = {
   feishu: '飞书',
 };
 
+/** 付费记录档位中文名（N20：按 tier_to 映射，不显示裸英文） */
+const PAID_TIER_LABEL: Record<string, string> = {
+  standard: '标准版',
+  pro: 'Pro版',
+  trial: '体验版',
+  free: '免费版',
+};
+
 /** 按后端 GET /plans 实际字段（tier/name/price_cny/tasks_limit/push_limit/channels/history/priority/refresh_interval_sec）渲染 */
 function planFeatures(p: Plan): string[] {
   const channels = p.channels.map((c) => CHANNEL_LABEL[c] ?? c).join('、');
   const feats = [
     `推送渠道：${channels}`,
     `监控任务 ${p.tasks_limit} 个`,
-    `月推送 ${p.push_limit} 次`,
+    `每周期推送 ${p.push_limit} 次`,
     `刷新间隔 ${p.refresh_interval_sec} 秒`,
   ];
   if (p.history) feats.push('完整历史数据');
@@ -196,7 +205,21 @@ export default function Me() {
     navigate('/login', { replace: true });
   };
 
-  const tierLabel = `${TIER_LABEL[me.tier] ?? me.tier}版`;
+  if (!me) {
+    return (
+      <div>
+        <PageHeader title="我的" />
+        <div className="px-4 pb-6">
+          <ErrorState message="未登录或会话已失效，请重新登录" onRetry={() => navigate('/login')} />
+        </div>
+      </div>
+    );
+  }
+
+  // N2：展示档位统一用 /quota 的有效档位（quota.tier，过期按 free 算）；
+  // /me 的原始 tier 在后端未改为有效档位前只做兜底（需后端配合项，见汇报）
+  const displayTier = quota?.tier ?? me.tier;
+  const tierLabel = `${TIER_LABEL[displayTier] ?? displayTier}版`;
   const expiry = quota ? fmtBeijingDate(quota.tier_expires_at) : null;
 
   return (
@@ -226,10 +249,11 @@ export default function Me() {
               <p className="text-xs text-white/60">
                 刷新间隔 <span className="mono text-white">{quota.refresh_interval_sec}s</span>
                 {' · '}
-                {quota.period}
+                配额周期起始 <span className="mono text-white">{quota.period}</span>
               </p>
               <p className="text-[11px] text-white/50">
-                配额按实际发送成功的通知条数扣减 · 每购买日起 30 天滚动重置
+                配额按实际发送成功的通知条数扣减 · 以购买日 +30
+                天为一周期滚动重置，体验档同此口径
               </p>
             </div>
           )}
@@ -255,7 +279,7 @@ export default function Me() {
           {!error && plans !== null && plans.length > 0 && (
             <div className="grid grid-cols-2 gap-2.5">
               {plans.map((p) => {
-                const current = p.tier === me.tier;
+                const current = p.tier === displayTier;
                 return (
                   <Card
                     key={p.tier}
@@ -314,7 +338,10 @@ export default function Me() {
               {payments.map((p) => (
                 <Card key={p.id} className="p-3.5 flex items-center justify-between rise-in">
                   <div>
-                    <p className="text-sm font-medium">{p.plan}</p>
+                    {/* N20：按 tier_to 映射中文档位，不显示裸英文 plan */}
+                    <p className="text-sm font-medium">
+                      {p.tier_to ? PAID_TIER_LABEL[p.tier_to] ?? p.tier_to : p.plan || '—'}
+                    </p>
                     <p className="mono text-[11px] text-faint">
                       {new Date(p.created_at).toLocaleDateString('zh-CN')}
                       {' · '}

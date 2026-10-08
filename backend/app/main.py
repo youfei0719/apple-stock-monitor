@@ -29,7 +29,7 @@ from app.core.logging import configure_logging, get_logger
 from app.core.ratelimit import check_rate_limit
 from app.core.security import hash_password
 from app.models.models import ApiHit, User
-from app.services.engine import engine
+from app.services.engine import engine, read_engine_status
 
 configure_logging()
 log = get_logger("main")
@@ -50,10 +50,26 @@ async def lifespan(app: FastAPI):
         missing = [k for k, v in required.items() if not (v or "").strip()]
         if missing:
             raise RuntimeError(f"prod 启动拒绝：缺少必需配置 {missing}")
+        # D5：prod 无 SMTP 会导致注册验证码发不出去、用户建好却永远收不到码
+        # （403 email_unverified 死胡同）；缺配置直接拒绝启动。
+        smtp_required = {
+            "SMTP_HOST": settings.SMTP_HOST,
+            "SMTP_USER": settings.SMTP_USER,
+            "SMTP_PASSWORD": settings.SMTP_PASSWORD,
+        }
+        smtp_missing = [k for k, v in smtp_required.items() if not (v or "").strip()]
+        if smtp_missing:
+            raise RuntimeError(f"prod 启动拒绝：缺少必需邮件配置 {smtp_missing}")
     _bootstrap_admin()
-    await engine.start()
+    # D1：引擎默认不跑（ENGINE_ENABLED=false），由独立 stockmon-engine.service
+    # 进程运行（ENGINE_ENABLED=true）。API 进程内的 engine 实例不再启动。
+    if settings.ENGINE_ENABLED:
+        await engine.start()
+    else:
+        log.info("engine_skipped_in_api", reason="ENGINE_ENABLED=false")
     yield
-    await engine.stop()
+    if settings.ENGINE_ENABLED:
+        await engine.stop()
     log.info("app_shutdown")
 
 
@@ -132,21 +148,25 @@ async def rate_limit_and_track(request: Request, call_next):
 
 @app.get("/healthz")
 def healthz():
+    # D1：API 进程不跑引擎，引擎状态读独立 engine 进程每 tick 写进 DB 的心跳，
+    # 不再读本进程内存（恒为 stopped）。
     db_ok = True
+    engine_state = "stopped"
     try:
         db = SessionLocal()
         try:
             db.execute(text("SELECT 1"))
+            engine_state = "running" if read_engine_status(db)["running"] else "stopped"
         finally:
             db.close()
     except Exception as e:
         db_ok = False
         log.warning("healthz_db_failed", error=str(e))
-    eng = engine.status()
     return {
         "status": "ok",
         "db": db_ok,
-        "engine": "running" if eng["running"] else "stopped",
+        "engine": engine_state,
+        "engine_in_api": settings.ENGINE_ENABLED,
         "version": settings.APP_VERSION,
     }
 

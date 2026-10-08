@@ -28,7 +28,7 @@ from app.core.security import (
     verify_password,
     verify_totp,
 )
-from app.core.tiers import effective_tier_of
+from app.core.tiers import effective_tier, effective_tier_of
 from app.models.models import MonitorTask, QuotaUsage, SystemConfig, User
 from app.models.models import Session as DbSession
 from app.schemas import (
@@ -114,6 +114,8 @@ def _claim_device_tasks(db: Session, request: Request, user: User) -> int:
     )
     for t in rows:
         t.user_id = user.id
+        # N10：迁移后清空 device_id，避免同 device_id 重复认领/脏数据残留
+        t.device_id = None
         db.add(t)
     if rows:
         log.info("device_tasks_claimed", user_id=user.id, device_id=device_id, count=len(rows))
@@ -260,10 +262,12 @@ def _quota_for(db: Session, user: User) -> dict:
 
 @router.get("/me", response_model=MeOut)
 def me(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # N2：返回有效档位（付费过期按 free 算），与 /quota 的 tier 口径一致，
+    # 而不是 user.tier 原始值
     return MeOut(
         id=user.id,
         email=user.email,
-        tier=user.tier,
+        tier=effective_tier(user),
         quota=_quota_for(db, user),
         totp_enabled=user.totp_enabled,
     )

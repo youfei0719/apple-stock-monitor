@@ -45,6 +45,7 @@ const STATUS_LABEL: Record<string, string> = {
   paid: '已到账',
   amount_mismatch: '金额异常',
   refunded: '已退款',
+  resolved: '已处理',
   cancelled: '已取消',
 }
 

@@ -15,6 +15,7 @@ from collections import deque
 from datetime import datetime, timedelta
 
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from app.core.config import get_settings
 from app.core.db import SessionLocal
@@ -44,6 +45,14 @@ RETRY_BACKOFF_SEC = {1: 30, 2: 120}
 
 # ---- 高峰模式（对标-1）：system_config key ----
 PEAK_MODE_KEY = "peak_mode"
+
+# ---- 引擎心跳（第三轮审查 D1）：standalone engine 每 tick 把心跳写入 system_config，
+# API 进程不跑引擎，healthz / admin/system 读这条 DB 心跳判活（60s 内 = running）。
+ENGINE_HEARTBEAT_KEY = "engine_heartbeat"
+ENGINE_HEARTBEAT_TTL_SEC = 60
+# lifecycle sweep 降频（第三轮审查 N8）：每多少个 tick 跑一次
+# （ENGINE_TICK_SEC=5s → 每 60 tick = 5 分钟）
+LIFECYCLE_SWEEP_EVERY_N_TICKS = 60
 
 # ---- 配额周期：购买日+30天滚动（不自洽-2 修完口径） ----
 QUOTA_CYCLE_DAYS = 30
@@ -110,6 +119,39 @@ def tier_interval(tier: str, settings) -> int:
     return settings.tier_intervals.get(tier or "free", settings.tier_intervals["free"])
 
 
+def read_engine_status(db) -> dict:
+    """从 system_config 读引擎心跳（供 API 进程的 healthz / admin/system 用）。
+
+    API 进程不跑引擎，内存 engine.status() 恒为 stopped；standalone engine 每 tick
+    把心跳写进 DB，这里按 60s 判活。
+    """
+    row = db.execute(
+        select(SystemConfig).where(SystemConfig.key == ENGINE_HEARTBEAT_KEY)
+    ).scalar_one_or_none()
+    hb = dict(row.value) if row and isinstance(row.value, dict) else {}
+    at_s = hb.get("at")
+    last_hb = None
+    running = False
+    if at_s:
+        try:
+            last_hb = datetime.fromisoformat(str(at_s).rstrip("Z"))
+            running = (datetime.utcnow() - last_hb).total_seconds() < ENGINE_HEARTBEAT_TTL_SEC
+        except ValueError:
+            pass
+
+    def _iso(dt):
+        return dt.isoformat() + "Z" if dt else None
+
+    return {
+        "running": running,
+        "last_heartbeat": _iso(last_hb),
+        "last_tick_at": _iso(last_hb),
+        "rounds_total": hb.get("rounds_total", 0),
+        "rounds_ok": hb.get("rounds_ok", 0),
+        "last_error": hb.get("last_error"),
+    }
+
+
 class Engine:
     def __init__(self):
         self.settings = get_settings()
@@ -121,6 +163,8 @@ class Engine:
         self.rounds_total = 0
         self.rounds_ok = 0
         self._task: asyncio.Task | None = None
+        # lifecycle sweep 降频计数器（第三轮审查 N8）
+        self._lifecycle_tick = 0
         # Apple 请求预算窗口（断裂-20）：key -> deque[timestamp]，60s 滚动窗口；
         # key="global" 为全局，其余为 "u:<user_id>" / "d:<device_id>"（trial）
         self._req_windows: dict[str, deque] = {}
@@ -175,9 +219,24 @@ class Engine:
         self.last_tick_at = self.last_heartbeat
         db = SessionLocal()
         try:
+            # D1：心跳落库（API 进程据此判活；与 _clear_cooldown 等同库写入）
+            set_config(
+                db,
+                ENGINE_HEARTBEAT_KEY,
+                {
+                    "at": self.last_heartbeat.isoformat() + "Z",
+                    "rounds_total": self.rounds_total,
+                    "rounds_ok": self.rounds_ok,
+                    "last_error": self.last_error,
+                },
+            )
             from app.services.lifecycle import run_lifecycle_sweep  # 延迟 import 防循环引用
 
-            run_lifecycle_sweep(db)
+            # N8：lifecycle sweep 降频——每 60 tick（约 5 分钟）跑一次，
+            # 不再每 5 秒全表扫描
+            self._lifecycle_tick += 1
+            if self._lifecycle_tick % LIFECYCLE_SWEEP_EVERY_N_TICKS == 0:
+                run_lifecycle_sweep(db)
             self._retry_pending_notifications(db)
             if self._in_cooldown(db):
                 return
@@ -205,6 +264,7 @@ class Engine:
         peak = self._peak_mode(db)
         q = (
             select(MonitorTask)
+            .options(selectinload(MonitorTask.user))  # N9：消除逐任务查 user 的 N+1
             .where(MonitorTask.paused.is_(False))
             .where((MonitorTask.expires_at.is_(None)) | (MonitorTask.expires_at > now))
         )

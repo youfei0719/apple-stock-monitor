@@ -23,7 +23,7 @@ from app.models.models import (
     User,
 )
 from app.schemas import AdminUserPatchIn
-from app.services.engine import PEAK_MODE_KEY, engine, get_config
+from app.services.engine import PEAK_MODE_KEY, get_config, read_engine_status
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 log = get_logger("admin")
@@ -37,6 +37,8 @@ class AdminUserPatchEx(AdminUserPatchIn):
     """
 
     tier_expires_at: datetime | None = None
+    # D5b：运营兜底——SMTP 故障导致用户收不到验证码时，管理员手动标记邮箱已验证
+    email_verified: bool | None = None
 
 
 class PaymentClaimIn(BaseModel):
@@ -184,6 +186,10 @@ def patch_user(
     if data.is_admin is not None:
         changes["is_admin"] = (target.is_admin, data.is_admin)
         target.is_admin = data.is_admin
+    if data.email_verified is not None:
+        # D5b：管理员手动验邮（SMTP 故障兜底；audit 留痕）
+        changes["email_verified"] = (target.email_verified, data.email_verified)
+        target.email_verified = data.email_verified
     if data.paused_tasks:
         tasks = (
             db.execute(select(MonitorTask).where(MonitorTask.user_id == user_id)).scalars().all()
@@ -203,6 +209,25 @@ def patch_user(
             for k, v in changes.items()
         },
     }
+
+
+# 金额异常待处理计数 key（与 pay.py 的 AMOUNT_MISMATCH_PENDING_KEY 同源）
+_AMOUNT_MISMATCH_PENDING_KEY = "payments_amount_mismatch_pending"
+
+
+def _dec_amount_mismatch_pending(db: Session) -> int:
+    """金额异常待处理数 -1（下限 0），返回最新值。认领/关闭动作消费队列时调用。"""
+    row = db.execute(
+        select(SystemConfig).where(SystemConfig.key == _AMOUNT_MISMATCH_PENDING_KEY)
+    ).scalar_one_or_none()
+    n = int((row.value or {}).get("count", 0)) if row else 0
+    n = max(0, n - 1)
+    if row:
+        row.value = {"count": n}
+        db.add(row)
+    else:
+        db.add(SystemConfig(key=_AMOUNT_MISMATCH_PENDING_KEY, value={"count": n}))
+    return n
 
 
 def _payment_remark(p: Payment) -> str:
@@ -286,8 +311,14 @@ def claim_payment(
     user.quota_reset_at = base + timedelta(days=30)
     user.pending_tier = None
     db.add(user)
-    # 补单联动回填 Payment.user_id（断裂-17）；金额异常订单保持原状态由人工定夺
+    # 补单联动回填 Payment.user_id（断裂-17）
     p.user_id = user.id
+    # D4：认领成功后 amount_mismatch 从待处理队列移除（status=resolved），
+    # 待处理计数同步递减
+    pending_count = None
+    if p.status == "amount_mismatch":
+        p.status = "resolved"
+        pending_count = _dec_amount_mismatch_pending(db)
     db.add(p)
     detail = {
         "user_id": user.id,
@@ -298,7 +329,7 @@ def claim_payment(
     audit(db, admin, "payment.claim", "payment", payment_id, detail, _client_ip(request))
     db.commit()
     log.info("payment_claimed", payment_id=payment_id, user_id=user.id, tier=tier_to)
-    return {
+    out = {
         "ok": True,
         "payment_id": p.id,
         "user_id": user.id,
@@ -306,14 +337,104 @@ def claim_payment(
         "tier_expires_at": user.tier_expires_at.isoformat() + "Z",
         "payment_status": p.status,
     }
+    if pending_count is not None:
+        out["pending_count"] = pending_count
+    return out
+
+
+@router.post("/payments/{payment_id}/close")
+def close_payment(
+    payment_id: int,
+    request: Request,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """D4：不予开通直接关闭——金额异常/待认领订单人工定夺为"不处理"时，
+    status 置 resolved（从待处理队列移除），不绑定用户、不开通档位。"""
+    p = db.get(Payment, payment_id)
+    if not p:
+        raise APIError(404, "订单不存在", "not_found")
+    if p.status not in ("amount_mismatch", "paid"):
+        raise APIError(400, f"订单状态 {p.status} 不可关闭", "bad_status")
+    old_status = p.status
+    p.status = "resolved"
+    db.add(p)
+    pending_count = None
+    if old_status == "amount_mismatch":
+        pending_count = _dec_amount_mismatch_pending(db)
+    audit(
+        db,
+        admin,
+        "payment.close",
+        "payment",
+        payment_id,
+        {"from": old_status, "to": "resolved"},
+        _client_ip(request),
+    )
+    db.commit()
+    log.info("payment_closed", payment_id=payment_id, from_status=old_status)
+    out = {"ok": True, "payment_id": p.id, "payment_status": p.status}
+    if pending_count is not None:
+        out["pending_count"] = pending_count
+    return out
+
+
+@router.post("/payments/{payment_id}/refund")
+def refund_payment(
+    payment_id: int,
+    request: Request,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """D3：标记退款——联动：
+    - payment.status='refunded'（revenue 统计只计 paid，已自动排除）
+    - 清空该用户 tier_expires_at 并降回 free（pending_tier 同步清空）
+    """
+    p = db.get(Payment, payment_id)
+    if not p:
+        raise APIError(404, "订单不存在", "not_found")
+    if p.status == "refunded":
+        raise APIError(400, "订单已标记退款", "already_refunded")
+    old_status = p.status
+    p.status = "refunded"
+    db.add(p)
+    user_info = None
+    if p.user_id is not None:
+        user = db.get(User, p.user_id)
+        if user:
+            old = (user.tier, user.tier_expires_at.isoformat() if user.tier_expires_at else None)
+            user.tier = "free"
+            user.tier_expires_at = None
+            user.pending_tier = None
+            db.add(user)
+            user_info = {"user_id": user.id, "tier": {"from": old[0], "to": "free"}}
+    audit(
+        db,
+        admin,
+        "payment.refund",
+        "payment",
+        payment_id,
+        {"from": old_status, "to": "refunded", **({"user": user_info} if user_info else {})},
+        _client_ip(request),
+    )
+    db.commit()
+    log.info(
+        "payment_refunded",
+        payment_id=payment_id,
+        from_status=old_status,
+        user_id=p.user_id,
+    )
+    return {"ok": True, "payment_id": p.id, "payment_status": p.status, "user": user_info}
 
 
 @router.get("/system")
 def system_status(admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
+    # D1：API 进程不跑引擎（内存状态恒 stopped），引擎状态读独立 engine 进程
+    # 每 tick 写进 system_config 的心跳，形状与旧 engine.status() 对齐。
     cooldown = get_config(db, "apple_cooldown", {})
     log_tail = _tail_log()
     return {
-        "engine": engine.status(),
+        "engine": read_engine_status(db),
         "apple_cooldown": cooldown,
         "peak_mode": bool(get_config(db, PEAK_MODE_KEY, {}).get("enabled", False)),
         "log_tail": log_tail,

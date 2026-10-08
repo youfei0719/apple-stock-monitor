@@ -4,26 +4,27 @@ import { useState } from 'react';
  * 灵动岛胶囊状态条
  * 设计依据：glint-vault 灵感Header动效-Dynamic-Island 卡
  *  - 平时：黑色胶囊收起态，绿点呼吸 +「监控中 · N 个任务」（数字用 Paper Mono）
- *  - 有货：胶囊展开 + 呼吸动效 →「有货！点我去下单」，点击直达 Apple 下单页
+ *  - 有货：胶囊展开 + 呼吸动效 →「有货！去查看」，点击跳转到该任务详情页
  *  - 无任务：灰点「暂无监控任务」
  * 形态切换走 width/border-radius 的 morph 过渡（cubic-bezier 参考 iOS Dynamic Island）
  */
 export default function IslandStatus({
   taskCount,
   hasStock,
-  buyUrl,
   onTap,
+  onStockTap,
 }: {
   taskCount: number;
   hasStock: boolean;
-  buyUrl?: string;
   onTap?: () => void;
+  /** 有货时点击跳转（跳到该任务详情页） */
+  onStockTap?: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
 
   const handleClick = () => {
-    if (hasStock && buyUrl) {
-      window.open(buyUrl, '_blank', 'noopener');
+    if (hasStock) {
+      onStockTap?.();
       return;
     }
     setExpanded((v) => !v);
@@ -49,7 +50,7 @@ export default function IslandStatus({
             <>
               <span className="w-2 h-2 rounded-full bg-ok island-dot" />
               <span className="text-[13px] font-semibold tracking-wide">
-                有货！点我去下单 →
+                有货！去查看 →
               </span>
             </>
           ) : idle ? (

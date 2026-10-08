@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.core.db import get_db
 from app.models.models import MonitorTask, User
-from app.services.engine import engine
+from app.services.engine import read_engine_status
 
 router = APIRouter(prefix="/stats", tags=["stats"])
 
@@ -24,5 +24,6 @@ def poll_stats(user: User = Depends(get_current_user), db: Session = Depends(get
         "success_rate": round(ok_n / len(polled), 4) if polled else None,
         "avg_response_ms": round(sum(ms_vals) / len(ms_vals), 1) if ms_vals else None,
         "last_poll_at": max((t.last_polled_at for t in polled), default=None),
-        "engine": engine.status(),
+        # D1：API 进程不跑引擎，读独立 engine 进程的 DB 心跳
+        "engine": read_engine_status(db),
     }

@@ -22,6 +22,15 @@ if [ -z "$SECRET_VAL" ] || [ "$SECRET_VAL" = "change-me-64hex" ]; then
   exit 1
 fi
 echo "[deploy] .env 校验通过"
+# D8：TRUSTED_PROXIES 空则登录限流按 IP 维度会把所有用户算成 127.0.0.1
+# （nginx 反代场景）。缺省不致命，只 warning。
+TP_VAL=$(sed -n 's/^TRUSTED_PROXIES=//p' "$ENV_FILE" | head -n1 | tr -d " '\"\t\r")
+if [ -z "$TP_VAL" ]; then
+  echo "WARNING: $ENV_FILE 中 TRUSTED_PROXIES 为空。"
+  echo "  nginx 反代场景下 _client_ip 只取直连 IP（127.0.0.1），"
+  echo "  登录失败锁 IP / 注册限流会把所有用户算成同一个 IP。"
+  echo "  建议填入可信代理地址（如 TRUSTED_PROXIES=127.0.0.1）。"
+fi
 
 # ===== P0-23：bootstrap（幂等，跑两遍不坏） =====
 if [ ! -d "$REPO/.git" ]; then
@@ -29,10 +38,31 @@ if [ ! -d "$REPO/.git" ]; then
   mkdir -p /opt/stockmon
   git clone https://github.com/youfei0719/apple-stock-monitor.git "$REPO"
 fi
-cd "$REPO" && git pull --ff-only
+cd "$REPO"
+# N12(a)：pull 前检查工作区是否干净，防止覆盖服务器上的本地改动
+if [ -n "$(git status --porcelain)" ]; then
+  echo "ERROR: 仓库工作区有未提交的本地改动，git pull 已中止（防止覆盖）。"
+  echo "请先到 $REPO 手动处理（commit 或 git stash），再重新运行本脚本。"
+  git status --short
+  exit 1
+fi
+git pull --ff-only
 
 # deploy/ 脚本目录软链接：cron 与用法里的 /opt/stockmon/deploy 始终指向仓库最新脚本
 ln -sfn "$REPO/deploy" /opt/stockmon/deploy
+
+# ===== N12(b)：sqlite3 CLI（备份/排查 sqlite 真库用） =====
+command -v sqlite3 >/dev/null 2>&1 || {
+  echo "[deploy] 安装 sqlite3 CLI..."
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update -qq && apt-get install -y -qq sqlite3
+  elif command -v yum >/dev/null 2>&1; then
+    yum install -y sqlite3
+  else
+    echo "ERROR: 找不到 apt-get/yum，请手动安装 sqlite3 CLI 后再运行本脚本"
+    exit 1
+  fi
+}
 
 # 运行所需目录
 # 注意：sqlite 真库在 $APP_DIR/data（DATABASE_URL=sqlite:///./data/app.db，相对 backend），

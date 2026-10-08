@@ -1,6 +1,26 @@
-# 爱发电订单对账 job · 设计方案（首版：文档）
+# 爱发电订单对账 job · 设计方案
 
-日期：2026-10-09 · 状态：**只留文档，不实现**
+日期：2026-10-09 · 状态：**首版=管理端动作已实现；定时对账 job 仍只留文档（TODO）**
+
+## 首版已实现的对账承接动作（第三轮审查 D3/D4，2026-10-09）
+
+管理端（/api/admin/payments/*，写操作全部记 audit log）：
+
+| 动作 | 接口 | 效果 |
+|---|---|---|
+| 认领 | `POST /api/admin/payments/{id}/claim {"user_id"}` | 绑定用户 + 按订单档位开通 30 天（到期/锚点同步）+ 回填 `Payment.user_id`；若订单为 `amount_mismatch`，成功后置 `status='resolved'` 并递减待处理计数（从待处理队列移除） |
+| 不予开通直接关闭 | `POST /api/admin/payments/{id}/close` | `status='resolved'`（移出待处理队列，待处理计数 -1），不绑定用户、不开通档位；人工定夺"不处理"时用 |
+| 标记退款 | `POST /api/admin/payments/{id}/refund` | `status='refunded'`；`revenue_cny` 统计只计 `paid`（已自动排除）；清空该用户 `tier_expires_at` 并降回 `free`（`pending_tier` 同步清空） |
+
+待处理计数 key：`system_config` 的 `payments_amount_mismatch_pending`（与 pay.py webhook 落库的计数器同源，认领/关闭成功时 -1，下限 0）。
+
+对账流程（首版，人工驱动）：
+1. `GET /api/admin/overview` 看 `pending_payments`（unclaimed / amount_mismatch 计数）；
+2. `GET /api/admin/payments?claim_status=unclaimed` 或 `?status=amount_mismatch` 拉队列；
+3. remark/爱发电商家后台核实归属与金额；
+4. 钱货相符 → claim（自动开通 + 出队）；钱已到但不该开通 → close（出队）；爱发电已退款 → refund（降回 free + revenue 自动排除）。
+
+长期 TODO（定时对账 job）：爱发电订单 API 以 `AFDIAN_USER_ID` + `AFDIAN_PARAMS_TOKEN` 鉴权，每 6 小时拉近 7 天订单，与本站 `Payment` 按 `order_id`/金额/状态三层比对；异常落库 `reconciled`/`amount_mismatch`/`refunded`/`cancelled` 并 Bark 告警。爱发电商家后台就绪后实测接口形状再实现。
 
 ## 解决的问题（对应 round2 评审）
 
@@ -41,7 +61,7 @@
 2. **金额异常**（`total_amount` ≠ 档位期望）
    - 落库 `status='amount_mismatch'`，**不自动开通**；Bark/邮件告警 + admin 待处理视图（断裂-15 的修复落点）。
 3. **爱发电已退款/取消、本站为 paid**
-   - 标记 `status='refunded'`/`'cancelled'`，**首版不自动降级**（避免爱发电状态误报误伤），发告警由人工确认后降级 + 记录 audit。
+   - 标记 `status='refunded'`/`'cancelled'`，**不自动降级**（避免爱发电状态误报误伤）；人工用 `POST /api/admin/payments/{id}/refund` 确认后降回 free + 记录 audit。
 4. **爱发电 API 本身失败**
    - 本轮跳过，指数退避，记 warning 日志；绝不阻塞主链路、不抛错惊动用户。
 

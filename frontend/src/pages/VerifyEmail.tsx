@@ -28,7 +28,12 @@ export default function VerifyEmail() {
       await api.verifyEmail(email.trim(), code.trim());
       window.location.href = '/';
     } catch (e) {
-      setError(e instanceof Error ? e.message : '验证失败');
+      // 后端验证码过期返回 code=code_expired，前端给统一的用户提示（N4）
+      if (e instanceof ApiError && e.code === 'code_expired') {
+        setError('验证码已过期，请重新获取');
+      } else {
+        setError(e instanceof Error ? e.message : '验证失败');
+      }
     } finally {
       setBusy(false);
     }

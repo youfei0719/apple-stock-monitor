@@ -132,15 +132,20 @@ def _find_conflict(
     part_number: str,
     store_numbers: list[str],
 ) -> MonitorTask | None:
-    """断裂-8：按 (归属, part_number, 门店集合) 查重，避免重复任务重复通知/扣配额。"""
+    """断裂-8：按 (归属, part_number, 门店集合) 查重，避免重复任务重复通知/扣配额。
+
+    N7：两侧门店号都做 strip().upper() 归一化再比较，大小写/空格不一致不产生重复任务。
+    """
     q = select(MonitorTask)
     if user_id is not None:
         q = q.where(MonitorTask.user_id == user_id)
     else:
         q = q.where(MonitorTask.device_id == device_id, MonitorTask.user_id.is_(None))
-    want = frozenset(store_numbers)
+    want = frozenset((s or "").strip().upper() for s in store_numbers)
+    part_norm = (part_number or "").strip().upper()
     for t in db.execute(q).scalars().all():
-        if t.part_number == part_number and frozenset(t.store_numbers or []) == want:
+        have = frozenset((s or "").strip().upper() for s in (t.store_numbers or []))
+        if (t.part_number or "").strip().upper() == part_norm and have == want:
             return t
     return None
 
@@ -203,7 +208,8 @@ def create_task(
     _check_task_limit(db, user, x_device_id)
     stores = [s.model_dump() for s in data.stores]
     part_number = data.part_number.strip().upper()
-    store_numbers = [s["number"] for s in stores]
+    # N7：门店号归一化（strip+upper）后再查重/入库，大小写或空格不一致不产生重复任务
+    store_numbers = [s["number"].strip().upper() for s in stores]
     # 断裂-8：重复任务冲突检测
     conflict = _find_conflict(
         db, user.id if user else None, x_device_id, part_number, store_numbers
@@ -262,28 +268,28 @@ def batch_create(
         )
     if data.mode not in ("instant", "confirmed"):
         raise APIError(400, "mode 必须为 instant 或 confirmed", "bad_mode")
-    # 断裂-8：批量内去重 + 与已有任务查重（409）
+    # 断裂-8：批量内去重 + 与已有任务查重（409）；N7：门店号归一化后再查重
     seen: set[tuple[str, frozenset]] = set()
-    for part, store in combos:
-        pn = part.strip().upper()
-        key = (pn, frozenset([store]))
+    combos_norm = [(part.strip().upper(), store.strip().upper()) for part, store in combos]
+    for pn, sn in combos_norm:
+        key = (pn, frozenset([sn]))
         if key in seen:
-            raise APIError(409, f"批量内重复：{pn} × {store} 出现了多次", "task_conflict")
+            raise APIError(409, f"批量内重复：{pn} × {sn} 出现了多次", "task_conflict")
         seen.add(key)
-        conflict = _find_conflict(db, user.id, None, pn, [store])
+        conflict = _find_conflict(db, user.id, None, pn, [sn])
         if conflict:
             raise _conflict_error(conflict)
     channels = data.channels.model_dump(exclude_none=True)
     created = []
-    for part, store in combos:
-        name = data.name_template.replace("{part_number}", part).replace("{store_number}", store)
+    for pn, sn in combos_norm:
+        name = data.name_template.replace("{part_number}", pn).replace("{store_number}", sn)
         task = MonitorTask(
             user_id=user.id,
             name=name,
             category=data.category,
-            part_number=part.strip().upper(),
-            store_numbers=[store],
-            stores=[{"number": store, "name": "", "city": ""}],
+            part_number=pn,
+            store_numbers=[sn],
+            stores=[{"number": sn, "name": "", "city": ""}],
             mode=data.mode,
             channels=channels,
         )

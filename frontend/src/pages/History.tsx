@@ -207,10 +207,42 @@ export default function History() {
         </Card>
         {overview && Object.keys(overview).length > 0 && (
           <Card className="p-4 rise-in">
-            <p className="text-sm font-medium mb-2">数据分析摘要</p>
-            <pre className="mono text-xs text-sub whitespace-pre-wrap break-all">
-              {JSON.stringify(overview, null, 2)}
-            </pre>
+            <p className="text-sm font-medium mb-3">数据分析摘要</p>
+            <div className="grid grid-cols-2 gap-3">
+              {Object.entries(overview).map(([key, val]) => {
+                const num = typeof val === 'number' ? val : null;
+                const display =
+                  num !== null ? num.toLocaleString('zh-CN') : String(val ?? '—');
+                return (
+                  <div key={key} className="rounded-card-sm bg-bg p-3">
+                    <p className="text-xs text-sub truncate" title={key}>
+                      {key}
+                    </p>
+                    <p className="mt-1 text-lg font-semibold mono">{display}</p>
+                    {num !== null && num > 0 && (
+                      <div className="mt-2 h-1.5 rounded-full bg-white overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-accent"
+                          style={{
+                            width: `${Math.min(
+                              100,
+                              (num /
+                                Math.max(
+                                  1,
+                                  ...Object.values(overview).filter(
+                                    (v): v is number => typeof v === 'number',
+                                  ),
+                                )) *
+                                100,
+                            )}%`,
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </Card>
         )}
       </div>

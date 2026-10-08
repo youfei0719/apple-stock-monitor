@@ -62,6 +62,10 @@ class Settings(BaseSettings):
     ADMIN_PASSWORD: str = ""
 
     # --- 监控引擎 ---
+    # 引擎开关：API 进程默认 false（独立 stockmon-engine.service 跑引擎），
+    # engine service 的环境变量里设为 true。防止 uvicorn 进程 + 独立进程双引擎
+    # 重复轮询/重复通知（第三轮审查 D1）。
+    ENGINE_ENABLED: bool = False
     ENGINE_POLL_JITTER_SEC: int = 3
     # 注意：引擎为单线程串行 tick（round2 审查不自洽-14：原 ENGINE_MAX_WORKERS
     # 定义了但从未被引用，已删除；pro 的 10s 刷新为尽力目标，tick 超时记 warning）。

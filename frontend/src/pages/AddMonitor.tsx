@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api, type Product, type StoreRef, type Task, type TaskChannels } from '../lib/api';
+import { api, ApiError, type Product, type StoreRef, type Task, type TaskChannels } from '../lib/api';
 import { useApp } from '../components/App';
 import NotifyChannels from '../components/NotifyChannels';
 import { Card, EmptyState, ErrorState, LoadingState, PageHeader, PrimaryButton } from '../components/ui';
@@ -35,6 +35,7 @@ export default function AddMonitor() {
   const [pickedStores, setPickedStores] = useState<Set<string>>(new Set());
   const [storeQuery, setStoreQuery] = useState('');
   const [refreshing, setRefreshing] = useState(false);
+  const [storeToast, setStoreToast] = useState<string | null>(null);
 
   const [nameTemplate, setNameTemplate] = useState('');
   const [group, setGroup] = useState('');
@@ -58,12 +59,22 @@ export default function AddMonitor() {
 
   const loadStores = async (refresh = 0) => {
     setStoreErr(null);
+    setStoreToast(null);
     if (refresh) setRefreshing(true);
     try {
       setStores(await api.stores(refresh));
     } catch (e) {
-      setStores(null);
-      setStoreErr(e instanceof Error ? e.message : '加载失败');
+      // D10：403（门店目录刷新仅管理员可用）不清空已有列表，toast 提示即可
+      if (e instanceof ApiError && e.status === 403) {
+        if (refresh) {
+          setStoreToast('门店目录刷新仅管理员可用');
+        } else {
+          setStoreErr('门店目录需要管理员权限，可直接手动填写门店编号');
+        }
+      } else {
+        setStores(null);
+        setStoreErr(e instanceof Error ? e.message : '加载失败');
+      }
     } finally {
       setRefreshing(false);
     }
@@ -122,27 +133,28 @@ export default function AddMonitor() {
     const ri = parseInt(repeatInterval, 10);
     if (mode === 'confirmed' && repeatInterval.trim()) {
       if (!Number.isFinite(ri) || ri < MIN_REPEAT_INTERVAL_SEC) {
-        setSubmitErr(`持续提醒间隔至少 ${MIN_REPEAT_INTERVAL_SEC} 秒（1 小时），防止一夜烧完月度配额`);
+        setSubmitErr(`持续提醒间隔至少 ${MIN_REPEAT_INTERVAL_SEC} 秒（1 小时），防止一夜烧完周期配额`);
         return;
       }
     }
     setSubmitting(true);
     try {
+      // batch 接口直接接受 category/mode/channels；group/repeat_interval_sec 仍走 PATCH 补齐
       const created = await api.batchTasks({
         part_numbers: partNumbers,
         store_numbers,
         // 后端只替换 {part_number} / {store_number}，模板必须用这两个占位符
         name_template: nameTemplate.trim() || '{part_number} × {store_number}',
+        category,
+        mode,
+        channels,
       });
-      // batch 接口只接受 part_numbers/store_numbers/name_template，
-      // mode / group / 渠道 / repeat_interval_sec 按契约走 PATCH 逐个补齐
-      const patch: Partial<Task> = { mode };
+      const patch: Partial<Task> = {};
       if (group.trim()) patch.group = group.trim();
-      if (Object.keys(channels).length > 0) patch.channels = channels;
       if (mode === 'confirmed' && repeatInterval.trim() && Number.isFinite(ri)) {
         patch.repeat_interval_sec = ri;
       }
-      if (mode !== 'instant' || patch.group || patch.channels || patch.repeat_interval_sec) {
+      if (Object.keys(patch).length > 0) {
         await Promise.all(created.map((t) => api.updateTask(t.id, patch)));
       }
       await refreshTasks('active');
@@ -258,6 +270,11 @@ export default function AddMonitor() {
               {refreshing ? '刷新中…' : '在线刷新门店目录'}
             </button>
           </div>
+          {storeToast && (
+            <p className="mb-2 rounded-card-sm bg-[#fff7e8] border border-[#f0c36d] px-3 py-2 text-xs text-[#b25e09]">
+              {storeToast}
+            </p>
+          )}
           <input
             value={storeQuery}
             onChange={(e) => setStoreQuery(e.target.value)}
@@ -354,7 +371,7 @@ export default function AddMonitor() {
                   </p>
                 )}
                 <p className="text-[11px] text-faint leading-relaxed">
-                  持续有货时每隔该时间再提醒一次；间隔至少 1 小时，防止快速烧完月度配额。
+                  持续有货时每隔该时间再提醒一次；间隔至少 1 小时，防止快速烧完周期配额。
                 </p>
               </>
             )}

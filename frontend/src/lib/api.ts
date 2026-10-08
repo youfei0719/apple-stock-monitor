@@ -113,14 +113,18 @@ export interface Task {
   latest?: TaskLatest;
 }
 
-/** 任务是否已过期（expires_at 在过去）——expired 展示态的判定依据 */
+/** 任务是否已过期（expires_at 在过去）——expired 展示态的判定依据。
+ * 注意：与后端 _display_state / _is_expired 保持一致——paused 优先于 expired，
+ * 手动暂停的任务不视为过期（后端 _is_expired 在 paused 时返回 False）。 */
 export function isTaskExpired(task: Task): boolean {
   if (!task.expires_at) return false;
   return new Date(task.expires_at).getTime() < Date.now();
 }
 
 /** 从 latest 聚合展示用状态（Home/App 共用）
- *  - expired：任务过期（终态，优先于 paused）
+ * 优先级与后端 _display_state 完全一致：
+ *  - paused：手动暂停（优先于过期）
+ *  - expired：任务过期
  *  - partialUnknown：unknown 与其他状态混合（如 3 unknown + 2 unavailable），unknown 不再被淹没
  */
 export function summarizeTask(task: Task): {
@@ -143,8 +147,9 @@ export function summarizeTask(task: Task): {
   const states = rows.map((r) => r.state);
   const hasUnknown = states.includes('unknown');
   let state: StockState = 'unknown';
-  if (isTaskExpired(task)) state = 'expired';
-  else if (task.paused) state = 'paused';
+  // 与后端 _display_state 一致：paused 优先于 expired
+  if (task.paused) state = 'paused';
+  else if (isTaskExpired(task)) state = 'expired';
   else if (states.includes('available')) state = 'available';
   else if (states.includes('verifying')) state = 'verifying';
   else if (states.includes('cooling')) state = 'cooling';
@@ -232,8 +237,10 @@ export interface ChannelHealth {
   last_failure_reason: string | null;
 }
 
-/** /notifications 历史记录：StockEvent 基础上带发送状态与失败原因 */
+/** /notifications 历史记录：StockEvent 基础上带发送状态与失败原因；
+ * kind 区分系统通知（task_auto_paused/quota_warning 等）与到货通知（stock_alert） */
 export interface NotificationRecord extends StockEvent {
+  kind?: string | null;
   status?: 'sent' | 'failed' | 'skipped' | string | null;
   failure_reason?: string | null;
 }
@@ -322,12 +329,18 @@ export const api = {
     return req<Task[]>(`/tasks${q}`);
   },
   task: (id: string | number) => req<Task>(`/tasks/${id}`),
+  // 后端 POST /tasks/{id}/renew 返回 TaskOut（完整任务），不是 {ok, expires_at}
   renewTask: (id: string | number) =>
-    req<{ ok: boolean; expires_at: string }>(`/tasks/${id}/renew`, { method: 'POST' }),
-  createTask: (payload: Partial<Task>) =>
-    req<Task>('/tasks', { method: 'POST', body: JSON.stringify(payload) }),
-  batchTasks: (payload: { part_numbers: string[]; store_numbers: string[]; name_template: string }) =>
-    req<Task[]>('/tasks/batch', { method: 'POST', body: JSON.stringify(payload) }),
+    req<Task>(`/tasks/${id}/renew`, { method: 'POST' }),
+  // POST /tasks/batch 直接支持 category/mode/channels；group/repeat_interval_sec 仍走 PATCH 补齐
+  batchTasks: (payload: {
+    part_numbers: string[];
+    store_numbers: string[];
+    name_template: string;
+    category?: string;
+    mode?: 'instant' | 'confirmed';
+    channels?: TaskChannels;
+  }) => req<Task[]>('/tasks/batch', { method: 'POST', body: JSON.stringify(payload) }),
   updateTask: (id: string | number, payload: Partial<Task>) =>
     req<Task>(`/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   deleteTask: (id: string | number) => req<void>(`/tasks/${id}`, { method: 'DELETE' }),

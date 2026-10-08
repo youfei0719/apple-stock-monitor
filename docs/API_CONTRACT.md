@@ -8,7 +8,7 @@ Base URL: `https://stock.glint.red/api`（开发环境 `http://localhost:8000/ap
 - `GET /healthz` → `{"status":"ok","db":true,"engine":"running","version":"..."}`（无需认证）
 
 ## 认证 / 用户
-- `POST /api/auth/register` `{email, password}` → 201 `{id, email, tier:"free"}`；注册后发 6 位邮箱验证码（10 分钟有效），同 `X-Device-Id` 的匿名任务自动迁移绑定到新用户
+- `POST /api/auth/register` `{email, password}` → 201 `{id, email, tier:"free"}`；注册后发 6 位邮箱验证码（10 分钟有效），同 `X-Device-Id` 的匿名任务自动迁移绑定到新用户（迁移后原行 `device_id` 清空）。prod 启动硬门槛：`SMTP_HOST/SMTP_USER/SMTP_PASSWORD` 缺失则拒绝启动（防止验证码发不出导致用户永远 403 登录的死胡同）
 - `POST /api/auth/verify-email` `{email, code}` → `{ok:true}`（验证码通过后 `email_verified=true`）
 - `POST /api/auth/login` `{email, password}` → 200 `{ok:true, totp_required:false}` + Set-Cookie（session_token），失败 401；连续 5 次失败锁 IP 15 分钟；**邮箱未验证 → 403 `{code:"email_unverified"}`**（前端据此提示去验证）；登录成功同样迁移同 `X-Device-Id` 匿名任务
 - `POST /api/auth/logout` → 204
@@ -80,10 +80,12 @@ state ∈ `available | unavailable | unknown | verifying | cooling | paused`
 ## 后台（/api/admin/*，需 admin 会话 + TOTP；守卫要求 session totp_verified，否则 403 {code:"totp_required"}）
 - `GET /api/admin/overview` → `{total_users, tier_distribution: {tier: count}（含 trial）, today_pushes, revenue_cny: float, active_tasks, pending_payments: {unclaimed, amount_mismatch}}`
 - `GET /api/admin/traffic?days=30` → 数组元素 `{day: "2026-10-09", pv, uv}`
-- `GET /api/admin/users?q=&tier=` → 数组元素 `{id: int, email, tier（含 trial）, tier_expires_at, is_admin, totp_enabled, created_at}`；`PATCH /api/admin/users/{id}` 接受 `{tier, tier_expires_at?, is_admin?, paused_tasks?}` → `{ok, changes}`（补单时可填到期时间；退款反向操作：`{"tier":"free"}` 手动降级）
+- `GET /api/admin/users?q=&tier=` → 数组元素 `{id: int, email, tier（含 trial）, tier_expires_at, is_admin, totp_enabled, created_at}`；`PATCH /api/admin/users/{id}` 接受 `{tier, tier_expires_at?, is_admin?, paused_tasks?, email_verified?}` → `{ok, changes}`（补单时可填到期时间；退款反向操作：`{"tier":"free"}` 手动降级；SMTP 故障时可传 `{"email_verified":true}` 手动验邮，记审计）
 - `GET /api/admin/payments?status=&claim_status=unclaimed` → 数组元素 `{id: int, user_id, order_id, plan（爱发电 plan_id 字符串）, amount_cny, tier_from, tier_to, status（paid/refunded/cancelled/amount_mismatch）, remark（从 raw_payload 提取）, created_at}`；`claim_status=unclaimed` 筛出待认领订单；无 email 字段
-- `POST /api/admin/payments/{id}/claim` `{"user_id": int}` → 认领订单：绑定用户 + 按订单档位开通 30 天（到期/锚点同步）+ 回填 `Payment.user_id` → `{ok, payment_id, user_id, tier, tier_expires_at, payment_status}`（记审计）
-- `GET /api/admin/system` → `{engine: {running, last_heartbeat, last_tick_at, rounds_total, rounds_ok, last_error}, apple_cooldown: dict, peak_mode: bool, log_tail: string[]}`
+- `POST /api/admin/payments/{id}/claim` `{"user_id": int}` → 认领订单：绑定用户 + 按订单档位开通 30 天（到期/锚点同步）+ 回填 `Payment.user_id`；若为 `amount_mismatch` 成功后置 `status='resolved'` 并待处理计数 -1 → `{ok, payment_id, user_id, tier, tier_expires_at, payment_status, pending_count?}`（记审计）
+- `POST /api/admin/payments/{id}/close` → 不予开通直接关闭：`status='resolved'`（出待处理队列，`amount_mismatch` 时待处理计数 -1），不绑定用户、不开通档位（记审计）
+- `POST /api/admin/payments/{id}/refund` → 标记退款：`status='refunded'`（revenue 只计 paid，自动排除）+ 该用户降回 `free` 并清空 `tier_expires_at`/`pending_tier`（记审计）
+- `GET /api/admin/system` → `{engine: {running, last_heartbeat, last_tick_at, rounds_total, rounds_ok, last_error}, apple_cooldown: dict, peak_mode: bool, log_tail: string[]}`；engine 状态读独立引擎进程每 tick 写进 DB 的心跳（60s 内 = running），API 进程自身不跑引擎（`ENGINE_ENABLED=false`）
 - `POST /api/admin/system/peak-mode` `{"enabled": bool}` → 高峰模式开关（开启后 trial/free 刷新间隔 ×4；记审计）
 - `GET /api/admin/audit` → 数组元素 `{id, admin_id, action, target_type, target_id, detail, ip, created_at}`
 - `POST /api/auth/totp/setup` → `{secret, uri, enabled}`；`POST /api/auth/totp/verify {code}` → `{ok, totp_enabled}`（verify 后当前 session 标 totp_verified）

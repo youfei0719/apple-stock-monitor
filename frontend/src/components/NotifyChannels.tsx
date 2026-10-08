@@ -23,6 +23,7 @@ const CHANNEL_LABEL: Record<string, string> = {
   dingtalk: '钉钉',
   feishu: '飞书',
   page: '站内',
+  system: '站内',
 };
 
 const inputCls =
@@ -111,44 +112,75 @@ export function NotificationHistory({ taskId }: { taskId?: string | number }) {
       )}
       {items !== null && items.length > 0 && (
         <div className="space-y-2 max-h-64 overflow-y-auto">
-          {items.map((n) => (
-            <Card key={n.id} className="p-3">
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="text-[13px] font-medium truncate">{n.title}</p>
-                  <p className="mt-0.5 text-xs text-sub truncate">{n.body}</p>
-                  <p className="mt-0.5 mono text-[10px] text-faint">
-                    {CHANNEL_LABEL[n.channel] ?? n.channel}
-                    {' · '}
-                    {new Date(n.created_at).toLocaleString('zh-CN', {
-                      month: '2-digit',
-                      day: '2-digit',
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
-                  </p>
-                </div>
-                {n.status === 'failed' ? (
+          {items.map((n) =>
+            // D6：任务因连续 10 次通知失败被自动暂停 → 醒目提示 + 引导检查渠道配置
+            n.kind === 'task_auto_paused' ? (
+              <Card
+                key={n.id}
+                className="p-3.5 border-l-4 border-bad bg-[#fff5f5] rise-in"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-[13px] font-semibold text-bad">
+                      ⚠ {n.title}
+                    </p>
+                    <p className="mt-1 text-xs text-sub leading-relaxed">{n.body}</p>
+                    <p className="mt-1.5 text-xs text-ink font-medium">
+                      请先检查通知渠道配置（Bark key / 邮箱 / webhook），确认能收到通知后再手动恢复任务。
+                    </p>
+                    <p className="mt-1 mono text-[10px] text-faint">
+                      {new Date(n.created_at).toLocaleString('zh-CN', {
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </p>
+                  </div>
                   <span className="shrink-0 text-[11px] px-2 py-0.5 rounded-pill bg-bad/10 text-bad font-medium">
-                    发送失败
+                    已自动暂停
                   </span>
-                ) : n.status === 'skipped' ? (
-                  <span className="shrink-0 text-[11px] px-2 py-0.5 rounded-pill bg-bg text-faint font-medium">
-                    已跳过
-                  </span>
-                ) : (
-                  <span className="shrink-0 text-[11px] px-2 py-0.5 rounded-pill bg-ok/10 text-ok font-medium">
-                    已送达
-                  </span>
+                </div>
+              </Card>
+            ) : (
+              <Card key={n.id} className="p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-[13px] font-medium truncate">{n.title}</p>
+                    <p className="mt-0.5 text-xs text-sub truncate">{n.body}</p>
+                    <p className="mt-0.5 mono text-[10px] text-faint">
+                      {CHANNEL_LABEL[n.channel] ?? n.channel}
+                      {' · '}
+                      {new Date(n.created_at).toLocaleString('zh-CN', {
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </p>
+                  </div>
+                  {n.status === 'failed' ? (
+                    <span className="shrink-0 text-[11px] px-2 py-0.5 rounded-pill bg-bad/10 text-bad font-medium">
+                      发送失败
+                    </span>
+                  ) : n.status === 'skipped' ? (
+                    <span className="shrink-0 text-[11px] px-2 py-0.5 rounded-pill bg-bg text-faint font-medium">
+                      已跳过
+                    </span>
+                  ) : (
+                    <span className="shrink-0 text-[11px] px-2 py-0.5 rounded-pill bg-ok/10 text-ok font-medium">
+                      已送达
+                    </span>
+                  )}
+                </div>
+                {n.status === 'failed' && n.failure_reason && (
+                  <p className="mt-1.5 text-xs text-bad bg-bad/5 rounded-card-sm px-2.5 py-1.5">
+                    失败原因：{n.failure_reason}
+                  </p>
                 )}
-              </div>
-              {n.status === 'failed' && n.failure_reason && (
-                <p className="mt-1.5 text-xs text-bad bg-bad/5 rounded-card-sm px-2.5 py-1.5">
-                  失败原因：{n.failure_reason}
-                </p>
-              )}
-            </Card>
-          ))}
+              </Card>
+            ),
+          )}
         </div>
       )}
     </div>

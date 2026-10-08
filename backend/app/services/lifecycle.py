@@ -116,8 +116,6 @@ def membership_sweep(db: Session) -> dict:
         "renewal_reminders": 0,
         "tasks_paused": 0,
     }
-    free_limit = TIERS["free"]["tasks_limit"]
-
     # ---- 到期降级 ----
     expired = (
         db.execute(
@@ -142,9 +140,13 @@ def membership_sweep(db: Session) -> dict:
             u.tier = "free"
             u.tier_expires_at = None
             u.pending_tier = None
-            action = "已降为免费版（任务上限 3 个、推送 5 次/月）"
             stats["downgraded"] += 1
-        # 超限任务暂停：按更新时间倒序保留 free 限额，暂停超出部分
+            action = "已降为免费版（任务上限 3 个、推送 5 次/月）"
+        # D7：按切换后档位的任务上限保留最近更新的 N 个任务，暂停超出部分
+        # （pending_tier=standard 的用户切换后仍是 10 个限额，不是一刀切到 3 个）
+        new_info = TIERS.get(u.tier, TIERS["free"])
+        keep_limit = new_info["tasks_limit"]
+        # 超限任务暂停：按更新时间倒序保留新档位限额，暂停超出部分
         active = (
             db.execute(
                 select(MonitorTask)
@@ -155,13 +157,13 @@ def membership_sweep(db: Session) -> dict:
             .all()
         )
         paused_names = []
-        for t in active[free_limit:]:
+        for t in active[keep_limit:]:
             t.paused = True
             paused_names.append(t.name)
             db.add(t)
         stats["tasks_paused"] += len(paused_names)
         pause_note = (
-            f"；超出免费版任务上限，已自动暂停 {len(paused_names)} 个任务："
+            f"；超出{new_info['name']}版任务上限，已自动暂停 {len(paused_names)} 个任务："
             + "、".join(paused_names[:5])
             + ("…" if len(paused_names) > 5 else "")
             if paused_names

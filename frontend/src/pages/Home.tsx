@@ -15,6 +15,11 @@ function fmtHM(iso: string): string {
   return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 }
 
+function daysLeft(iso: string | null): number | null {
+  if (!iso) return null;
+  return Math.ceil((new Date(iso).getTime() - Date.now()) / 86400000);
+}
+
 function TaskCard({
   task,
   onChanged,
@@ -27,6 +32,8 @@ function TaskCard({
   const [busy, setBusy] = useState(false);
   const { state, availableCount, total, updatedAt, partialUnknown } = summarizeTask(task);
   const expired = state === 'expired';
+  const remaining = daysLeft(task.expires_at);
+  const expiringSoon = !expired && remaining !== null && remaining <= 3;
 
   const togglePause = async () => {
     setBusy(true);
@@ -76,6 +83,11 @@ function TaskCard({
               <span className="mono">{task.part_number}</span>
               {' · '}
               {task.stores.length} 家门店
+              {remaining !== null && !expired && (
+                <span className={expiringSoon ? ' text-bad font-medium' : ''}>
+                  {' · '}剩余 <span className="mono">{remaining}</span> 天
+                </span>
+              )}
             </p>
           </div>
           <div className="flex flex-col items-end gap-1.5 shrink-0">
@@ -188,7 +200,11 @@ export default function Home() {
       .catch(() => setQuota(null));
   }, []);
   const trialExhausted =
-    me.tier === 'trial' && quota !== null && quota.push_limit > 0 && quota.push_used >= quota.push_limit;
+    // 体验档判定走有效档位（/quota 的 tier），不过期的 /me 原始 tier（N2）
+    (quota?.tier ?? me?.tier) === 'trial' &&
+    quota !== null &&
+    quota.push_limit > 0 &&
+    quota.push_used >= quota.push_limit;
 
   return (
     <div>

@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 
 # ---------- auth ----------
@@ -74,6 +74,20 @@ class ChannelsIn(BaseModel):
     bark_key: str | None = Field(default=None, max_length=256)
     email: str | None = Field(default=None, max_length=255)
     webhooks: list[WebhookIn] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_empty_webhooks(cls, data):
+        # N13：前端可能提交未填完的 webhook 空行（url 为空/空白）。
+        # 在子模型校验前过滤，避免整单 422 导致用户保存失败，也避免空行入库。
+        if isinstance(data, dict) and isinstance(data.get("webhooks"), list):
+
+            def _url(w) -> str:
+                u = w.get("url") if isinstance(w, dict) else getattr(w, "url", "")
+                return u if isinstance(u, str) else ""
+
+            data["webhooks"] = [w for w in data["webhooks"] if _url(w).strip()]
+        return data
 
 
 class TaskCreateIn(BaseModel):

@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { api, type StateRow, type StoreRef, type Task, type TaskChannels } from '../lib/api';
+import { api, summarizeTask, type StateRow, type StoreRef, type Task, type TaskChannels } from '../lib/api';
 import StockStateBadge from '../components/StockStateBadge';
 import NotifyChannels from '../components/NotifyChannels';
 import { Card, ErrorState, LoadingState, EmptyState, PageHeader } from '../components/ui';
+
+const MS_PER_DAY = 86400000;
+/** 一键续期展示阈值：已过期，或 3 天内到期（N15） */
+const RENEW_SOON_DAYS = 3;
 
 export default function TaskDetail() {
   const { id } = useParams<{ id: string }>();
@@ -14,6 +18,8 @@ export default function TaskDetail() {
   const [channels, setChannels] = useState<TaskChannels>({});
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  const [renewing, setRenewing] = useState(false);
+  const [renewMsg, setRenewMsg] = useState<string | null>(null);
 
   const load = async () => {
     if (!id) return;
@@ -57,6 +63,20 @@ export default function TaskDetail() {
     }
   };
 
+  const renew = async () => {
+    if (!id) return;
+    setRenewing(true);
+    setRenewMsg(null);
+    try {
+      const t = await api.renewTask(id);
+      setTask(t);
+      setRenewMsg('已续期 +30 天');
+    } catch (e) {
+      setRenewMsg(e instanceof Error ? e.message : '续期失败');
+    } finally {
+      setRenewing(false);
+    }
+  };
   const storeMap = useMemo(() => {
     const m = new Map<string, StoreRef>();
     (stores ?? []).forEach((s) => m.set(s.number, s));
@@ -75,14 +95,47 @@ export default function TaskDetail() {
         <Link to="/" className="inline-block mb-3 text-sm text-accent">
           ← 返回监控列表
         </Link>
-        {task && (
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <p className="text-[15px] font-medium truncate">{task.name}</p>
-            {task.expires_at && new Date(task.expires_at).getTime() < Date.now() && (
-              <StockStateBadge state="expired" size="sm" />
-            )}
-          </div>
-        )}
+        {task && (() => {
+          // N19：任务展示态统一走 summarizeTask（与后端 _display_state 一致的聚合口径）
+          const sum = summarizeTask(task);
+          const days = task.expires_at
+            ? Math.ceil((new Date(task.expires_at).getTime() - Date.now()) / MS_PER_DAY)
+            : null;
+          const expired = sum.state === 'expired';
+          const showRenew = expired || (days !== null && days <= RENEW_SOON_DAYS);
+          return (
+            <div className="mb-4">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-[15px] font-medium truncate">{task.name}</p>
+                <StockStateBadge state={sum.state} size="sm" />
+              </div>
+              {showRenew && (
+                <div className="mt-3">
+                  <button
+                    onClick={renew}
+                    disabled={renewing}
+                    className="w-full py-2.5 rounded-card-sm bg-accent text-white text-sm font-medium active:scale-[0.99] transition disabled:opacity-40"
+                  >
+                    {renewing
+                      ? '续期中…'
+                      : expired
+                        ? '一键续期（+30 天）'
+                        : `一键续期（+30 天）· 剩余 ${days} 天`}
+                  </button>
+                  {renewMsg && (
+                    <p
+                      className={`mt-1.5 text-xs text-center ${
+                        renewMsg.includes('已续期') ? 'text-ok' : 'text-bad'
+                      }`}
+                    >
+                      {renewMsg}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })()}
         {error && <ErrorState message={error} onRetry={load} />}
         {!error && rows === null && <LoadingState rows={4} />}
         {!error && rows !== null && rows.length === 0 && (
@@ -109,7 +162,17 @@ export default function TaskDetail() {
         {!error && rows !== null && rows.length > 0 && (
           <>
             <div className="flex flex-wrap gap-2 mb-4">
-              {(['available', 'unavailable', 'unknown', 'verifying', 'cooling', 'paused'] as const)
+              {(
+                [
+                  'available',
+                  'unavailable',
+                  'unknown',
+                  'verifying',
+                  'cooling',
+                  'paused',
+                  'expired',
+                ] as const
+              )
                 .filter((s) => counts[s])
                 .map((s) => (
                   <span key={s} className="flex items-center gap-1.5">

@@ -73,8 +73,8 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 后端 latest 无 buy_url（通知直达链接只在通知里生成），有货时不再传 buyUrl
-  // 已过期任务不参与灵动岛展示
+  // 有货时点击灵动岛 → 跳到该任务详情页（D9）
+  // hotTask 已是第一个有货且未暂停未过期的任务
   const hotTask = tasks.find(
     (t) => !t.paused && !isTaskExpired(t) && (t.latest?.available_count ?? 0) > 0,
   );
@@ -97,10 +97,16 @@ export default function App() {
           taskCount={activeCount}
           hasStock={!!hotTask}
           onTap={refreshTasks}
+          onStockTap={hotTask ? () => navigate(`/tasks/${hotTask.id}`) : undefined}
         />
       )}
       <main className="mx-auto max-w-lg pb-24">
         <Outlet context={{ me, tasks, refreshTasks }} />
+        {location.pathname !== '/login' && location.pathname !== '/verify' && (
+          <footer className="px-4 pt-2 pb-6 text-center text-[11px] text-faint">
+            页面内所有时间为本地时间
+          </footer>
+        )}
       </main>
       <BottomNav />
     </div>
@@ -108,7 +114,7 @@ export default function App() {
 }
 
 export interface AppContext {
-  me: Me;
+  me: Me | null;
   tasks: Task[];
   refreshTasks: (status?: TaskStatusFilter) => Promise<void>;
 }

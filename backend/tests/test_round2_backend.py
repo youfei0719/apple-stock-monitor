@@ -330,6 +330,7 @@ def test_claim_device_tasks(db):
     db.commit()  # 真实流程中 register/login 随后 commit
     db.refresh(t)
     assert t.user_id == u.id
+    assert t.device_id is None  # N10：认领后清空 device_id，防重复认领/脏数据
     # 无 device 头：不迁移
     t2 = _task(db, user=None, device_id="devW", name="t2")
     assert auth_router._claim_device_tasks(db, _FakeRequest(None), u) == 0
@@ -367,3 +368,128 @@ def test_verify_email_flow(db):
         select(SystemConfig).where(SystemConfig.key == "email_code:v@example.com")
     ).scalar_one_or_none()
     assert row is None
+
+
+# ---------- 第三轮审查 round3：D1/D4/D7/N13 回归 ----------
+def test_read_engine_status_heartbeat(db):
+    # 无心跳 → stopped；60s 内心跳 → running
+    st = engine_mod.read_engine_status(db)
+    assert st["running"] is False
+    from app.services.engine import set_config
+
+    set_config(
+        db,
+        engine_mod.ENGINE_HEARTBEAT_KEY,
+        {"at": datetime.utcnow().isoformat() + "Z", "rounds_total": 7, "rounds_ok": 6},
+    )
+    st = engine_mod.read_engine_status(db)
+    assert st["running"] is True
+    assert st["rounds_total"] == 7 and st["rounds_ok"] == 6
+    # 61 秒前的心跳 → stopped
+    set_config(
+        db,
+        engine_mod.ENGINE_HEARTBEAT_KEY,
+        {
+            "at": (datetime.utcnow() - timedelta(seconds=61)).isoformat() + "Z",
+        },
+    )
+    assert engine_mod.read_engine_status(db)["running"] is False
+
+
+def test_lifecycle_sweep_throttled_every_60_ticks(db, eng, monkeypatch):
+    # N8：tick 用内存 in-memory 会话（engine 模块的 SessionLocal 指向真实 DB，测时替换）
+    class _Sess:
+        def __init__(self, s):
+            self.s = s
+
+        def close(self):
+            pass
+
+        def __getattr__(self, name):
+            return getattr(self.s, name)
+
+    monkeypatch.setattr(engine_mod, "SessionLocal", lambda: _Sess(db))
+    # tick 内部延迟 import lifecycle，直接 monkeypatch 模块属性
+    import app.services.lifecycle as lc
+
+    calls = []
+    monkeypatch.setattr(lc, "run_lifecycle_sweep", lambda d: calls.append(1) or {})
+    eng._lifecycle_tick = 0
+    eng.tick()  # 空库：_due_tasks 返回空，sweep 也不应跑
+    assert calls == []  # 第 1 个 tick 不跑 sweep
+    eng._lifecycle_tick = 59
+    eng.tick()
+    assert calls == [1]  # 第 60 个 tick 跑一次
+
+
+def test_membership_sweep_uses_new_tier_limit(db):
+    # D7：pending_tier=standard 到期切换后保留 10 个（不是 3 个）
+    from app.services.lifecycle import membership_sweep
+
+    u = _user(
+        db,
+        tier="pro",
+        days_left=-1,
+        email="d7t@example.com",
+    )
+    u.pending_tier = "standard"
+    db.add(u)
+    db.commit()
+    for i in range(12):
+        db.add(
+            MonitorTask(
+                user_id=u.id,
+                name=f"dt{i}",
+                part_number="MJYC4CH/A",
+                store_numbers=["R484"],
+            )
+        )
+    db.commit()
+    stats = membership_sweep(db)
+    db.refresh(u)
+    active = db.query(MonitorTask).filter_by(user_id=u.id, paused=False).count()
+    assert u.tier == "standard"
+    assert active == 10
+    assert stats["tasks_paused"] == 2
+
+
+def test_channels_drop_empty_webhook_urls():
+    # N13：url 为空/空白的 webhook 行在子模型校验前被过滤（不抛 422，直接丢弃）
+    from app.schemas import ChannelsIn
+
+    ch = ChannelsIn(
+        webhooks=[
+            {"url": "https://qyapi.weixin.qq.com/x", "platform": "wecom"},
+            {"url": "   ", "platform": "dingtalk"},
+            {"url": "", "platform": "feishu"},
+        ]
+    )
+    assert len(ch.webhooks) == 1
+    assert ch.webhooks[0].platform == "wecom"
+    # 非法 url 的行仍 422（过滤只管空行，不管格式错）
+    import pytest as _pt
+
+    from pydantic import ValidationError
+
+    with _pt.raises(ValidationError):
+        ChannelsIn(webhooks=[{"url": "ftp://x", "platform": "wecom"}])
+
+
+def test_me_returns_effective_tier(db):
+    # N2：/me 返回有效档位（付费过期按 free 算），与 /quota 口径一致
+    u = _user(db, tier="pro", days_left=-1, email="n2@example.com")
+    out = auth_router.me(u, db)
+    assert out.tier == "free"
+    assert out.quota["tasks_limit"] == 3
+    u2 = _user(db, tier="standard", days_left=10, email="n2b@example.com")
+    assert auth_router.me(u2, db).tier == "standard"
+
+
+def test_task_create_store_number_normalized(db):
+    # N7：门店号归一化后查重（r484 vs R484 视为同一任务）
+    from app.api.routers.tasks import _find_conflict
+
+    _task(db, user=_user(db, email="n7@example.com"), device_id=None)
+    u = db.execute(select(User).where(User.email == "n7@example.com")).scalar_one()
+    assert _find_conflict(db, u.id, None, "MJYC4CH/A", ["r484"]) is not None
+    assert _find_conflict(db, u.id, None, "MJYC4CH/A", ["R999"]) is None
