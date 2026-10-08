@@ -17,10 +17,11 @@ export class ApiError extends Error {
   }
 }
 
-async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function req<T>(path: string, init: RequestInit = {}, absolute = false): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}${path}`, {
+    // absolute=true 时跳过 API_BASE（如 /healthz 挂在站点根，不在 /api 下）
+    res = await fetch(absolute ? path : `${API_BASE}${path}`, {
       credentials: 'include',
       headers: { 'Content-Type': 'application/json', ...(init.headers ?? {}) },
       ...init,
@@ -68,8 +69,23 @@ export interface TaskChannels {
   email?: string;
 }
 
+export interface TaskLatestRow {
+  state: StockState;
+  pickup_display?: string | null;
+  store_pick_eligible?: boolean | null;
+  pickup_search_quote?: string | null;
+  updated_at?: string | null;
+}
+
+/** 后端 TaskOut.latest：{stores:{门店号:{part_number:行}}, available_count, total} */
+export interface TaskLatest {
+  stores: Record<string, Record<string, TaskLatestRow>>;
+  available_count: number;
+  total: number;
+}
+
 export interface Task {
-  id: string;
+  id: number;
   name: string;
   group?: string;
   category: 'iphone' | 'ipad' | 'mac' | 'watch' | string;
@@ -84,13 +100,39 @@ export interface Task {
   paused: boolean;
   expires_at: string | null;
   created_at: string;
-  /** 每任务最新状态摘要（后端聚合） */
-  summary?: {
-    state: StockState;
-    available_count: number;
-    total_count: number;
-    updated_at: string;
-    buy_url?: string;
+  /** 每任务最新状态摘要（后端聚合，snake_case） */
+  latest?: TaskLatest;
+}
+
+/** 从 latest 聚合展示用状态（Home/App 共用） */
+export function summarizeTask(task: Task): {
+  state: StockState;
+  availableCount: number;
+  total: number;
+  updatedAt?: string;
+} {
+  const latest = task.latest;
+  const rows: TaskLatestRow[] = [];
+  const stores = latest?.stores ?? {};
+  for (const parts of Object.values(stores)) {
+    for (const row of Object.values(parts ?? {})) rows.push(row);
+  }
+  let updatedAt: string | undefined;
+  for (const r of rows) {
+    if (r.updated_at && (!updatedAt || r.updated_at > updatedAt)) updatedAt = r.updated_at;
+  }
+  const states = rows.map((r) => r.state);
+  let state: StockState = 'unknown';
+  if (task.paused) state = 'paused';
+  else if (states.includes('available')) state = 'available';
+  else if (states.includes('verifying')) state = 'verifying';
+  else if (states.includes('cooling')) state = 'cooling';
+  else if (states.length > 0 && !states.every((s) => s === 'unknown')) state = 'unavailable';
+  return {
+    state,
+    availableCount: latest?.available_count ?? 0,
+    total: latest?.total ?? states.length,
+    updatedAt,
   };
 }
 
@@ -103,17 +145,19 @@ export interface Product {
 }
 
 export interface StateRow {
-  task_id: string;
+  store_number: string;
   part_number: string;
-  store: StoreRef;
   state: StockState;
-  pickupDisplay?: string;
-  storePickEligible?: boolean;
-  updated_at: string;
+  pickup_display?: string | null;
+  store_pick_eligible?: boolean | null;
+  pickup_search_quote?: string | null;
+  confirmed_count?: number;
+  last_event_at?: string | null;
+  updated_at?: string | null;
 }
 
 export interface Me {
-  id: string;
+  id: number;
   email: string;
   tier: Tier;
   quota: { push_used: number; push_limit: number; tasks_used: number; tasks_limit: number };
@@ -121,14 +165,15 @@ export interface Me {
 }
 
 export interface Plan {
-  id: Tier;
+  tier: Tier;
   name: string;
   price_cny: number;
-  period: string;
-  refresh_interval_sec: number;
-  task_limit: number;
+  tasks_limit: number;
   push_limit: number;
-  features: string[];
+  channels: string[];
+  history: boolean;
+  priority: boolean;
+  refresh_interval_sec: number;
 }
 
 export interface Quota {
@@ -142,65 +187,67 @@ export interface Quota {
 }
 
 export interface StockEvent {
-  id: string;
-  task_id: string;
-  task_name: string;
+  id: number;
+  task_id: number;
   part_number: string;
-  product_name: string;
-  store: StoreRef;
-  state: StockState;
+  title: string;
+  body: string;
+  link?: string | null;
+  channel: string;
   created_at: string;
-  buy_url?: string;
 }
 
 export interface ReleaseRecord {
+  day: string;
   part_number: string;
-  product_name: string;
-  city: string;
-  store_count: number;
-  first_seen_at: string;
-  last_seen_at: string;
+  events: number;
 }
 
 export interface RankingItem {
   city: string;
-  release_count: number;
-  available_count: number;
+  events: number;
 }
 
 export interface PollStats {
+  tasks: number;
+  polled_tasks: number;
+  success_rate: number | null;
+  avg_response_ms: number | null;
   last_poll_at: string | null;
-  success_rate: number;
-  avg_response_ms: number;
-  total_polls: number;
+  engine: unknown;
 }
 
-export interface GuideSection {
+export interface PurchaseGuide {
   title: string;
-  body: string;
+  steps: string[];
 }
 
 export interface Payment {
-  id: string;
+  id: number;
+  order_id: string;
   plan: string;
   amount_cny: number;
+  tier_from: string;
+  tier_to: string;
+  status: string;
   created_at: string;
-  expires_at: string;
-  source: string;
 }
 
 /* ---------------- 接口 ---------------- */
 
 export const api = {
-  health: () => req<{ status: string; db: boolean; engine: string; version: string }>('/healthz'),
+  // healthz 挂在站点根（/healthz），不在 /api 下
+  health: () =>
+    req<{ status: string; db: boolean; engine: string; version: string }>('/healthz', {}, true),
 
   register: (email: string, password: string) =>
-    req<{ id: string; email: string; tier: Tier }>('/auth/register', {
+    req<{ id: number; email: string; tier: Tier; totp_enabled: boolean }>('/auth/register', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     }),
+  // 登录成功：后端返回 {ok:true, totp_required:bool} + Set-Cookie(session_token)
   login: (email: string, password: string) =>
-    req<{ id: string; email: string; tier: Tier }>('/auth/login', {
+    req<{ ok: boolean; totp_required: boolean }>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     }),
@@ -212,11 +259,11 @@ export const api = {
     req<Task>('/tasks', { method: 'POST', body: JSON.stringify(payload) }),
   batchTasks: (payload: { part_numbers: string[]; store_numbers: string[]; name_template: string }) =>
     req<Task[]>('/tasks/batch', { method: 'POST', body: JSON.stringify(payload) }),
-  updateTask: (id: string, payload: Partial<Task>) =>
+  updateTask: (id: string | number, payload: Partial<Task>) =>
     req<Task>(`/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
-  deleteTask: (id: string) => req<void>(`/tasks/${id}`, { method: 'DELETE' }),
+  deleteTask: (id: string | number) => req<void>(`/tasks/${id}`, { method: 'DELETE' }),
 
-  taskStates: (id: string) => req<StateRow[]>(`/tasks/${id}/states`),
+  taskStates: (id: string | number) => req<StateRow[]>(`/tasks/${id}/states`),
 
   stores: (refresh = 0) => req<StoreRef[]>(`/catalog/stores?refresh=${refresh}`),
   products: (category: string) => req<Product[]>(`/catalog/products?category=${category}`),
@@ -239,7 +286,7 @@ export const api = {
   releases: (days = 7) => req<ReleaseRecord[]>(`/history/releases?days=${days}`),
   ranking: (days = 1) => req<RankingItem[]>(`/analytics/ranking?days=${days}`),
   analyticsOverview: () => req<Record<string, unknown>>('/analytics/overview'),
-  guide: () => req<GuideSection[]>('/guide/purchase'),
+  guide: () => req<PurchaseGuide>('/guide/purchase'),
   pollStats: () => req<PollStats>('/stats/poll'),
 
   quota: () => req<Quota>('/quota'),

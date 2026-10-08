@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { api, type StateRow } from '../lib/api';
+import { api, type StateRow, type StoreRef } from '../lib/api';
 import StockStateBadge from '../components/StockStateBadge';
 import { Card, ErrorState, LoadingState, EmptyState, PageHeader } from '../components/ui';
 
@@ -8,12 +8,19 @@ export default function TaskDetail() {
   const { id } = useParams<{ id: string }>();
   const [rows, setRows] = useState<StateRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [stores, setStores] = useState<StoreRef[] | null>(null);
 
   const load = async () => {
     if (!id) return;
     setError(null);
     try {
-      setRows(await api.taskStates(id));
+      const [s, cat] = await Promise.all([
+        api.taskStates(id),
+        // 门店名/城市用 store_number 查 catalog 补
+        api.stores().catch(() => [] as StoreRef[]),
+      ]);
+      setRows(s);
+      setStores(cat);
     } catch (e) {
       setError(e instanceof Error ? e.message : '加载失败');
       setRows(null);
@@ -24,6 +31,12 @@ export default function TaskDetail() {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  const storeMap = useMemo(() => {
+    const m = new Map<string, StoreRef>();
+    (stores ?? []).forEach((s) => m.set(s.number, s));
+    return m;
+  }, [stores]);
 
   const counts = (rows ?? []).reduce<Record<string, number>>((acc, r) => {
     acc[r.state] = (acc[r.state] ?? 0) + 1;
@@ -55,26 +68,36 @@ export default function TaskDetail() {
                 ))}
             </div>
             <div className="space-y-2.5">
-              {rows.map((r, i) => (
-                <Card key={i} className="p-3.5 flex items-center justify-between gap-3 rise-in">
-                  <div className="min-w-0">
-                    <p className="text-[15px] font-medium truncate">
-                      {r.store.name}
-                      <span className="text-sub font-normal"> · {r.store.city}</span>
-                    </p>
-                    <p className="mt-0.5 text-xs text-faint">
-                      <span className="mono">{r.part_number}</span>
-                      {r.pickupDisplay && <> · {r.pickupDisplay}</>}
-                    </p>
-                  </div>
-                  <div className="flex flex-col items-end gap-1 shrink-0">
-                    <StockStateBadge state={r.state} />
-                    <span className="mono text-[10px] text-faint">
-                      {new Date(r.updated_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
-                    </span>
-                  </div>
-                </Card>
-              ))}
+              {rows.map((r, i) => {
+                const info = storeMap.get(r.store_number);
+                return (
+                  <Card key={i} className="p-3.5 flex items-center justify-between gap-3 rise-in">
+                    <div className="min-w-0">
+                      <p className="text-[15px] font-medium truncate">
+                        {info?.name || r.store_number}
+                        {info?.city && (
+                          <span className="text-sub font-normal"> · {info.city}</span>
+                        )}
+                      </p>
+                      <p className="mt-0.5 text-xs text-faint">
+                        <span className="mono">{r.part_number}</span>
+                        {r.pickup_display && <> · {r.pickup_display}</>}
+                      </p>
+                    </div>
+                    <div className="flex flex-col items-end gap-1 shrink-0">
+                      <StockStateBadge state={r.state} />
+                      <span className="mono text-[10px] text-faint">
+                        {r.updated_at
+                          ? new Date(r.updated_at).toLocaleTimeString('zh-CN', {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })
+                          : ''}
+                      </span>
+                    </div>
+                  </Card>
+                );
+              })}
             </div>
           </>
         )}

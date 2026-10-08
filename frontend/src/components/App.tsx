@@ -73,7 +73,8 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const hotTask = tasks.find((t) => t.summary?.state === 'available' && !t.paused);
+  // 后端 latest 无 buy_url（通知直达链接只在通知里生成），有货时不再传 buyUrl
+  const hotTask = tasks.find((t) => !t.paused && (t.latest?.available_count ?? 0) > 0);
   const activeCount = tasks.filter((t) => !t.paused).length;
 
   if (me === undefined) {
@@ -92,7 +93,6 @@ export default function App() {
         <IslandStatus
           taskCount={activeCount}
           hasStock={!!hotTask}
-          buyUrl={hotTask?.summary?.buy_url}
           onTap={refreshTasks}
         />
       )}

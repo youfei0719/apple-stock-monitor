@@ -11,6 +11,32 @@ const TIER_LABEL: Record<string, string> = {
   pro: 'Pro',
 };
 
+const CHANNEL_LABEL: Record<string, string> = {
+  page: '站内',
+  email: '邮件',
+  sms: '短信',
+  bark: 'Bark',
+};
+
+/** 按后端 GET /plans 实际字段（tier/name/price_cny/tasks_limit/push_limit/channels/history/priority/refresh_interval_sec）渲染 */
+function planFeatures(p: Plan): string[] {
+  const channels = p.channels.map((c) => CHANNEL_LABEL[c] ?? c).join('、');
+  const feats = [
+    `推送渠道：${channels}`,
+    `监控任务 ${p.tasks_limit} 个`,
+    `月推送 ${p.push_limit} 次`,
+    `刷新间隔 ${p.refresh_interval_sec} 秒`,
+  ];
+  if (p.history) feats.push('完整历史数据');
+  if (p.priority) feats.push('高峰期优先查询');
+  return feats;
+}
+
+function planPeriodLabel(p: Plan): string {
+  if (p.price_cny === 0) return '免费';
+  return `¥${p.price_cny} / 月`;
+}
+
 function QuotaBar({ label, used, limit }: { label: string; used: number; limit: number }) {
   const pct = limit > 0 ? Math.min(100, (used / limit) * 100) : 0;
   return (
@@ -74,7 +100,7 @@ export default function Me() {
                 {TIER_LABEL[me.tier] ?? me.tier}
               </p>
             </div>
-            <span className="mono text-xs text-white/60">{me.id.slice(0, 8)}</span>
+            <span className="mono text-xs text-white/60">#{String(me.id)}</span>
           </div>
           {quota && (
             <div className="mt-4 space-y-3">
@@ -100,10 +126,10 @@ export default function Me() {
           {!error && plans !== null && plans.length > 0 && (
             <div className="grid grid-cols-2 gap-2.5">
               {plans.map((p) => {
-                const current = p.id === me.tier;
+                const current = p.tier === me.tier;
                 return (
                   <Card
-                    key={p.id}
+                    key={p.tier}
                     className={`p-4 rise-in ${current ? 'ring-2 ring-accent' : ''}`}
                   >
                     <div className="flex items-center justify-between">
@@ -114,18 +140,15 @@ export default function Me() {
                         </span>
                       )}
                     </div>
-                    <p className="mt-2">
-                      <span className="mono text-xl font-semibold">
-                        {p.price_cny === 0 ? '免费' : `¥${p.price_cny}`}
-                      </span>
-                      {p.price_cny > 0 && <span className="text-xs text-faint"> / {p.period}</span>}
-                    </p>
+                    <p className="mt-2 mono text-xl font-semibold">{planPeriodLabel(p)}</p>
                     <ul className="mt-2 space-y-1">
-                      {p.features.slice(0, 4).map((f) => (
-                        <li key={f} className="text-xs text-sub">
-                          · {f}
-                        </li>
-                      ))}
+                      {planFeatures(p)
+                        .slice(0, 4)
+                        .map((f) => (
+                          <li key={f} className="text-xs text-sub">
+                            · {f}
+                          </li>
+                        ))}
                     </ul>
                   </Card>
                 );
@@ -165,6 +188,8 @@ export default function Me() {
                     <p className="text-sm font-medium">{p.plan}</p>
                     <p className="mono text-[11px] text-faint">
                       {new Date(p.created_at).toLocaleDateString('zh-CN')}
+                      {' · '}
+                      {p.order_id}
                     </p>
                   </div>
                   <span className="mono text-sm">¥{p.amount_cny}</span>

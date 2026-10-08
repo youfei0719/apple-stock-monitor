@@ -35,6 +35,8 @@ export default function AddMonitor() {
   const [nameTemplate, setNameTemplate] = useState('');
   const [group, setGroup] = useState('');
   const [mode, setMode] = useState<'instant' | 'confirmed'>('instant');
+  // 连续确认模式下的重复提醒间隔（秒）；后端字段 repeat_interval_sec 已存在，batch 接口走 PATCH 补齐
+  const [repeatInterval, setRepeatInterval] = useState('');
   const [barkKey, setBarkKey] = useState('');
   const [email, setEmail] = useState('');
 
@@ -118,17 +120,22 @@ export default function AddMonitor() {
       const created = await api.batchTasks({
         part_numbers: partNumbers,
         store_numbers,
-        name_template: nameTemplate.trim() || '{product} · {store}',
+        // 后端只替换 {part_number} / {store_number}，模板必须用这两个占位符
+        name_template: nameTemplate.trim() || '{part_number} × {store_number}',
       });
       // batch 接口只接受 part_numbers/store_numbers/name_template，
-      // mode / group / 渠道按契约走 PATCH 逐个补齐
+      // mode / group / 渠道 / repeat_interval_sec 按契约走 PATCH 逐个补齐
       const channels: TaskChannels = {};
       if (barkKey.trim()) channels.bark_key = barkKey.trim();
       if (email.trim()) channels.email = email.trim();
       const patch: Partial<Task> = { mode };
       if (group.trim()) patch.group = group.trim();
       if (Object.keys(channels).length > 0) patch.channels = channels;
-      if (mode !== 'instant' || patch.group || patch.channels) {
+      const ri = parseInt(repeatInterval, 10);
+      if (mode === 'confirmed' && repeatInterval.trim() && Number.isFinite(ri) && ri > 0) {
+        patch.repeat_interval_sec = ri;
+      }
+      if (mode !== 'instant' || patch.group || patch.channels || patch.repeat_interval_sec) {
         await Promise.all(created.map((t) => api.updateTask(t.id, patch)));
       }
       await refreshTasks();
@@ -286,7 +293,7 @@ export default function AddMonitor() {
             <input
               value={nameTemplate}
               onChange={(e) => setNameTemplate(e.target.value)}
-              placeholder="任务命名模板，如：{product} · {store}"
+              placeholder="任务命名模板，如：{part_number} × {store_number}"
               className="w-full px-3 py-2.5 rounded-card-sm bg-bg text-sm outline-none placeholder:text-faint"
             />
             <div className="flex gap-2">
@@ -315,6 +322,15 @@ export default function AddMonitor() {
                 </button>
               ))}
             </div>
+            {mode === 'confirmed' && (
+              <input
+                value={repeatInterval}
+                onChange={(e) => setRepeatInterval(e.target.value)}
+                inputMode="numeric"
+                placeholder="持续提醒间隔（秒），留空则持续有货只提醒一次"
+                className="w-full px-3 py-2.5 rounded-card-sm bg-bg text-sm outline-none placeholder:text-faint mono"
+              />
+            )}
             <input
               value={barkKey}
               onChange={(e) => setBarkKey(e.target.value)}

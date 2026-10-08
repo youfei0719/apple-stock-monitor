@@ -1,14 +1,13 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, type Task } from '../lib/api';
+import { api, summarizeTask, type Task } from '../lib/api';
 import { useApp } from '../components/App';
 import StockStateBadge from '../components/StockStateBadge';
 import { Card, EmptyState, ErrorState, LoadingState, PageHeader } from '../components/ui';
 
 function TaskCard({ task, onChanged }: { task: Task; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
-  const summary = task.summary;
-  const state = task.paused ? 'paused' : (summary?.state ?? 'unknown');
+  const { state, availableCount, total, updatedAt } = summarizeTask(task);
 
   const togglePause = async () => {
     setBusy(true);
@@ -50,16 +49,18 @@ function TaskCard({ task, onChanged }: { task: Task; onChanged: () => void }) {
           </div>
           <StockStateBadge state={state} />
         </div>
-        {summary && (
+        {(total > 0 || updatedAt) && (
           <div className="mt-3 flex items-center justify-between text-xs text-sub">
             <span>
-              有货 <span className="mono text-ink">{summary.available_count}</span>
+              有货 <span className="mono text-ink">{availableCount}</span>
               {' / '}
-              <span className="mono">{summary.total_count}</span> 个组合
+              <span className="mono">{total}</span> 个组合
             </span>
-            <span>
-              更新于 <span className="mono">{fmtTime(summary.updated_at)}</span>
-            </span>
+            {updatedAt && (
+              <span>
+                更新于 <span className="mono">{fmtTime(updatedAt)}</span>
+              </span>
+            )}
           </div>
         )}
       </Link>
