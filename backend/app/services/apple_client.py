@@ -103,6 +103,24 @@ class BaseProvider:
 
         return make_client(timeout=self.timeout, proxy=self._proxy())
 
+    def _http_get(
+        self, client: httpx.Client, url: str, params: list[tuple[str, str]]
+    ) -> httpx.Response:
+        """GET 请求；传输层异常翻译为 AppleError。
+
+        R16-P2-1：httpx.RequestError（ConnectError/TimeoutException 等）必须收敛到
+        AppleError 体系——引擎 `_poll_group` 只接 AppleError（标 unknown 并继续其他
+        分组），门店目录刷新 `_do_refresh_stores` 的全失败分支只清 REFRESH_AT_KEY
+        （原样上抛会锁住管理员 1 小时）。注意：不要归入 AppleRateLimitError，
+        传输失败不应触发指数退避冷却。
+        """
+        try:
+            return client.get(url, params=params, headers=self._headers())
+        except httpx.RequestError as e:
+            raise AppleError(
+                f"{self.name} transport error ({type(e).__name__}): {e}"
+            ) from e
+
     def _parse_stores(self, data: dict, want_parts: list[str]) -> list[StockResult]:
         results: list[StockResult] = []
         body = data.get("body") or {}
@@ -142,9 +160,7 @@ class PickupMessageProvider(BaseProvider):
 
     def _get(self, params: list[tuple[str, str]]) -> dict:
         with self._client() as client:
-            resp = client.get(
-                f"{BASE}/shop/retail/pickup-message", params=params, headers=self._headers()
-            )
+            resp = self._http_get(client, f"{BASE}/shop/retail/pickup-message", params)
         if resp.status_code in (403, 541):
             raise AppleRateLimitError(f"HTTP {resp.status_code} from {self.name}")
         if resp.status_code != 200:
@@ -191,9 +207,7 @@ class FulfillmentMessagesProvider(BaseProvider):
         for s in store_numbers:
             params.append(("store", s))
         with self._client() as client:
-            resp = client.get(
-                f"{BASE}/shop/fulfillment-messages", params=params, headers=self._headers()
-            )
+            resp = self._http_get(client, f"{BASE}/shop/fulfillment-messages", params)
         if resp.status_code in (403, 541):
             raise AppleRateLimitError(f"HTTP {resp.status_code} from {self.name}")
         if resp.status_code != 200:

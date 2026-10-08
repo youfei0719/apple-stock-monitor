@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Activity, Inbox, Gauge, ShieldCheck, Zap, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
@@ -100,6 +100,16 @@ const AUDIT_ACTION_LABEL: Record<string, string> = {
   'system.peak_mode': '高峰模式切换',
 }
 
+// R16-P2-2：门店目录刷新后端全局限流 1 次/小时，前端 429 后同口径冷却
+const REFRESH_COOLDOWN_MS = 60 * 60 * 1000
+
+// R16-P2-2：冷却剩余倒计时格式化（mm:ss）
+function fmtCooldownLeft(ms: number): string {
+  const s = Math.max(0, Math.ceil(ms / 1000))
+  const m = Math.floor(s / 60)
+  return `${m}:${String(s % 60).padStart(2, '0')}`
+}
+
 export function System() {
   const [sys, setSys] = useState<SystemStatus | null>(null)
   const [audit, setAudit] = useState<AuditEntry[] | null>(null)
@@ -112,6 +122,49 @@ export function System() {
   // R14-P2-1：门店目录刷新状态
   const [refreshBusy, setRefreshBusy] = useState(false)
   const [refreshCooling, setRefreshCooling] = useState(false)
+  // R16-P2-2：429 冷却倒计时——此前 refreshCooling 置 true 后无任何清除路径
+  // （唯一清零是成功刷新，但按钮已禁用调不到），只能手动刷页面。本轮改为
+  // 60 分钟 setTimeout 自动解禁 + 徽章显示剩余倒计时。
+  const [refreshCooldownUntil, setRefreshCooldownUntil] = useState<number | null>(
+    null,
+  )
+  const refreshCooldownTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [nowMs, setNowMs] = useState(() => Date.now())
+
+  function clearRefreshCooldown() {
+    if (refreshCooldownTimer.current) {
+      clearTimeout(refreshCooldownTimer.current)
+      refreshCooldownTimer.current = null
+    }
+    setRefreshCooling(false)
+    setRefreshCooldownUntil(null)
+  }
+
+  function startRefreshCooldown() {
+    if (refreshCooldownTimer.current) {
+      clearTimeout(refreshCooldownTimer.current)
+    }
+    setRefreshCooling(true)
+    setRefreshCooldownUntil(Date.now() + REFRESH_COOLDOWN_MS)
+    refreshCooldownTimer.current = setTimeout(() => {
+      refreshCooldownTimer.current = null
+      setRefreshCooling(false)
+      setRefreshCooldownUntil(null)
+    }, REFRESH_COOLDOWN_MS)
+  }
+
+  // 冷却中每秒刷新倒计时显示；卸载时清定时器
+  useEffect(() => {
+    if (!refreshCooling) return
+    const id = setInterval(() => setNowMs(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [refreshCooling])
+
+  useEffect(() => {
+    return () => {
+      if (refreshCooldownTimer.current) clearTimeout(refreshCooldownTimer.current)
+    }
+  }, [])
   const [catalogRefreshedAt, setCatalogRefreshedAt] = useState<string | null>(null)
 
   // R8-U-4：日志直接取 sys.log_tail，不再单独调 getLogTail（原先 /api/admin/system 被请求两次）
@@ -161,7 +214,7 @@ export function System() {
     setRefreshBusy(true)
     try {
       const stores = await refreshCatalog()
-      setRefreshCooling(false)
+      clearRefreshCooldown()
       setCatalogRefreshedAt(new Date().toISOString())
       toast.success(
         `门店目录刷新已触发（后台异步进行中），当前目录 ${stores.length} 家`,
@@ -173,7 +226,7 @@ export function System() {
         e instanceof AdminApiError &&
         (e.status === 429 || e.code === 'refresh_limited')
       ) {
-        setRefreshCooling(true)
+        startRefreshCooldown()
         toast.error('门店目录刷新限流：每小时 1 次，请稍后再试')
       } else {
         toast.error(e instanceof Error ? e.message : '刷新门店目录失败')
@@ -345,7 +398,11 @@ export function System() {
                 刷新门店目录
                 {refreshCooling && (
                   <Badge className='rounded-full bg-[#ff9f0a]/10 text-[#b26a00]'>
-                    ● 冷却中（每小时 1 次）
+                    ● 冷却中（
+                    {refreshCooldownUntil
+                      ? fmtCooldownLeft(refreshCooldownUntil - nowMs)
+                      : '每小时 1 次'}
+                    后可再试）
                   </Badge>
                 )}
               </CardTitle>
