@@ -32,6 +32,9 @@ class UserOut(BaseModel):
     totp_enabled: bool
     # R6-I4/I9：注册时认领 device 任务的提示（如"密钥已清空请重新配置"）
     notice: str | None = None
+    # R9-I15：注册时验证码邮件是否首发成功（失败只记日志不阻断注册，
+    # 前端据此提示用户去"我"页重发）
+    email_sent: bool = False
 
 
 class MeOut(BaseModel):

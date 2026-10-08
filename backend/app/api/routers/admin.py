@@ -5,12 +5,12 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import desc, func, select, text
+from sqlalchemy import desc, func, or_, select, text, update
 from sqlalchemy.orm import Session
 
 from app.api.deps import _client_ip, get_current_admin
 from app.api.errors import APIError
-from app.api.routers.pay import apply_tier_grant
+from app.api.routers.pay import TIER_RANK, apply_tier_grant
 from app.core.db import get_db
 from app.core.logging import get_logger
 from app.core.tiers import VALID_TIERS
@@ -26,7 +26,7 @@ from app.models.models import (
 )
 from app.schemas import AdminUserPatchIn
 from app.services.engine import PEAK_MODE_KEY, get_config, read_engine_status
-from app.services.lifecycle import converge_task_limit
+from app.services.lifecycle import converge_task_limit, resume_tier_limited_tasks
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 log = get_logger("admin")
@@ -95,8 +95,21 @@ def overview(admin: User = Depends(get_current_admin), db: Session = Depends(get
     revenue = db.execute(
         select(func.coalesce(func.sum(Payment.amount_cny), 0)).where(Payment.status == "paid")
     ).scalar()
+    # R9-D5：active_tasks 与 GET /tasks?status=active 口径对齐——tasks._is_expired
+    # 的确切谓词是"expires_at < now 且未手动暂停"，active = not expired，即
+    # paused 或 expires_at 为空或未到期（注意：含已手动暂停的任务，与原
+    # paused IS False 口径不同；原口径把"已过期但未暂停"也算成 active）。
+    now = datetime.utcnow()
     active_tasks = db.execute(
-        select(func.count()).select_from(MonitorTask).where(MonitorTask.paused.is_(False))
+        select(func.count())
+        .select_from(MonitorTask)
+        .where(
+            or_(
+                MonitorTask.paused.is_(True),
+                MonitorTask.expires_at.is_(None),
+                MonitorTask.expires_at >= now,
+            )
+        )
     ).scalar()
     # 待处理支付（断裂-15/16）：未认领订单 + 金额异常 + 未知 plan（R4-P1-D5）
     unclaimed = db.execute(
@@ -193,6 +206,9 @@ def patch_user(
             setattr(data, _f, as_naive_utc(getattr(data, _f)))
     changes = {}
     notices = []
+    # R9-I14：改档前记录旧档位/旧到期时间，用于判定"档位提升/续费成功"
+    old_tier = target.tier
+    old_expires = target.tier_expires_at
     if data.tier is not None:
         if data.tier not in VALID_TIERS:
             raise APIError(400, "tier 非法", "bad_tier")
@@ -270,6 +286,22 @@ def patch_user(
             t.paused_reason = "manual"
             db.add(t)
         changes["paused_tasks"] = len(tasks)
+    # R9-I14：档位提升/续费成功后，自动恢复因档位超限被暂停的任务。
+    # 判定：新档位是付费档且到期时间有效，且（档位升级 / 从非付费档变为付费 /
+    # 到期时间被延长）。降档（free/trial）或无实质变化时不触发。
+    if (
+        target.tier in ("standard", "pro")
+        and target.tier_expires_at is not None
+        and target.tier_expires_at > datetime.utcnow()
+        and (
+            TIER_RANK.get(target.tier, 0) > TIER_RANK.get(old_tier, 0)
+            or old_tier not in ("standard", "pro")
+            or (old_expires is not None and target.tier_expires_at > old_expires)
+        )
+    ):
+        resumed = resume_tier_limited_tasks(db, target)
+        if resumed:
+            notices.append(f"自动恢复 {len(resumed)} 个因档位超限被暂停的监控任务")
     db.add(target)
     audit(db, admin, "user.patch", "user", user_id, changes, _client_ip(request))
     db.commit()
@@ -379,8 +411,10 @@ def claim_payment(
     if not p:
         raise APIError(404, "订单不存在", "not_found")
     # R8-I-6：订单状态守卫——已退款（refunded）/已关闭（resolved）/其他终态
-    # 订单不可再认领，否则会开通出幽灵会员（refund/close 之后仍可 claim）
-    if p.status not in ("paid", "amount_mismatch", "unknown_plan"):
+    # 订单不可再认领，否则会开通出幽灵会员（refund/close 之后仍可 claim）。
+    # R9-I2：unknown_plan 不再可认领——它的 tier_to 恒为空，认领必 400
+    # bad_tier；正确路径是 POST /payments/{id}/close 直接关闭。
+    if p.status not in ("paid", "amount_mismatch"):
         raise APIError(400, f"订单状态 {p.status} 不可认领", "bad_status")
     if p.user_id is not None:
         raise APIError(400, "订单已被认领", "already_claimed")
@@ -390,14 +424,31 @@ def claim_payment(
     tier_to = p.tier_to
     if tier_to not in ("standard", "pro"):
         raise APIError(400, f"订单档位异常：{tier_to}", "bad_tier")
+    # R9-D2：原子认领——先占住订单再开会员。并发双击下两个请求都会读到
+    # user_id=None 并各自执行 apply_tier_grant（原子 UPDATE 每次 +30 天，
+    # 用户会多得 30 天）。带条件的 UPDATE + rowcount 校验保证只有一个请求
+    # 能绑定成功，失败方按 already_claimed 处理，不再二次开会员。
+    claimed = db.execute(
+        update(Payment)
+        .where(Payment.id == p.id, Payment.user_id.is_(None))
+        .values(user_id=user.id)
+    ).rowcount
+    if claimed != 1:
+        db.rollback()
+        raise APIError(400, "订单已被认领", "already_claimed")
+    p.user_id = user.id  # 同步 ORM 状态（原子 UPDATE 绕过了 ORM）
     old_tier = (user.tier, user.tier_expires_at.isoformat() if user.tier_expires_at else None)
     # R4-P1-D3：复用 webhook 的 apply_tier_grant（升级立即生效 / 降级到期生效），
     # 不再内联直接 user.tier = tier_to（此前管理员认领 standard 给在效期 pro
     # 用户会立即降级，与 webhook 口径矛盾）。
     grant_result = apply_tier_grant(db, user, tier_to)
     db.add(user)
-    # 补单联动回填 Payment.user_id（断裂-17）
-    p.user_id = user.id
+    notices = []
+    if grant_result == "granted":
+        # R9-I14：升级/续费成功后，自动恢复因档位超限被暂停的任务
+        resumed = resume_tier_limited_tasks(db, user)
+        if resumed:
+            notices.append(f"自动恢复 {len(resumed)} 个因档位超限被暂停的监控任务")
     # D4：认领成功后 amount_mismatch 从待处理队列移除（status=resolved），
     # 待处理计数同步递减
     pending_count = None
@@ -423,6 +474,7 @@ def claim_payment(
         "pending_tier": user.pending_tier,
         "tier_expires_at": user.tier_expires_at.isoformat() + "Z" if user.tier_expires_at else None,
         "payment_status": p.status,
+        "notices": notices,
     }
     if pending_count is not None:
         out["pending_count"] = pending_count

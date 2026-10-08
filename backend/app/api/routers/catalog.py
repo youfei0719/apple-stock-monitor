@@ -117,8 +117,14 @@ def _do_refresh_stores() -> None:
     try:
         client = AppleClient()
         anchors = get_config(db, CITY_ANCHORS_KEY, {}).get("anchors", SEED_CITY_ANCHORS)
+        # R9-D1：以现有目录为底再合并——任一 anchor 抛 AppleError 时，不再删掉
+        # 失败 anchor 的门店（含种子店）；只覆盖成功刷到的部分。
         merged: dict[str, dict] = {}
+        for s in get_config(db, STORE_CATALOG_KEY, {}).get("stores", []):
+            if s.get("number"):
+                merged[s["number"]] = s
         errors = 0
+        refreshed_any = False
         for anchor in anchors:
             try:
                 for s in client.discover_stores(anchor):
@@ -129,6 +135,7 @@ def _do_refresh_stores() -> None:
                             "city": s.get("city", "") or anchor,
                             "province": "",
                         }
+                refreshed_any = True
             except AppleRateLimitError as e:
                 log.warning("catalog_refresh_rate_limited", anchor=anchor, error=str(e))
                 # R6-P2-11：被 Apple 限流放弃时把占位时间清零——占位写的是
@@ -138,7 +145,7 @@ def _do_refresh_stores() -> None:
             except AppleError as e:
                 errors += 1
                 log.warning("catalog_refresh_anchor_failed", anchor=anchor, error=str(e))
-        if merged:
+        if refreshed_any and merged:
             set_config(
                 db,
                 STORE_CATALOG_KEY,
@@ -146,6 +153,13 @@ def _do_refresh_stores() -> None:
             )
             set_config(db, REFRESH_AT_KEY, {"at": time.time()})
             log.info("catalog_refreshed", stores=len(merged), anchor_errors=errors)
+        elif merged:
+            # 全部 anchor 失败：保留旧目录、不覆盖、不推进刷新时间，下轮重试
+            log.warning(
+                "catalog_refresh_all_failed_kept_existing",
+                anchor_errors=errors,
+                kept=len(merged),
+            )
         else:
             log.warning("catalog_refresh_empty", anchor_errors=errors)
     except Exception as e:

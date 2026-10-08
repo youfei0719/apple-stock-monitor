@@ -30,6 +30,7 @@ from app.core.db import get_db
 from app.core.logging import get_logger
 from app.core.tiers import effective_tier
 from app.models.models import Payment, User
+from app.services.lifecycle import resume_tier_limited_tasks
 
 router = APIRouter(tags=["pay"])
 log = get_logger("pay")
@@ -46,7 +47,12 @@ AMOUNT_MISMATCH_PENDING_KEY = "payments_amount_mismatch_pending"
 
 
 def _resolve_user(db: Session, remark: str, user_id_raw: str) -> User | None:
-    """关联用户：优先 remark 中填写的 user_id / email，再看回调自带 user_id。"""
+    """关联用户：优先 remark 中填写的 user_id / email，再看回调自带 user_id。
+
+    R9-I3：remark 先 strip().lower() 再比对（register/login/resend 已统一
+    归一化；爱发电备注里 " Foo@X.com " 不处理会查不到用户）。
+    """
+    remark = remark.strip().lower()
     user: User | None = None
     if remark.isdigit():
         user = db.get(User, int(remark))
@@ -281,6 +287,7 @@ async def afdian_webhook(request: Request, db: Session = Depends(get_db)):
     user = _resolve_user(db, remark, user_id_raw)
 
     tier_from = effective_tier(user) if user else ""
+    notices: list[str] = []
     if user:
         result = apply_tier_grant(db, user, tier_to)
         if result == "downgrade_pending":
@@ -291,6 +298,11 @@ async def afdian_webhook(request: Request, db: Session = Depends(get_db)):
                 tier_from=tier_from,
                 pending_tier=tier_to,
             )
+        elif result == "granted":
+            # R9-I14：升级/续费成功后，自动恢复因档位超限被暂停的任务
+            resumed = resume_tier_limited_tasks(db, user)
+            if resumed:
+                notices.append(f"自动恢复 {len(resumed)} 个因档位超限被暂停的监控任务")
 
     row = _add_payment_atomic(
         db,
@@ -309,7 +321,7 @@ async def afdian_webhook(request: Request, db: Session = Depends(get_db)):
         return {"ok": True, "duplicate": True}
     db.commit()
     log.info("afdian_paid", order_id=order_id, tier_to=tier_to, user_id=user.id if user else None)
-    return {"ok": True, "tier": tier_to, "user_id": user.id if user else None}
+    return {"ok": True, "tier": tier_to, "user_id": user.id if user else None, "notices": notices}
 
 
 @router.get("/payments")

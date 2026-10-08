@@ -6,7 +6,7 @@
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Header, Query, Request
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -17,8 +17,9 @@ from app.core.logging import get_logger
 from app.core.ratelimit import check_rate_limit
 from app.core.tiers import effective_tier, effective_tier_of, tier_of
 from app.core.timeutil import as_naive_utc as _as_naive_utc
-from app.models.models import IdempotencyRecord, MonitorTask, Notification, StockState, User
+from app.models.models import IdempotencyRecord, MonitorTask, StockState, User
 from app.schemas import TaskBatchIn, TaskCreateIn, TaskOut, TaskPatchIn
+from app.services.lifecycle import null_notification_task_ids
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 log = get_logger("tasks")
@@ -38,6 +39,10 @@ TRIAL_MAX_TTL = timedelta(hours=24)
 # 任务创建接口 IP 维度限流：20 次/小时/IP
 TASK_CREATE_LIMIT = 20
 TASK_CREATE_WINDOW_SEC = 3600
+# R9-O2：批量创建独立 IP 限流（第二层，档位 tasks_limit 之外；单次批量可建
+# 多个任务，配额比单建高）
+BATCH_CREATE_LIMIT = 10
+BATCH_CREATE_WINDOW_SEC = 3600
 
 
 # R8-B0-3：归一化实现已提升到 app.core.timeutil（公共模块），此处保留
@@ -439,6 +444,13 @@ def batch_create(
     db: Session = Depends(get_db),
 ):
     """门店 × 型号批量生成任务。"""
+    # R9-O2：独立 IP 限流（单建是 task_create:ip，这里另起 key 另计）
+    if not check_rate_limit(
+        f"batch_create:{_client_ip(request)}",
+        limit=BATCH_CREATE_LIMIT,
+        window_sec=BATCH_CREATE_WINDOW_SEC,
+    ):
+        raise APIError(429, "批量创建过于频繁，请稍后再试", "rate_limited")
     # R6-P2-10：幂等键——重复 key 直接返回首次批量创建的任务
     idem_key = (request.headers.get(IDEMPOTENCY_KEY_HEADER) or "").strip()[
         :IDEMPOTENCY_KEY_MAXLEN
@@ -604,11 +616,12 @@ def delete_task(
     x_device_id: str | None = Header(default=None),
 ):
     task = _get_owned(task_id, user, x_device_id, db)
-    # R5-B-2：db.py 未设 PRAGMA foreign_keys=ON，SQLite 层 FK 的 ondelete="SET NULL"
-    # 不会触发——删任务前显式把关联通知的 task_id 置 NULL（通知靠 part_number
-    # 快照列保留型号信息，见 B-N2），否则通知悬空、历史 join 丢数据。
-    # （StockState 有 ORM cascade="all,delete" 兜底，无需显式处理。）
-    db.execute(update(Notification).where(Notification.task_id == task.id).values(task_id=None))
+    # R9-I1：删前置空抽成公共函数（lifecycle.null_notification_task_ids），
+    # 与 task_expiry_sweep 的 trial 删除共用——db.py 未设 PRAGMA foreign_keys=ON，
+    # SQLite 层 FK 的 ondelete="SET NULL" 不会触发。通知靠 part_number 快照列
+    # 保留型号信息（见 B-N2）。（StockState 有 ORM cascade="all,delete" 兜底，
+    # 无需显式处理。）
+    null_notification_task_ids(db, task.id)
     db.delete(task)
     db.commit()
     log.info("task_deleted", task_id=task_id)

@@ -11,7 +11,7 @@
 
 from datetime import datetime, timedelta
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.logging import get_logger
@@ -23,6 +23,9 @@ from app.models.models import (
     StockState,
     SystemConfig,
     User,
+)
+from app.models.models import (
+    Session as DbSession,
 )
 from app.services.notifier import build_product_link
 
@@ -107,6 +110,68 @@ def converge_task_limit(
     if paused:
         log.info("tasks_converged", user_id=user.id, tier=effective_tier(user), paused=len(paused))
     return paused
+
+
+def null_notification_task_ids(db: Session, task_id: int) -> int:
+    """删任务前把关联通知的 task_id 置 NULL（R9-I1 公共函数）。
+
+    db.py 未设 PRAGMA foreign_keys=ON，SQLite 层 FK 的 ondelete="SET NULL"
+    不会触发——必须显式置空，否则删任务后通知悬空、历史 join 丢数据。
+    通知靠 part_number 快照列保留型号信息（见 B-N2）。tasks.delete_task 与
+    task_expiry_sweep 的 trial 删除共用本函数。返回被置空的行数。
+    """
+    n = db.execute(
+        update(Notification).where(Notification.task_id == task_id).values(task_id=None)
+    ).rowcount
+    if n:
+        log.info("notification_task_ids_nulled", task_id=task_id, count=n)
+    return n
+
+
+def resume_tier_limited_tasks(db: Session, user: User) -> list[MonitorTask]:
+    """R9-I14：档位提升/续费成功后，自动恢复因档位超限被暂停的任务。
+
+    只恢复 paused_reason == "tier_limit" 的任务（降档时 converge_task_limit
+    置的；manual/quota_exhausted 等其他原因的不动）；按新档位 tasks_limit
+    限额、优先恢复最近更新的任务；恢复后清空 paused_reason。
+    webhook / admin claim / admin 改档三条升级路径共用。返回被恢复的任务。
+    """
+    keep_limit = TIERS.get(effective_tier(user), TIERS["free"])["tasks_limit"]
+    paused = (
+        db.execute(
+            select(MonitorTask)
+            .where(
+                MonitorTask.user_id == user.id,
+                MonitorTask.paused.is_(True),
+                MonitorTask.paused_reason == "tier_limit",
+            )
+            .order_by(MonitorTask.updated_at.desc())
+        )
+        .scalars()
+        .all()
+    )
+    if not paused:
+        return []
+    active_count = db.execute(
+        select(func.count())
+        .select_from(MonitorTask)
+        .where(MonitorTask.user_id == user.id, MonitorTask.paused.is_(False))
+    ).scalar()
+    slots = max(keep_limit - (active_count or 0), 0)
+    resumed = paused[:slots]
+    for t in resumed:
+        t.paused = False
+        t.paused_reason = None
+        db.add(t)
+    if resumed:
+        log.info(
+            "tier_limited_tasks_resumed",
+            user_id=user.id,
+            tier=effective_tier(user),
+            resumed=len(resumed),
+            still_paused=len(paused) - len(resumed),
+        )
+    return resumed
 
 
 def _sys_notify(
@@ -370,6 +435,8 @@ def task_expiry_sweep(db: Session) -> dict:
         .all()
     )
     for t in old_trials:
+        # R9-I1：先置空再删（复用公共函数），否则通知悬空
+        null_notification_task_ids(db, t.id)
         db.delete(t)
         stats["trial_deleted"] += 1
         log.info("trial_task_deleted", task_id=t.id)
@@ -486,6 +553,8 @@ API_HITS_RETENTION_DAYS = 90
 API_HITS_PRUNE_KEY = "api_hits_pruned_at"
 NOTIFICATIONS_RETENTION_DAYS = 90
 NOTIFICATIONS_PRUNE_KEY = "notifications_pruned_at"
+# R9-O4：sessions 清理的每日去重 key
+SESSIONS_PRUNE_KEY = "sessions_pruned_at"
 
 
 def _pruned_today(db: Session, key: str) -> bool:
@@ -507,6 +576,26 @@ def prune_api_hits(db: Session, retention_days: int = API_HITS_RETENTION_DAYS) -
     db.commit()
     if n:
         log.info("api_hits_pruned", deleted=n, retention_days=retention_days)
+    return {"pruned": n}
+
+
+def prune_sessions(db: Session) -> dict:
+    """R9-O4：sessions 清理——删除已过期的登录会话行（只增不减会无限增长）。
+
+    按 expires_at < now 判定（不是固定保留期：未过期会话必须保留）。
+    幂等、可重入，每天最多执行一次。
+    """
+    if _pruned_today(db, SESSIONS_PRUNE_KEY):
+        return {"pruned": 0, "skipped": "daily"}
+    n = (
+        db.query(DbSession)
+        .filter(DbSession.expires_at < _utcnow())
+        .delete(synchronize_session=False)
+    )
+    _mark_pruned(db, SESSIONS_PRUNE_KEY)
+    db.commit()
+    if n:
+        log.info("sessions_pruned", deleted=n)
     return {"pruned": n}
 
 
@@ -542,6 +631,8 @@ def run_lifecycle_sweep(db: Session) -> dict:
         ("api_hits_retention", prune_api_hits),
         # R6-P2-14：notifications 保留期清理（90 天）
         ("notifications_retention", prune_notifications),
+        # R9-O4：已过期登录会话清理
+        ("sessions_retention", prune_sessions),
     ):
         try:
             out[name] = fn(db)
@@ -558,6 +649,9 @@ __all__ = [
     "task_expiry_sweep",
     "zombie_sweep",
     "converge_task_limit",
+    "null_notification_task_ids",
+    "resume_tier_limited_tasks",
     "prune_api_hits",
     "prune_notifications",
+    "prune_sessions",
 ]

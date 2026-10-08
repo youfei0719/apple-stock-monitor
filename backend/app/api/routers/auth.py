@@ -274,6 +274,7 @@ def register(data: RegisterIn, request: Request, db: Session = Depends(get_db)):
         tier=user.tier,
         totp_enabled=user.totp_enabled,
         notice=_claim_notice(claimed),
+        email_sent=email_sent,
     )
 
 
@@ -347,15 +348,25 @@ def login(data: LoginIn, request: Request, response: Response, db: Session = Dep
     # R4-P1-B1：登录邮箱同样归一化，换大小写登录不再 401
     email = data.email.strip().lower()
     user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
-    if not user or not verify_password(data.password, user.password_hash):
+    if not user:
         fails = record_login_failure(ip)
         # R4-P1-B3：失败日志不打邮箱明文（撞库时会攒出真实邮箱清单），只记哈希
         email_hash = hashlib.sha256(email.encode()).hexdigest()[:16]
         log.warning("login_failed", email_hash=email_hash, ip=ip, fails=fails)
         raise APIError(401, "邮箱或密码错误", "bad_credentials")
-    # 邮箱未验证不许登录（断裂-22；前端据此 code 提示去验证）
+    # R9-O3：未验证账号不论密码对错一律 403 email_unverified。原来的顺序是
+    # "先验密码再判验证状态"：密码正确但未验证 → 403，密码错误 → 401，
+    # 401/403 的差异可预言密码正确性。现在验证状态先行——正常流程不变
+    # （密码正确但未验证本来就是 403），且不记录登录失败（未验证账号的
+    # 密码本来就不可用，不应计入 IP 锁定）。
     if not user.email_verified:
         raise APIError(403, "邮箱尚未验证，请先完成邮箱验证", "email_unverified")
+    if not verify_password(data.password, user.password_hash):
+        fails = record_login_failure(ip)
+        # R4-P1-B3：失败日志不打邮箱明文（撞库时会攒出真实邮箱清单），只记哈希
+        email_hash = hashlib.sha256(email.encode()).hexdigest()[:16]
+        log.warning("login_failed", email_hash=email_hash, ip=ip, fails=fails)
+        raise APIError(401, "邮箱或密码错误", "bad_credentials")
     record_login_success(ip)
     token = new_session_token()
     s = DbSession(
