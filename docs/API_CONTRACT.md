@@ -21,7 +21,7 @@ Task: `{id, name, group, category, part_number, product_name, color, capacity, s
 
 其中 `latest` 为后端聚合的最新状态摘要（snake_case）：
 `{stores:{<store_number>:{<part_number>:{state, pickup_display, store_pick_eligible, pickup_search_quote, updated_at}}}, available_count, total}`
-- state ∈ 展示六态（后端已按 paused/verifying/cooling 换算），不是 Apple 原始字段。
+- state ∈ 展示七态（后端已按 paused/verifying/cooling/expired 换算），不是 Apple 原始字段。
 
 - `GET /api/tasks` → 列表（含每任务最新状态摘要）
 - `POST /api/tasks` → 201（按 tier 校验任务数上限）
@@ -34,8 +34,9 @@ Task: `{id, name, group, category, part_number, product_name, color, capacity, s
 - `GET /api/catalog/products?category=iphone|ipad|mac|watch` → `[{part_number, name, color, capacity, price_cny}]`
 - `GET /api/catalog/anchors` → `[城市名, ...]`（城市锚点列表，调试/管理用；空库时自动播种种子锚点）
 
-## 库存状态（六态，前端展示用，全部 snake_case）
-state ∈ `available | unavailable | unknown | verifying | cooling | paused`
+## 库存状态（七态，前端展示用，全部 snake_case）
+state ∈ `available | unavailable | unknown | verifying | cooling | paused | expired`
+- `expired` 为任务级过期（`task.expires_at` 已过，与门店×型号维度的六态不同）：整任务过期后展示态直接为 `expired`，不再看各组合状态；`GET /api/tasks?status=expired` 可单独拉过期任务。R11-P1-6：契约此前写"六态"已修正为七态。
 - `GET /api/tasks/{id}/states` → `[{store_number, part_number, state, pickup_display, store_pick_eligible, pickup_search_quote, confirmed_count, last_event_at, updated_at}]`
 
 ## 通知
@@ -83,10 +84,10 @@ state ∈ `available | unavailable | unknown | verifying | cooling | paused`
 - `GET /api/payments` → 当前用户付费记录
 
 ## 后台（/api/admin/*，需 admin 会话 + TOTP；守卫要求 session totp_verified，否则 403 {code:"totp_required"}）
-- `GET /api/admin/overview` → `{total_users, tier_distribution: {tier: count}（含 trial）, today_pushes, revenue_cny: float, active_tasks, pending_payments: {unclaimed, amount_mismatch}}`
+- `GET /api/admin/overview` → `{total_users, tier_distribution: {tier: count}（DB 原始值，向后兼容；trial 为匿名体验不落库，用户表只有 free/standard/pro）, effective_tier_distribution: {tier: count}（按有效档位口径：已到期未降档的付费用户计入 free）, paid_members: int（有效付费会员数 = standard + pro 有效档位）, today_pushes, revenue_cny: float, active_tasks, pending_payments: {unclaimed, amount_mismatch}}`
 - `GET /api/admin/traffic?days=30` → 数组元素 `{day: "2026-10-09", pv, uv}`
 - `GET /api/admin/users?q=&tier=` → 数组元素 `{id: int, email, tier（含 trial）, tier_expires_at, is_admin, totp_enabled, created_at}`；`PATCH /api/admin/users/{id}` 接受 `{tier, tier_expires_at?, is_admin?, paused_tasks?, email_verified?}` → `{ok, changes}`（补单时可填到期时间；退款反向操作：`{"tier":"free"}` 手动降级；SMTP 故障时可传 `{"email_verified":true}` 手动验邮，记审计）
-- `GET /api/admin/payments?status=&claim_status=unclaimed` → 数组元素 `{id: int, user_id, order_id, plan（爱发电 plan_id 字符串）, amount_cny, tier_from, tier_to, status（paid/refunded/cancelled/amount_mismatch）, remark（从 raw_payload 提取）, created_at}`；`claim_status=unclaimed` 筛出待认领订单；无 email 字段
+- `GET /api/admin/payments?status=&claim_status=unclaimed` → 数组元素 `{id: int, user_id, order_id, plan（爱发电 plan_id 字符串）, amount_cny, tier_from, tier_to, status（paid/amount_mismatch/unknown_plan/refunded/resolved/cancelled；unknown_plan=爱发电 plan_id 未知，待人工）, remark（从 raw_payload 提取）, created_at}`；`claim_status=unclaimed` 筛出待认领订单；无 email 字段
 - `POST /api/admin/payments/{id}/claim` `{"user_id": int}` → 认领订单：绑定用户 + 按订单档位开通 30 天（到期/锚点同步）+ 回填 `Payment.user_id`；若为 `amount_mismatch` 成功后置 `status='resolved'` 并待处理计数 -1 → `{ok, payment_id, user_id, tier, tier_expires_at, payment_status, pending_count?}`（记审计）
 - `POST /api/admin/payments/{id}/close` → 不予开通直接关闭：`status='resolved'`（出待处理队列，`amount_mismatch` 时待处理计数 -1），不绑定用户、不开通档位（记审计）
 - `POST /api/admin/payments/{id}/refund` → 标记退款：`status='refunded'`（revenue 只计 paid，自动排除）+ 该用户降回 `free` 并清空 `tier_expires_at`/`pending_tier`（记审计）
