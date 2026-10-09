@@ -5,7 +5,11 @@
 import sys
 from collections import defaultdict
 
-from app.api.routers.catalog import SEED_PRODUCTS, SEED_STORES, SEED_CITY_ANCHORS
+from app.api.routers.catalog import (
+    SEED_CITY_ANCHORS,
+    SEED_PRODUCTS,
+    SEED_STORES,
+)
 
 
 def validate_products():
@@ -43,7 +47,9 @@ def validate_products():
             missing = [
                 (c, col) for c in caps for col in colors if (c, col) not in combos
             ]
-            errors.append(f"{model} 矩阵不完整: 有 {len(combos)} 个，应有 {expected} 个，缺 {missing}")
+            errors.append(
+                f"{model} 矩阵不完整: 有 {len(combos)} 个，应有 {expected} 个，缺 {missing}"
+            )
     # 5. 品类覆盖
     categories = set(p.get("category") for p in SEED_PRODUCTS)
     for cat in ["iphone", "ipad", "mac", "watch"]:
