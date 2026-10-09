@@ -105,7 +105,15 @@ function TaskCard({
       <Link to={`/tasks/${task.id}`} className="block">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <p className="font-medium truncate">{task.name}</p>
+            <p className="font-medium truncate">
+              {task.name}
+              {/* P2：连续确认模式加标识，用户能区分两种任务 */}
+              {task.mode === 'confirmed' && (
+                <span className="ml-2 text-[11px] px-1.5 py-0.5 rounded-pill bg-accent/10 text-accent font-medium align-middle">
+                  连续确认
+                </span>
+              )}
+            </p>
             <p className="mt-1 text-xs text-sub">
               <span className="product-name">{task.product_name}</span>
               {task.capacity && <> · {task.capacity}</>}

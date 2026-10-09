@@ -11,11 +11,14 @@ import { useState } from 'react';
 export default function IslandStatus({
   taskCount,
   hasStock,
+  allPaused,
   onTap,
   onStockTap,
 }: {
   taskCount: number;
   hasStock: boolean;
+  /** 全暂停时胶囊显示"已暂停"而非"监控中"，文案诚实 */
+  allPaused?: boolean;
   onTap?: () => void;
   /** 有货时点击跳转（跳到该任务详情页） */
   onStockTap?: () => void;
@@ -63,9 +66,9 @@ export default function IslandStatus({
             </>
           ) : (
             <>
-              <span className="w-2 h-2 rounded-full bg-ok island-dot" />
+              <span className={`w-2 h-2 rounded-full ${allPaused ? 'bg-faint' : 'bg-ok island-dot'}`} />
               <span className="text-[13px] text-white/90">
-                监控中 · <span className="mono text-white">{taskCount}</span> 个任务
+                {allPaused ? '已暂停' : '监控中'} · <span className="mono text-white">{taskCount}</span> 个任务
               </span>
             </>
           )}

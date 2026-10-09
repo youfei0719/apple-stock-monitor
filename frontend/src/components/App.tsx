@@ -129,8 +129,9 @@ export default function App() {
         setTasks(list);
         setTasksError(null);
         // R10-P2-2：tab 列表刷新时同步维护灵动岛计数专用列表
+        // P1：await 等胶囊计数同步更新完再返回，消除删除后胶囊数字滞后的竞态
         if (status === 'active') setActiveTasks(list);
-        else void refreshActiveTasks();
+        else await refreshActiveTasks();
       } catch (e) {
         setTasksError(e instanceof Error ? e.message : '任务加载失败');
         throw e;
@@ -187,12 +188,14 @@ export default function App() {
   const hotTask = activeTasks.find(
     (t) => !t.paused && !isTaskExpired(t) && (t.latest?.available_count ?? 0) > 0,
   );
-  // R7：口径与后端 GET /tasks?status=active 对齐（tasks.py：status=active 只剔除 _is_expired
-  // 为 True 的，而 _is_expired 在 task.paused 时直接返回 False——paused 任务同样出现在
-  // "监控中" tab 里）。前端 isTaskExpired 与后端 _is_expired 同形（paused 优先于 expired），
-  // 因此灵动岛计数 = paused || !expired，不再剔除 paused 任务
+  // R7：口径与后端 GET /tasks?status=active 对齐（paused 任务同样出现在"监控中" tab 里）
+  // P2：但胶囊文案必须诚实——"监控中"只数真正监控中的（非暂停非过期）；
+  // 全暂停时显示"已暂停"，不误导用户以为在监控
   // R10-P2-2：计数走独立的 activeTasks 列表，不随 Home tab 过滤变化
-  const activeCount = activeTasks.filter((t) => t.paused || !isTaskExpired(t)).length;
+  const monitoringCount = activeTasks.filter((t) => !t.paused && !isTaskExpired(t)).length;
+  const hasPausedOnly =
+    monitoringCount === 0 && activeTasks.some((t) => t.paused && !isTaskExpired(t));
+  const activeCount = monitoringCount;
 
   if (me === undefined) {
     return (
@@ -208,8 +211,9 @@ export default function App() {
     <div className="min-h-screen bg-bg text-ink font-sans">
       {location.pathname !== '/login' && location.pathname !== '/verify' && (
         <IslandStatus
-          taskCount={activeCount}
+          taskCount={hasPausedOnly ? activeTasks.filter((t) => !isTaskExpired(t)).length : activeCount}
           hasStock={!!hotTask}
+          allPaused={hasPausedOnly}
           // R6-D5：refreshTasks 会抛异常，灵动岛点开只做静默刷新（失败不打断页面），
           // 页面内错误态走 Home 的 ErrorState + 重试
           onTap={() => {

@@ -61,6 +61,8 @@ export default function AddMonitor() {
 
   const [submitting, setSubmitting] = useState(false);
   const [submitErr, setSubmitErr] = useState<string | null>(null);
+  // P2：配额超限时给升级引导，转化路径别断
+  const [showUpgradeLink, setShowUpgradeLink] = useState(false);
 
   const loadProducts = async () => {
     setProdErr(null);
@@ -139,6 +141,15 @@ export default function AddMonitor() {
     return next;
   };
 
+  // P2：配额计算提到组件层，渲染时按钮可直接用 overQuota 禁用明示
+  // R10-死代码4：回退用全量计数（allTaskCount），不用 tab 过滤后的 tasks.length
+  const combos = partNumbers.length * pickedStores.size;
+  const tasksLimit = isAnon ? 1 : quota?.tasks_limit;
+  const tasksUsed = isAnon
+    ? (allTaskCount ?? tasks.length)
+    : (quota?.tasks_used ?? allTaskCount ?? tasks.length);
+  const overQuota = combos > 0 && tasksLimit !== undefined && tasksUsed + combos > tasksLimit;
+
   const submit = async () => {
     setSubmitErr(null);
     const store_numbers = [...pickedStores];
@@ -158,19 +169,15 @@ export default function AddMonitor() {
         return;
       }
     }
-    // UI-3：提交前先按 tasks_limit 提示上限，别等提交时吃 403
-    const combos = partNumbers.length * store_numbers.length;
-    const tasksLimit = isAnon ? 1 : quota?.tasks_limit;
-    // R10-死代码4：回退用全量计数（allTaskCount），不用 tab 过滤后的 tasks.length
-    const tasksUsed = isAnon
-      ? (allTaskCount ?? tasks.length)
-      : (quota?.tasks_used ?? allTaskCount ?? tasks.length);
-    if (combos > 0 && tasksLimit !== undefined && tasksUsed + combos > tasksLimit) {
+    // UI-3：提交前先按 tasks_limit 提示上限，别等提交时吃 403（combos/tasksLimit/tasksUsed 已在组件层计算）
+    if (overQuota) {
       setSubmitErr(
         `将超出任务上限（${tasksLimit} 个）：已有 ${tasksUsed} 个，本次需生成 ${combos} 个，请减少机型或门店选择`,
       );
+      setShowUpgradeLink(true);
       return;
     }
+    setShowUpgradeLink(false);
     setSubmitting(true);
     try {
       // F-1：登录用户走批量接口；匿名用户走单任务接口逐个创建
@@ -289,7 +296,7 @@ export default function AddMonitor() {
   return (
     <div>
       <PageHeader title="添加监控" subtitle="机型 × 门店多维选择 · 支持批量生成" />
-      <div className="px-4 pb-6 space-y-5">
+      <div className="px-4 pb-28 space-y-5">
         {/* 品类 */}
         <section>
           <SectionTitle>品类</SectionTitle>
@@ -527,13 +534,25 @@ export default function AddMonitor() {
         </section>
 
         {submitErr && (
-          <p className="text-sm text-bad text-center">{submitErr}</p>
+          <p className="text-sm text-bad text-center">
+            {submitErr}
+            {showUpgradeLink && (
+              <>
+                {' '}
+                <a href="/me" className="underline font-medium">
+                  去开通会员
+                </a>
+              </>
+            )}
+          </p>
         )}
 
-        <PrimaryButton onClick={submit} disabled={submitting}>
+        <PrimaryButton onClick={submit} disabled={submitting || overQuota}>
           {submitting
             ? '生成中…'
-            : `批量生成 ${partNumbers.length} 机型 × ${pickedStores.size} 门店`}
+            : overQuota
+              ? `超出上限（${tasksLimit} 个）`
+              : `批量生成 ${partNumbers.length} 机型 × ${pickedStores.size} 门店`}
         </PrimaryButton>
         {/* P2：创建时显示剩余额度，用户不用猜还能建几个 */}
         {!isAnon && quota && quota.tasks_limit != null && (

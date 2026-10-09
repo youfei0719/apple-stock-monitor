@@ -273,7 +273,7 @@ export default function NotifyChannels({
       <h3 className="text-[13px] font-semibold text-sub mb-2">通知渠道</h3>
       <Card className="p-4 space-y-4">
         <p className="-mt-1 text-xs text-faint leading-relaxed">
-          到货时按这里的渠道发送通知（按实际发送成功的通知条数扣减配额），通知附带直达商品页链接。
+          到货时按这里的渠道发送通知（按实际发送成功的通知条数扣减配额；「发送测试」不扣配额），通知附带直达商品页链接。
         </p>
         {/* F-2：渠道开放范围按档位动态（trial → 免费版仅站内；付费档 → 仅邮件），不写死。
             R9-I11：tier===null（档位加载中）时不渲染档位文案，避免匿名用户首帧闪烁 */}
