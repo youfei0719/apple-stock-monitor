@@ -127,7 +127,8 @@ app.add_middleware(
 
 
 @app.exception_handler(APIError)
-async def api_error_handler(request: Request, exc: APIError):    # P0：APIError 不再静默——warning 级日志（code + path + user_id），
+async def api_error_handler(request: Request, exc: APIError):
+    # P0：APIError 不再静默——warning 级日志（code + path + user_id），
     # 业务 4xx 也能从日志定位（如 channels_required 批量创建失败）。
     # 日志失败绝不影响响应；user_id 查不到时记 None。
     user_id = None
