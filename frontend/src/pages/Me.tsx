@@ -421,7 +421,7 @@ export default function Me() {
         >
           {/* Pro 专属：顶部金色流光线 */}
           {displayTier === 'pro' && (
-            <div className="absolute top-0 inset-x-0 h-[3px] bg-gradient-to-r from-amber-300 via-yellow-400 to-amber-300" />
+            <div className="absolute top-0 inset-x-0 h-[3px] bg-gradient-to-r from-amber-300 via-yellow-400 to-amber-300 rounded-t-card" />
           )}
           <div className="flex items-center justify-between">
             <div>
@@ -544,10 +544,10 @@ export default function Me() {
                 const isProPlan = p.tier === 'pro';
                 const isStdPlan = p.tier === 'standard';
                 const tierFlowCls = isProPlan
-                  ? 'tier-flow-gold !text-white !border-0'
+                  ? '!bg-none tier-flow-gold !text-white !border-0'
                   : isStdPlan
-                    ? 'tier-flow-blue !border-0'
-                    : 'tier-flow-silver !border-0';
+                    ? '!bg-none tier-flow-blue !border-0'
+                    : '!bg-none tier-flow-silver !border-0';
                 return (
                   <Card
                     key={p.tier}
@@ -556,7 +556,7 @@ export default function Me() {
                     } ${tierFlowCls}`}
                   >
                     {isProPlan && (
-                      <div className="absolute top-0 inset-x-0 h-[2px] bg-gradient-to-r from-amber-300 via-yellow-400 to-amber-300" />
+                      <div className="absolute top-0 inset-x-0 h-[2px] bg-gradient-to-r from-amber-300 via-yellow-400 to-amber-300 rounded-t-card" />
                     )}
                     <div className="flex items-center justify-between">
                       <p className="font-semibold">

@@ -138,17 +138,32 @@ body {
 .tier-flow-silver {
   background: linear-gradient(135deg, #f5f5f7, #e8e8ec, #f0f0f3, #e5e5e9);
   background-size: 300% 300%;
+  -webkit-animation: tier-flow 12s ease infinite;
   animation: tier-flow 12s ease infinite;
 }
 
 .tier-flow-blue {
   background: linear-gradient(135deg, #dbeafe, #bfdbfe, #e0e7ff, #c7d2fe);
   background-size: 300% 300%;
+  -webkit-animation: tier-flow 8s ease infinite;
   animation: tier-flow 8s ease infinite;
 }
 
 .tier-flow-gold {
-  background: linear-gradient(135deg, #1a1a2e, #2d2a1a, #1a1a2e, #3a3220);
+  background: linear-gradient(135deg, #2a2118, #4a3a1a, #2a2118, #5a4a1f, #2a2118);
   background-size: 300% 300%;
+  -webkit-animation: tier-flow 6s ease infinite;
   animation: tier-flow 6s ease infinite;
+}
+
+@-webkit-keyframes tier-flow {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
 }
