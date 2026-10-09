@@ -93,7 +93,7 @@ export function ErrorState({
 /** 页头（大标题居中 + 视觉校正） */
 export function PageHeader({ title, subtitle }: { title: string; subtitle?: string }) {
   return (
-    <div className="pt-16 pb-4 px-5 text-center">
+    <div className="pt-2 pb-4 px-5 text-center">
       <h1 className="text-[22px] font-semibold tracking-tight title-balanced">{title}</h1>
       {subtitle && <p className="mt-1.5 text-sm text-sub title-balanced">{subtitle}</p>}
     </div>

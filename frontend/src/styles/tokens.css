@@ -77,51 +77,9 @@ body {
 }
 
 /* ------------------------------------------------------------------
- * 灵动岛胶囊动效（Dynamic Island morph）
+/* ------------------------------------------------------------------
+ * 状态徽章动效（浅色内联 pill，有货时呼吸提示）
  * ------------------------------------------------------------------ */
-@keyframes island-breathe {
-  0%,
-  100% {
-    transform: translateX(-50%) scale(1);
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
-  }
-  50% {
-    transform: translateX(-50%) scale(1.045);
-    box-shadow: 0 6px 28px rgba(52, 199, 89, 0.45);
-  }
-}
-
-@keyframes island-pulse-dot {
-  0%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.55;
-    transform: scale(0.8);
-  }
-}
-
-.island {
-  transition:
-    width 0.38s cubic-bezier(0.32, 0.72, 0, 1),
-    max-width 0.38s cubic-bezier(0.32, 0.72, 0, 1),
-    border-radius 0.38s cubic-bezier(0.32, 0.72, 0, 1);
-  will-change: width;
-}
-
-.island-hot {
-  animation: island-breathe 1.6s ease-in-out infinite;
-}
-
-.island-dot {
-  animation: island-pulse-dot 2s ease-in-out infinite;
-}
-
-.island-content {
-  transition: opacity 0.25s ease;
-}
 
 /* 内容淡入（列表卡片） */
 @keyframes rise-in {

@@ -79,16 +79,18 @@ function fmtBeijingDate(iso: string | null | undefined): string | null {
   });
 }
 
-function QuotaBar({ label, used, limit }: { label: string; used: number; limit: number }) {
+function QuotaBar({ label, used, limit, dark }: { label: string; used: number; limit: number; dark?: boolean }) {
   const pct = limit > 0 ? Math.min(100, (used / limit) * 100) : 0;
   const warn = pct >= 80 && pct < 100;
   const full = pct >= 100;
+  const labelCls = dark ? 'text-white/70' : 'text-sub';
+  const numCls = dark ? 'text-white' : 'text-ink';
+  const numDimCls = dark ? 'text-white/50' : 'text-faint';
+  const trackCls = dark ? 'bg-white/15' : 'bg-black/10';
   return (
     <div>
       <div className="flex items-center justify-between text-sm mb-1.5">
-        {/* P2：配额卡是深色底（bg-island），不用浅色底的 text-sub/text-faint，
-            否则标签与数字对比度崩掉近乎隐形 */}
-        <span className="text-white/70">
+        <span className={labelCls}>
           {label}
           {full && (
             <span className="ml-2 text-[11px] px-1.5 py-0.5 rounded-pill bg-bad/20 text-bad font-medium">
@@ -101,12 +103,12 @@ function QuotaBar({ label, used, limit }: { label: string; used: number; limit: 
             </span>
           )}
         </span>
-        <span className="mono text-white">
+        <span className={`mono ${numCls}`}>
           {used}
-          <span className="text-white/50"> / {limit}</span>
+          <span className={numDimCls}> / {limit}</span>
         </span>
       </div>
-      <div className="h-2 rounded-full bg-white/15 overflow-hidden">
+      <div className={`h-2 rounded-full ${trackCls} overflow-hidden`}>
         <div
           className={`h-full rounded-full transition-all ${full ? 'bg-bad' : warn ? 'bg-warn' : 'bg-accent'}`}
           style={{ width: `${pct}%` }}
@@ -385,34 +387,7 @@ export default function Me() {
               去注册 / 登录
             </Link>
           </Card>
-          {/* UX：匿名态也展示两档价格——注册前就能了解付费信息，不错过转化 */}
-          <section>
-            <h2 className="text-[13px] font-semibold text-sub mb-2">会员档位</h2>
-            {plansErr && <ErrorState message={plansErr} onRetry={load} />}
-            {!plansErr && plans === null && <LoadingState rows={1} />}
-            {!plansErr && plans !== null && plans.length > 0 && (
-              <div className="grid grid-cols-2 gap-2.5">
-                {plans.map((p) => (
-                  <Card key={p.tier} className="p-4 rise-in">
-                    <p className="font-semibold">{p.name}</p>
-                    <p className="mt-2 mono text-xl font-semibold">{planPeriodLabel(p)}</p>
-                    <ul className="mt-2 space-y-1">
-                      {planFeatures(p)
-                        .slice(0, 3)
-                        .map((f) => (
-                          <li key={f} className="text-xs text-sub">
-                            · {f}
-                          </li>
-                        ))}
-                    </ul>
-                  </Card>
-                ))}
-              </div>
-            )}
-            <p className="mt-2 text-[11px] text-faint text-center">
-              注册后通过爱发电赞助开通，支付成功自动开通对应档位
-            </p>
-          </section>
+          {/* 未登录不展示定价方案 */}
         </div>
       </div>
     );
@@ -423,51 +398,74 @@ export default function Me() {
   const displayTier = quota?.tier ?? me.tier;
   const tierLabel = TIER_LABEL[displayTier] ?? displayTier;
   const expiry = quota ? fmtBeijingDate(quota.tier_expires_at) : null;
+  // 会员卡配色：Pro=深色，其余=浅色
+  const isProCard = displayTier === 'pro';
+  const cardMuted = isProCard ? 'text-white/60' : 'text-sub';
+  const cardFaint = isProCard ? 'text-white/50' : 'text-faint';
+  const cardStrong = isProCard ? 'text-white' : 'text-ink';
 
   return (
     <div>
       <PageHeader title="我的" subtitle={me.email} />
       <div className="px-4 pb-6 space-y-5">
-        {/* 当前会员 */}
-        {/* P0：Card 自带 bg-white，与 bg-island 冲突导致白底白字；这里不用 Card，直接写 div */}
-        <div className="p-5 rise-in bg-island text-white rounded-card shadow-card">
+        {/* 当前会员：按等级差异化设计 */}
+        {/* 免费版=浅灰素卡，标准版=白底蓝边，Pro=深色渐变+金色徽章+流光 */}
+        <div
+          className={`p-5 rise-in rounded-card shadow-card relative overflow-hidden ${
+            displayTier === 'pro'
+              ? 'bg-island text-white'
+              : displayTier === 'standard'
+                ? 'bg-white text-ink border-2 border-blue-500/60'
+                : 'bg-black/[0.03] text-ink border border-black/[0.06]'
+          }`}
+        >
+          {/* Pro 专属：顶部金色流光线 */}
+          {displayTier === 'pro' && (
+            <div className="absolute top-0 inset-x-0 h-[3px] bg-gradient-to-r from-amber-300 via-yellow-400 to-amber-300" />
+          )}
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-xs text-white/60">当前会员</p>
+              <p className={`text-xs ${cardMuted}`}>当前会员</p>
               <p className="mt-1 text-xl font-semibold">
                 {tierLabel}
+                {/* Pro 专属金色徽章 */}
+                {isProCard && (
+                  <span className="ml-2 inline-block px-2 py-0.5 text-[11px] font-bold tracking-wider text-amber-300 border border-amber-300/50 rounded-pill align-middle">
+                    PRO
+                  </span>
+                )}
                 {expiry && (
-                  <span className="ml-2 text-sm font-normal text-white/70">
+                  <span className={`ml-2 text-sm font-normal ${cardMuted}`}>
                     · 到期于 {expiry}（北京时间）
                   </span>
                 )}
               </p>
               {/* F-N3：后端 /quota 补 pending_tier（降级预约），防御式渲染"到期后切换" */}
               {quota?.pending_tier && (
-                <p className="mt-1 text-[13px] text-white/75">
+                <p className={`mt-1 text-[13px] ${cardMuted}`}>
                   到期后切换为{PAID_TIER_LABEL[quota.pending_tier] ?? quota.pending_tier}
                 </p>
               )}
             </div>
-            <span className="mono text-xs text-white/60">用户 ID #{String(me.id)}</span>
+            <span className={`mono text-xs ${cardMuted}`}>用户 ID #{String(me.id)}</span>
           </div>
           {quota && (
             <div className="mt-4 space-y-3">
-              <QuotaBar label="推送配额" used={quota.push_used} limit={quota.push_limit} />
-              <QuotaBar label="监控任务" used={quota.tasks_used} limit={quota.tasks_limit} />
+              <QuotaBar label="推送配额" used={quota.push_used} limit={quota.push_limit} dark={isProCard} />
+              <QuotaBar label="监控任务" used={quota.tasks_used} limit={quota.tasks_limit} dark={isProCard} />
               <div className="mt-1 space-y-1">
-                <p className="text-xs text-white/60">
-                  刷新间隔 <span className="mono text-white">{quota.refresh_interval_sec} 秒</span>
+                <p className={`text-xs ${cardMuted}`}>
+                  刷新间隔 <span className={`mono ${cardStrong}`}>{quota.refresh_interval_sec} 秒</span>
                 </p>
-                <p className="text-xs text-white/60">
+                <p className={`text-xs ${cardMuted}`}>
                   {/* F-N2：quota_period_key 实际是下次重置日（购买日 +30 天锚点），不是"周期起始" */}
                   配额下次重置{' '}
-                  <span className="mono text-white">
+                  <span className={`mono ${cardStrong}`}>
                     {fmtBeijingDate(quota.quota_reset_at) ?? quota.period}
                   </span>
                 </p>
               </div>
-              <p className="text-[11px] text-white/50">
+              <p className={`text-[11px] ${cardFaint}`}>
                 配额按实际发送成功的通知条数扣减 · 付费档以购买日 +30
                 天为一周期滚动重置，免费版按自然月重置
               </p>
@@ -476,14 +474,14 @@ export default function Me() {
           {/* R9-I9：配额接口失败不再静默消失——独立错误态 + 重试 */}
           {!quota &&
             (quotaErr ? (
-              <p className="mt-4 text-xs text-white/70">
+              <p className={`mt-4 text-xs ${cardMuted}`}>
                 配额加载失败：{quotaErr}{' '}
                 <button onClick={load} className="underline font-medium">
                   重试
                 </button>
               </p>
             ) : (
-              <p className="mt-4 text-xs text-white/60">配额加载中…</p>
+              <p className={`mt-4 text-xs ${cardMuted}`}>配额加载中…</p>
             ))}
         </div>
 
@@ -543,13 +541,26 @@ export default function Me() {
             <div className="grid grid-cols-2 gap-2.5">
               {plans.map((p) => {
                 const current = p.tier === displayTier;
+                const isProPlan = p.tier === 'pro';
                 return (
                   <Card
                     key={p.tier}
-                    className={`p-4 rise-in ${current ? 'ring-2 ring-accent' : ''}`}
+                    className={`p-4 rise-in relative overflow-hidden ${
+                      current ? 'ring-2 ring-accent' : ''
+                    } ${isProPlan ? '!bg-island !text-white !border-0' : ''}`}
                   >
+                    {isProPlan && (
+                      <div className="absolute top-0 inset-x-0 h-[2px] bg-gradient-to-r from-amber-300 via-yellow-400 to-amber-300" />
+                    )}
                     <div className="flex items-center justify-between">
-                      <p className="font-semibold">{p.name}</p>
+                      <p className="font-semibold">
+                        {p.name}
+                        {isProPlan && (
+                          <span className="ml-1.5 inline-block px-1.5 py-px text-[10px] font-bold tracking-wider text-amber-300 border border-amber-300/50 rounded-pill align-middle">
+                            PRO
+                          </span>
+                        )}
+                      </p>
                       {current && (
                         <span className="text-[11px] px-2 py-0.5 rounded-pill bg-accent text-white">
                           当前
@@ -561,7 +572,7 @@ export default function Me() {
                       {planFeatures(p)
                         .slice(0, 4)
                         .map((f) => (
-                          <li key={f} className="text-xs text-sub">
+                          <li key={f} className={`text-xs ${isProPlan ? 'text-white/70' : 'text-sub'}`}>
                             · {f}
                           </li>
                         ))}

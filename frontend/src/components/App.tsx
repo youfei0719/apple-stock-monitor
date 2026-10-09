@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type MouseEvent } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate, useOutletContext } from 'react-router-dom';
 import { api, ApiError, isTaskExpired, type Me, type Task, type TaskStatusFilter } from '../lib/api';
-import IslandStatus from './IslandStatus';
+import IslandStatus from './StatusPill';
 
 const TABS = [
   { to: '/', label: '监控', icon: '◉' },
