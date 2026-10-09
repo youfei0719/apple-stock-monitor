@@ -99,10 +99,44 @@ async function req<T>(path: string, init: RequestInit = {}, absolute = false): P
     data = null;
   }
   if (!res.ok) {
-    const d = (data ?? {}) as { detail?: string; code?: string };
-    throw new ApiError(res.status, d.detail ?? `请求失败（${res.status}）`, d.code);
+    const d = (data ?? {}) as { detail?: unknown; code?: string };
+    // P0：后端 detail 可能是非字符串（FastAPI 422 校验错误的 detail 是数组，
+    // 直接 new Error(obj) 会渲染成 "[object Object]"）。防御式转成可读文案。
+    throw new ApiError(res.status, toErrorMessage(d.detail, res.status), d.code);
   }
   return data as T;
+}
+
+/** 把后端 error detail 转成可读字符串——非字符串 detail（如 422 数组）不再渲染成 "[object Object]" */
+function toErrorMessage(detail: unknown, status: number): string {
+  if (typeof detail === 'string' && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    const msgs = detail
+      .map((e) => {
+        if (typeof e === 'string') return e;
+        if (e && typeof e === 'object') {
+          const o = e as { msg?: unknown; message?: unknown; loc?: unknown };
+          const loc = Array.isArray(o.loc) ? o.loc.slice(1).join('.') : '';
+          const msg =
+            typeof o.msg === 'string'
+              ? o.msg
+              : typeof o.message === 'string'
+                ? o.message
+                : '';
+          if (loc && msg) return `${loc}: ${msg}`;
+          if (msg) return msg;
+          try {
+            return JSON.stringify(e);
+          } catch {
+            return '';
+          }
+        }
+        return '';
+      })
+      .filter(Boolean);
+    if (msgs.length > 0) return msgs.join('；');
+  }
+  return `请求失败（${status}）`;
 }
 
 /* ---------------- 类型 ---------------- */
