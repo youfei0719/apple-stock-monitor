@@ -30,9 +30,11 @@ export default function Guide() {
         {!error && guide !== null && guide.steps.length === 0 && (
           <EmptyState title="指南暂未发布" hint="稍后再来看看" action={null} />
         )}
-        {!error && guide !== null && guide.steps.length > 0 && (
+        {!error && guide !== null && guide.steps.filter((s) => s.trim()).length > 0 && (
           <div className="space-y-3">
-            {guide.steps.map((step, i) => (
+            {guide.steps
+              .filter((s) => s.trim())
+              .map((step, i) => (
               <Card key={i} className="p-4 rise-in">
                 <div className="flex gap-3">
                   <span className="mono text-accent text-sm shrink-0">

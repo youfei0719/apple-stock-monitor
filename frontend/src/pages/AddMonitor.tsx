@@ -44,6 +44,9 @@ export default function AddMonitor() {
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [expert, setExpert] = useState(false);
   const [expertText, setExpertText] = useState('');
+  // UX：机型按容量/颜色筛选，不用在几十个组合里大海捞针
+  const [capFilter, setCapFilter] = useState<string | null>(null);
+  const [colorFilter, setColorFilter] = useState<string | null>(null);
 
   const [stores, setStores] = useState<StoreRef[] | null>(null);
   const [storeErr, setStoreErr] = useState<string | null>(null);
@@ -103,6 +106,8 @@ export default function AddMonitor() {
 
   useEffect(() => {
     setPicked(new Set());
+    setCapFilter(null);
+    setColorFilter(null);
     loadProducts();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [category]);
@@ -121,6 +126,25 @@ export default function AddMonitor() {
     return [...picked];
   }, [expert, expertText, picked]);
 
+  // 机型筛选：容量/颜色维度
+  const capacities = useMemo(() => {
+    const set = new Set<string>();
+    (products ?? []).forEach((p) => p.capacity && set.add(p.capacity));
+    return [...set];
+  }, [products]);
+  const colors = useMemo(() => {
+    const set = new Set<string>();
+    (products ?? []).forEach((p) => p.color && set.add(p.color));
+    return [...set];
+  }, [products]);
+  const filteredProducts = useMemo(() => {
+    return (products ?? []).filter(
+      (p) =>
+        (!capFilter || p.capacity === capFilter) &&
+        (!colorFilter || p.color === colorFilter),
+    );
+  }, [products, capFilter, colorFilter]);
+
   const filteredStores = useMemo(() => {
     const q = storeQuery.trim().toLowerCase();
     if (!q || !stores) return stores ?? [];
@@ -132,6 +156,26 @@ export default function AddMonitor() {
         (s.number ?? '').toLowerCase().includes(q),
     );
   }, [stores, storeQuery]);
+
+  // UX：门店按城市分组，每组可一键全选/取消，长列表不再是大海捞针
+  const storesByCity = useMemo(() => {
+    const map = new Map<string, StoreRef[]>();
+    for (const s of filteredStores) {
+      const city = s.city || '其他';
+      if (!map.has(city)) map.set(city, []);
+      map.get(city)!.push(s);
+    }
+    return [...map.entries()].sort(([a], [b]) => a.localeCompare(b, 'zh-CN'));
+  }, [filteredStores]);
+
+  const toggleCity = (cityStores: StoreRef[]) => {
+    const nums = cityStores.map((s) => s.number);
+    const allOn = nums.every((n) => pickedStores.has(n));
+    const next = new Set(pickedStores);
+    if (allOn) nums.forEach((n) => next.delete(n));
+    else nums.forEach((n) => next.add(n));
+    setPickedStores(next);
+  };
 
   const toggle = (set: Set<string>, key: string): Set<string> => {
     const next = new Set(set);
@@ -356,8 +400,60 @@ export default function AddMonitor() {
           ) : products.length === 0 ? (
             <EmptyState title="该品类暂无机型" hint="换个品类试试" action={null} />
           ) : (
-            <div className="space-y-2 max-h-72 overflow-y-auto">
-              {products.map((p) => {
+            <>
+              {/* 容量/颜色筛选 */}
+              {(capacities.length > 1 || colors.length > 1) && (
+                <div className="mb-2 space-y-1.5">
+                  {capacities.length > 1 && (
+                    <div className="flex gap-1.5 overflow-x-auto pb-0.5">
+                      <button
+                        onClick={() => setCapFilter(null)}
+                        className={`px-3 py-1.5 rounded-pill text-xs font-medium whitespace-nowrap transition active:scale-95 ${
+                          capFilter === null ? 'bg-island text-white' : 'bg-white text-sub shadow-card'
+                        }`}
+                      >
+                        全部容量
+                      </button>
+                      {capacities.map((c) => (
+                        <button
+                          key={c}
+                          onClick={() => setCapFilter(capFilter === c ? null : c)}
+                          className={`px-3 py-1.5 rounded-pill text-xs font-medium whitespace-nowrap transition active:scale-95 ${
+                            capFilter === c ? 'bg-island text-white' : 'bg-white text-sub shadow-card'
+                          }`}
+                        >
+                          {c}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {colors.length > 1 && (
+                    <div className="flex gap-1.5 overflow-x-auto pb-0.5">
+                      <button
+                        onClick={() => setColorFilter(null)}
+                        className={`px-3 py-1.5 rounded-pill text-xs font-medium whitespace-nowrap transition active:scale-95 ${
+                          colorFilter === null ? 'bg-island text-white' : 'bg-white text-sub shadow-card'
+                        }`}
+                      >
+                        全部颜色
+                      </button>
+                      {colors.map((c) => (
+                        <button
+                          key={c}
+                          onClick={() => setColorFilter(colorFilter === c ? null : c)}
+                          className={`px-3 py-1.5 rounded-pill text-xs font-medium whitespace-nowrap transition active:scale-95 ${
+                            colorFilter === c ? 'bg-island text-white' : 'bg-white text-sub shadow-card'
+                          }`}
+                        >
+                          {c}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              <div className="space-y-2 max-h-72 overflow-y-auto">
+                {filteredProducts.map((p) => {
                 const on = picked.has(p.part_number);
                 return (
                   <button
@@ -384,7 +480,8 @@ export default function AddMonitor() {
                   </button>
                 );
               })}
-            </div>
+              </div>
+            </>
           )}
         </section>
 
@@ -419,32 +516,53 @@ export default function AddMonitor() {
           ) : stores === null ? (
             <LoadingState rows={2} />
           ) : (
-            <div className="space-y-2 max-h-72 overflow-y-auto">
-              {filteredStores.map((s) => {
-                const on = pickedStores.has(s.number);
+            <div className="space-y-3 max-h-96 overflow-y-auto">
+              {storesByCity.map(([city, cityStores]) => {
+                const pickedInCity = cityStores.filter((s) => pickedStores.has(s.number)).length;
+                const allOn = pickedInCity === cityStores.length;
                 return (
-                  <button
-                    key={s.number}
-                    onClick={() => setPickedStores(toggle(pickedStores, s.number))}
-                    className={`w-full text-left px-4 py-3 rounded-card-sm flex items-center justify-between transition active:scale-[0.99] ${
-                      on ? 'bg-island text-white' : 'bg-white shadow-card'
-                    }`}
-                  >
-                    <span className="text-[15px] truncate">
-                      {s.name}{' '}
-                      <span className={`text-xs ml-2 ${on ? 'text-white/70' : 'text-faint'}`}>
-                        {/* UX：门店名已含城市时不再重复拼接（如"Apple 上海环贸 iapm"不再加"上海"）；
-                            P2：分隔符" · "始终保留，门店名与编号之间不断连 */}
-                        · {s.city && !s.name.includes(s.city) ? `${s.city} · ` : ''}
-                        <span className="mono">{s.number}</span>
+                  <div key={city}>
+                    <div className="flex items-center justify-between mb-1.5 px-1">
+                      <span className="text-xs font-semibold text-sub">
+                        {city}
+                        <span className="mono font-normal text-faint ml-1.5">
+                          {pickedInCity}/{cityStores.length}
+                        </span>
                       </span>
-                    </span>
-                    <span
-                      className={`w-5 h-5 rounded-full border-2 shrink-0 ml-2 ${
-                        on ? 'bg-ok border-ok' : 'border-line'
-                      }`}
-                    />
-                  </button>
+                      <button
+                        onClick={() => toggleCity(cityStores)}
+                        className="text-xs text-accent font-medium active:scale-95 transition"
+                      >
+                        {allOn ? '取消全选' : '全选'}
+                      </button>
+                    </div>
+                    <div className="space-y-2">
+                      {cityStores.map((s) => {
+                        const on = pickedStores.has(s.number);
+                        return (
+                          <button
+                            key={s.number}
+                            onClick={() => setPickedStores(toggle(pickedStores, s.number))}
+                            className={`w-full text-left px-4 py-3 rounded-card-sm flex items-center justify-between transition active:scale-[0.99] ${
+                              on ? 'bg-island text-white' : 'bg-white shadow-card'
+                            }`}
+                          >
+                            <span className="text-[15px] truncate">
+                              {s.name}{' '}
+                              <span className={`text-xs ml-2 ${on ? 'text-white/70' : 'text-faint'}`}>
+                                <span className="mono">{s.number}</span>
+                              </span>
+                            </span>
+                            <span
+                              className={`w-5 h-5 rounded-full border-2 shrink-0 ml-2 ${
+                                on ? 'bg-ok border-ok' : 'border-line'
+                              }`}
+                            />
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                 );
               })}
               {filteredStores.length === 0 && (
@@ -486,13 +604,13 @@ export default function AddMonitor() {
                 从下一次状态变化开始通知；此处说明，避免新建任务第一轮收不到通知的困惑 */}
             {mode === 'instant' && (
               <p className="text-[11px] text-faint leading-relaxed">
-                即时提醒：无货变有货立即通知一次；新建任务首次检测到有货时仅建立基线，从下一次状态变化开始通知。
+                有货立刻通知你，最灵敏，新建任务第一轮只记状态不打扰。
               </p>
             )}
             {mode === 'confirmed' && (
               <>
                 <p className="text-[11px] text-faint leading-relaxed">
-                  连续确认：连续 2 轮检测到有货才通知，过滤单轮误报；下面可再设持续提醒间隔。
+                  连续两轮都看到有货才通知，过滤偶发误报；下面可再设持续提醒间隔。
                 </p>
                 <input
                   value={repeatInterval}
