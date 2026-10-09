@@ -206,13 +206,13 @@ def test_register_email_normalized(db):
             "client": ("9.9.9.9", 1234),
         }
     )
-    out = auth_router.register(RegisterIn(email="  Foo@Example.COM ", password="x" * 12), req, db)
+    out = auth_router.register(RegisterIn(email="  Foo@Example.COM ", password="x1a2b3c4d5e6"), req, db)
     assert out.email == "foo@example.com"
     # 同邮箱换大小写再注册 → 400 email_taken（不会建成两个账号）
     from app.api.errors import APIError
 
     with pytest.raises(APIError) as ei:
-        auth_router.register(RegisterIn(email="FOO@example.com", password="y" * 12), req, db)
+        auth_router.register(RegisterIn(email="FOO@example.com", password="y1a2b3c4d5e6"), req, db)
     assert ei.value.code == "email_taken"
 
 

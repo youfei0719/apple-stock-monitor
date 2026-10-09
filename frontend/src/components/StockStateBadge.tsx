@@ -1,10 +1,10 @@
 import type { StockState } from '../lib/api';
 
 /**
- * 七态库存徽章
- * 七态：available / unavailable / unknown / verifying / cooling / paused / expired
+ * 库存状态徽章
+ * 七种状态：available / unavailable / unknown / verifying / cooling / paused / expired
  * 设计要求：未知 ≠ 无货，必须有明确视觉区分
- *  - unknown：琥珀色 + 虚线边框「数据缺失」语义
+ *  - unknown：灰色「还没开始检测」（不是预警，不用琥珀色）
  *  - unavailable：灰色实心「确认无货」
  */
 
@@ -20,9 +20,10 @@ const META: Record<StockState, { label: string; cls: string; dot: string }> = {
     dot: 'bg-faint',
   },
   unknown: {
+    // P2：未知只是"还没开始检测"，不是预警——用灰色，不用琥珀色
     label: '未知',
-    cls: 'bg-[#fff7e8] text-[#b25e09] border-dashed border-[#f0c36d]',
-    dot: 'bg-warn',
+    cls: 'bg-[#f2f2f4] text-sub border-transparent',
+    dot: 'bg-faint',
   },
   verifying: {
     label: '确认中',

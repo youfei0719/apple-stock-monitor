@@ -143,7 +143,7 @@ export default function AddMonitor() {
     setSubmitErr(null);
     const store_numbers = [...pickedStores];
     if (partNumbers.length === 0) {
-      setSubmitErr('请先选择机型（或在专家模式填写 part number）');
+      setSubmitErr('请先选择机型（或点「高级」手动输入 Part Number）');
       return;
     }
     if (store_numbers.length === 0) {
@@ -175,7 +175,7 @@ export default function AddMonitor() {
     try {
       // F-1：登录用户走批量接口；匿名用户走单任务接口逐个创建
       // （后端 /tasks/batch 要求登录，匿名调 batch 会 401）
-      const nameTpl = nameTemplate.trim() || '{part_number} × {store_number}';
+      const nameTpl = nameTemplate.trim() || '{part_name} × {store_name}';
       const repeatSec = mode === 'confirmed' && repeatInterval.trim() && Number.isFinite(ri) ? ri : null;
       // R10-I4：空 webhook URL 后端会 422（min_length=1），提前过滤掉未填写的行
       // （与 TaskDetail.saveChannels 共用 lib.cleanChannels）
@@ -191,8 +191,17 @@ export default function AddMonitor() {
             for (const sn of store_numbers) {
               const prod = productByPn.get(pn);
               const info = storeByNumber.get(sn);
+              // P1：命名模板支持人类可读占位符 {part_name} {store_name}，
+              // 查不到时回退 part_number / store_number
+              const partName = prod ? `${prod.name} ${prod.capacity ?? ''} ${prod.color ?? ''}`.trim() : pn;
+              const storeName = info ? (info.name?.replace('Apple ', '') || sn) : sn;
+              const taskName = nameTpl
+                .replace('{part_number}', pn)
+                .replace('{store_number}', sn)
+                .replace('{part_name}', partName)
+                .replace('{store_name}', storeName);
               await api.createTask({
-                name: nameTpl.replace('{part_number}', pn).replace('{store_number}', sn),
+                name: taskName,
                 group: group.trim(),
                 category,
                 part_number: pn,
@@ -221,7 +230,7 @@ export default function AddMonitor() {
         const created = await api.batchTasks({
           part_numbers: partNumbers,
           store_numbers,
-          // 后端只替换 {part_number} / {store_number}，模板必须用这两个占位符
+          // 后端支持 {part_number} / {store_number} / {part_name} / {store_name} 四种占位符
           name_template: nameTpl,
           category,
           mode,
@@ -312,7 +321,7 @@ export default function AddMonitor() {
               onClick={() => setExpert((v) => !v)}
               className="text-xs text-accent font-medium"
             >
-              {expert ? '切换为列表选择' : 'part number 专家模式'}
+              {expert ? '切换为列表选择' : '高级：手动输入 Part Number'}
             </button>
           </div>
           {expert ? (
@@ -449,7 +458,7 @@ export default function AddMonitor() {
             <input
               value={nameTemplate}
               onChange={(e) => setNameTemplate(e.target.value)}
-              placeholder="任务命名模板，如：{part_number} × {store_number}"
+              placeholder="任务命名模板，如：{part_name} × {store_name}"
               className="w-full px-3 py-2.5 rounded-card-sm bg-bg text-sm outline-none placeholder:text-faint"
             />
             <div className="flex gap-2">
@@ -526,6 +535,12 @@ export default function AddMonitor() {
             ? '生成中…'
             : `批量生成 ${partNumbers.length} 机型 × ${pickedStores.size} 门店`}
         </PrimaryButton>
+        {/* P2：创建时显示剩余额度，用户不用猜还能建几个 */}
+        {!isAnon && quota && quota.tasks_limit != null && (
+          <p className="mt-2 text-xs text-faint text-center">
+            监控任务剩余额度：{Math.max(0, quota.tasks_limit - (quota.tasks_used ?? 0))} / {quota.tasks_limit}
+          </p>
+        )}
       </div>
     </div>
   );

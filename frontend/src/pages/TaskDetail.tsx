@@ -137,7 +137,7 @@ export default function TaskDetail() {
 
   return (
     <div>
-      <PageHeader title="库存状态" subtitle="门店 × 配置 · 实时七态" />
+      <PageHeader title="库存状态" subtitle="门店 × 配置 · 实时状态" />
       <div className="px-4 pb-4">
         <Link to="/" className="inline-block mb-3 text-sm text-accent">
           ← 返回监控列表
@@ -243,7 +243,10 @@ export default function TaskDetail() {
                       </p>
                       <p className="mt-0.5 text-xs text-faint">
                         <span className="mono">{r.part_number}</span>
-                        {r.pickup_display && <> · {r.pickup_display}</>}
+                        {/* P1：pickup_display 是苹果 API 原始值（available/unavailable），
+                            不直接裸显英文，映射为中文 */}
+                        {r.pickup_display === 'available' && <> · 可店内取货</>}
+                        {r.pickup_display === 'unavailable' && r.state !== 'unavailable' && <> · 无货</>}
                       </p>
                     </div>
                     <div className="flex flex-col items-end gap-1 shrink-0">

@@ -23,6 +23,44 @@ from app.models.models import IdempotencyRecord, MonitorTask, StockState, User
 from app.schemas import TaskBatchIn, TaskCreateIn, TaskOut, TaskPatchIn
 from app.services.lifecycle import null_notification_task_ids, purge_task_idempotency_records
 
+
+# P1：任务默认命名人类可读——{part_name}（如 iPhone 18 Pro Max 512GB 银色）、
+# {store_name}（如 万象城）。查不到时回退到 part_number / store_number。
+def _build_name_maps():
+    try:
+        from app.api.routers.catalog import SEED_PRODUCTS, SEED_STORES
+    except ImportError:
+        return {}, {}
+    part_map = {}
+    for p in SEED_PRODUCTS:
+        pn = p.get("part_number", "").strip().upper()
+        if pn:
+            # "iPhone 18 Pro Max 512GB 银色"
+            part_map[pn] = f"{p.get('name','')} {p.get('capacity','')} {p.get('color','')}".strip()
+    store_map = {}
+    for s in SEED_STORES:
+        sn = s.get("number", "").strip().upper()
+        if sn:
+            # "Apple 万象城" → "万象城"
+            name = s.get("name", "")
+            store_map[sn] = name.replace("Apple ", "").strip() or name
+    return part_map, store_map
+
+
+_PART_NAME_MAP, _STORE_NAME_MAP = _build_name_maps()
+
+
+def _render_task_name(template: str, pn: str, sn: str) -> str:
+    """渲染任务名，支持 {part_number} {store_number} {part_name} {store_name}"""
+    part_name = _PART_NAME_MAP.get(pn, pn)
+    store_name = _STORE_NAME_MAP.get(sn, sn)
+    return (
+        template.replace("{part_number}", pn)
+        .replace("{store_number}", sn)
+        .replace("{part_name}", part_name)
+        .replace("{store_name}", store_name)
+    )
+
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 log = get_logger("tasks")
 
@@ -656,7 +694,7 @@ def batch_create(
             raise APIError(409, "相同的幂等键正在处理中，请稍后重试", "idempotency_in_progress")
     created = []
     for pn, sn in combos_norm:
-        name = data.name_template.replace("{part_number}", pn).replace("{store_number}", sn)
+        name = _render_task_name(data.name_template, pn, sn)
         task = MonitorTask(
             user_id=user.id,
             name=name,

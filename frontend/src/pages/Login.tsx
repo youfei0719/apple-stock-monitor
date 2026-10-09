@@ -33,11 +33,18 @@ export default function Login() {
       setError('请填写邮箱和密码');
       return;
     }
-    // R10-P2-4：注册加前端密码长度预校验（后端 min_length=8），别等后端 422 英文直出；
+    // R10-P2-4：注册加前端密码强度预校验（后端要求 8 位+字母数字），别等后端 422 英文直出；
     // 登录不预校验（老密码可能短于 8 位，交给后端判）
-    if (mode === 'register' && password.length < 8) {
-      setError('密码至少 8 位');
-      return;
+    if (mode === 'register') {
+      if (password.length < 8) {
+        setError('密码至少 8 位');
+        return;
+      }
+      // P1：与后端 _validate_password_strength 对齐——必须含字母+数字
+      if (!/[a-zA-Z]/.test(password) || !/\d/.test(password)) {
+        setError('密码必须包含字母和数字');
+        return;
+      }
     }
     setBusy(true);
     try {
@@ -95,7 +102,7 @@ export default function Login() {
 
   return (
     <div>
-      <PageHeader title="监控" subtitle="Apple 直营店自提库存监控" />
+      <PageHeader title="监控" subtitle="Apple 直营店库存监控" />
       <div className="px-6">
         {flash && (
           <p className="mb-4 text-sm text-ok text-center font-medium">{flash}</p>

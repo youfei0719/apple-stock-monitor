@@ -36,7 +36,7 @@ SEED_STORES = [
     {"number": "R793", "name": "Apple 前海壹方城", "city": "深圳", "province": "广东"},
     {"number": "R359", "name": "Apple 南京东路", "city": "上海", "province": "上海"},
     {"number": "R389", "name": "Apple 浦东", "city": "上海", "province": "上海"},
-    {"number": "R401", "name": "Apple 上海环贸 iapm", "city": "上海", "province": "上海"},
+    {"number": "R401", "name": "Apple 环贸 iapm", "city": "上海", "province": "上海"},
     {"number": "R678", "name": "Apple 静安", "city": "上海", "province": "上海"},
     {"number": "R683", "name": "Apple 环球港", "city": "上海", "province": "上海"},
     {"number": "R705", "name": "Apple 七宝", "city": "上海", "province": "上海"},

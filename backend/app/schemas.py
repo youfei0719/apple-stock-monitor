@@ -15,9 +15,21 @@ from pydantic import (
 
 
 # ---------- auth ----------
+def _validate_password_strength(v: str) -> str:
+    """P1：密码必须含字母+数字，防纯字母弱口令（如 abcdefgh）"""
+    if not any(c.isalpha() for c in v) or not any(c.isdigit() for c in v):
+        raise ValueError("密码必须包含字母和数字")
+    return v
+
+
 class RegisterIn(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("password")
+    @classmethod
+    def _pwd_strength(cls, v: str) -> str:
+        return _validate_password_strength(v)
 
 
 class LoginIn(BaseModel):
@@ -52,6 +64,11 @@ class MeOut(BaseModel):
 class PasswordChangeIn(BaseModel):
     old_password: str = Field(min_length=1, max_length=128)
     password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("password")
+    @classmethod
+    def _pwd_strength(cls, v: str) -> str:
+        return _validate_password_strength(v)
 
 
 class TotpVerifyIn(BaseModel):
@@ -131,7 +148,7 @@ class TaskBatchIn(BaseModel):
     # R4-P1-B2：两边各上限 30（笛卡尔积 ≤900），防 1万×1万物化 OOM worker
     part_numbers: list[str] = Field(min_length=1, max_length=30)
     store_numbers: list[str] = Field(min_length=1, max_length=30)
-    name_template: str = "{part_number} × {store_number}"
+    name_template: str = "{part_name} × {store_name}"
     category: str = "iphone"
     mode: str = "instant"
     channels: ChannelsIn = Field(default_factory=ChannelsIn)

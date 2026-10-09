@@ -278,7 +278,8 @@ export default function NotifyChannels({
         {/* F-2：渠道开放范围按档位动态（trial → 免费版仅站内；付费档 → 仅邮件），不写死。
             R9-I11：tier===null（档位加载中）时不渲染档位文案，避免匿名用户首帧闪烁 */}
         {tier !== null && (
-          <p className="-mt-2 text-xs text-bad/90 leading-relaxed bg-bad/5 rounded-card-sm px-2.5 py-2">
+          // P2：这是说明信息不是报错，用中性底色，不用红色 alarming
+          <p className="-mt-2 text-xs text-sub leading-relaxed bg-bg rounded-card-sm px-2.5 py-2">
             {channelNote}
           </p>
         )}
@@ -317,7 +318,11 @@ export default function NotifyChannels({
             <TestButton
               busy={busy === 'email'}
               disabled={anonymous || tier === 'trial'}
-              onClick={() => run('email', 'email', value.email ?? '')}
+              // P1：测试用"有效邮箱"——输入框为空但有已验证注册邮箱时，测注册邮箱；
+              // 与下方"未填写时将使用你的注册邮箱"文案一致，不再自相矛盾
+              onClick={() =>
+                run('email', 'email', (value.email ?? '').trim() || (me?.email_verified ? me.email : ''))
+              }
             />
           </div>
           {/* P0：已验证邮箱自动算作邮件渠道——未填写时明确告诉用户发到哪里，

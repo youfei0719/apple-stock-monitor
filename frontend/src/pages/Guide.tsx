@@ -47,7 +47,7 @@ export default function Guide() {
         <Card className="mt-4 p-4 bg-island text-white rise-in">
           <p className="text-[15px] font-medium">关键提醒</p>
           <p className="mt-2 text-sm text-white/80 leading-relaxed">
-            自提名额按门店实时释放，看到「有货」请在 5 分钟内完成下单；下单时选择「店内取货」并确认取货门店与监控的门店一致。
+            店内取货名额按门店实时释放，看到「有货」请在 5 分钟内完成下单；下单时选择「店内取货」并确认取货门店与监控的门店一致。
           </p>
         </Card>
       </div>

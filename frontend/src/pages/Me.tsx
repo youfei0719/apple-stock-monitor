@@ -155,7 +155,7 @@ function ChannelHealthCard() {
                     </span>
                   </p>
                   <p className="mt-0.5 text-xs text-sub">
-                    近 7 天成功率{' '}
+                    近 7 天成功率：
                     <span className="mono text-ink">
                       {c.success_rate_7d == null ? '暂无数据' : `${(c.success_rate_7d * 100).toFixed(0)}%`}
                     </span>
@@ -427,7 +427,8 @@ export default function Me() {
       <PageHeader title="我的" subtitle={me.email} />
       <div className="px-4 pb-6 space-y-5">
         {/* 当前会员 */}
-        <Card className="p-5 rise-in bg-island text-white">
+        {/* P0：Card 自带 bg-white，与 bg-island 冲突导致白底白字；这里不用 Card，直接写 div */}
+        <div className="p-5 rise-in bg-island text-white rounded-card shadow-card">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-xs text-white/60">当前会员</p>
@@ -479,14 +480,13 @@ export default function Me() {
             ) : (
               <p className="mt-4 text-xs text-white/60">配额加载中…</p>
             ))}
-        </Card>
+        </div>
 
         {/* 通道健康 */}
         <ChannelHealthCard />
 
-        {/* 通知历史 */}
+        {/* 通知历史（标题由 NotificationHistory 组件渲染，这里不重复） */}
         <section>
-          <h2 className="text-[13px] font-semibold text-sub mb-2">通知历史</h2>
           <NotificationHistory />
         </section>
 
@@ -508,7 +508,7 @@ export default function Me() {
                     当前
                   </span>
                 </div>
-                <p className="mt-2 mono text-xl font-semibold">免费</p>
+                <p className="mt-2 mono text-xl font-semibold">¥0</p>
                 <ul className="mt-2 space-y-1">
                   {planFeatures({
                     tier: 'trial',

@@ -18,6 +18,9 @@ export default function VerifyEmail() {
   const [error, setError] = useState<string | null>(null);
   // R6-U1：重发成功给一条成功提示（之前零反馈，用户不知道有没有发出去）
   const [resentMsg, setResentMsg] = useState<string | null>(null);
+  // P0：重发按钮独立 loading＋60s 冷却——点了立刻有反馈，防连点刷接口
+  const [resending, setResending] = useState(false);
+  const [cooldown, setCooldown] = useState(0);
 
   const submit = async () => {
     setError(null);
@@ -51,21 +54,33 @@ export default function VerifyEmail() {
   };
 
   const resend = async () => {
+    if (resending || cooldown > 0) return;
     setError(null);
     setResentMsg(null);
     if (!email.trim()) {
       setError('请先填写注册邮箱');
       return;
     }
-    setBusy(true);
+    setResending(true);
     try {
       await api.resendCode(email.trim());
       setResentMsg('验证码已重新发送，请查收邮箱');
+      // 60s 冷却倒计时
+      setCooldown(60);
+      const timer = setInterval(() => {
+        setCooldown((c) => {
+          if (c <= 1) {
+            clearInterval(timer);
+            return 0;
+          }
+          return c - 1;
+        });
+      }, 1000);
     } catch (e) {
       // F-N8：后端 resend-code 防枚举永远 200，404 死分支已删除
       setError(e instanceof Error ? e.message : '重发失败');
     } finally {
-      setBusy(false);
+      setResending(false);
     }
   };
 
@@ -111,10 +126,10 @@ export default function VerifyEmail() {
           </div>
           <button
             onClick={resend}
-            disabled={busy}
+            disabled={resending || cooldown > 0}
             className="mt-3 w-full text-center text-sm text-accent font-medium disabled:opacity-40"
           >
-            没收到？重新发送验证码
+            {resending ? '发送中…' : cooldown > 0 ? `${cooldown}s 后可重新发送` : '没收到？重新发送验证码'}
           </button>
           <button
             onClick={() => navigate('/login', { replace: true })}

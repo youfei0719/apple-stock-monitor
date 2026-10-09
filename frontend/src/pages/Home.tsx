@@ -327,7 +327,7 @@ export default function Home() {
 
   return (
     <div>
-      <PageHeader title="监控" subtitle="Apple 直营店自提库存监控" />
+      <PageHeader title="监控" subtitle="Apple 直营店库存监控" />
       <div className="px-4 pb-4">
         {/* R7：匿名任务认领提示横幅（只展示一次，可手动关闭） */}
         {claimNotice && (
