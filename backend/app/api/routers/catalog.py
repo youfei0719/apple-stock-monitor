@@ -353,14 +353,21 @@ def list_products(
     products = get_config(db, PRODUCT_CATALOG_KEY, {}).get("products", [])
     # UX：按 part_number 去重并保持首次出现顺序——目录内容相同时渲染永远一致，
     # 不因数据源顺序抖动让用户觉得"刚才看到的那款去哪了"
+    # P1：空 part_number 的也返回（前端展示用），用户选后引导手动输入；
+    # 去重时空字符串不参与（避免 14 个空 pn 互相覆盖只剩 1 个）
     seen: dict[str, dict] = {}
+    result = []
     for p in products:
         if p.get("category") != category:
             continue
         pn = str(p.get("part_number") or "")
-        if pn and pn not in seen:
-            seen[pn] = p
-    return list(seen.values())
+        if pn:
+            if pn not in seen:
+                seen[pn] = p
+                result.append(p)
+        else:
+            result.append(p)
+    return result
 
 
 @router.get("/anchors")
