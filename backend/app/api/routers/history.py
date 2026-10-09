@@ -8,6 +8,7 @@ from sqlalchemy import desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.api.routers.catalog import sku_name_for_part_number
 from app.core.db import get_db
 from app.core.tiers import effective_tier_of
 from app.core.timeutil import utcnow
@@ -61,18 +62,22 @@ def events(
     for n, t in db.execute(q).all():
         # R5-B-N2：part_number 取通知创建时的快照列，任务删除后仍有型号信息
         pn = n.part_number or (t.part_number if t else "") or ""
-        # P1：历史老文案里裸写了 part_number（如 MJYC4CH/A），展示时替换为完整 SKU 名
+        # P1：历史老文案里裸写了 part_number（如 MJYC4CH/A），展示时替换为完整 SKU 名。
+        # 优先用任务的产品信息，任务不存在或无产品信息时用目录映射兜底。
         title, body = n.title, n.body
-        if t and pn and (t.product_name or t.capacity or t.color):
+        sku = ""
+        if t and (t.product_name or t.capacity or t.color):
             sku = (t.product_name or "").strip()
             if t.capacity:
                 sku += f" {t.capacity}"
             if t.color:
                 sku += f" {t.color}"
             sku = sku.strip()
-            if sku:
-                title = (title or "").replace(pn, sku)
-                body = (body or "").replace(pn, sku)
+        if not sku and pn:
+            sku = sku_name_for_part_number(pn)
+        if sku and pn:
+            title = (title or "").replace(pn, sku)
+            body = (body or "").replace(pn, sku)
         # P1：老文案门店名查找失败时会写成 "R793（R793）"，展示时合并重复
         if body:
             body = re.sub(r"(\S+?)（\1）", r"\1", body)
@@ -126,12 +131,20 @@ def releases(
         .group_by(day_col, pn_col, name_col)
         .order_by(desc("day"))
     ).all()
-    return [
-        {
-            "day": str(r.day),
-            "part_number": r.part_number,
-            "product_name": r.product_name,
-            "events": r.events,
-        }
-        for r in rows
-    ]
+    out = []
+    for r in rows:
+        # P1：product_name 为空或就是 part_number 时，用目录映射兜底
+        pname = r.product_name or ""
+        if (not pname or pname == r.part_number) and r.part_number:
+            mapped = sku_name_for_part_number(r.part_number)
+            if mapped:
+                pname = mapped
+        out.append(
+            {
+                "day": str(r.day),
+                "part_number": r.part_number,
+                "product_name": pname,
+                "events": r.events,
+            }
+        )
+    return out

@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.api.routers.catalog import sku_name_for_part_number
 from app.core.db import get_db
 from app.core.timeutil import utcnow
 from app.models.models import MonitorTask, Notification, User
@@ -75,6 +76,9 @@ def overview(
         # P1：榜单展示用完整 SKU 名，不裸显 part_number
         pn = n.part_number or (t.part_number if t else "") or "未知"
         label = pn
+        # P1：榜单展示用完整 SKU 名，不裸显 part_number。
+        # 优先用任务的产品信息，兜底用目录映射。
+        sku = ""
         if t and (t.product_name or t.capacity or t.color):
             sku = (t.product_name or "").strip()
             if t.capacity:
@@ -82,8 +86,10 @@ def overview(
             if t.color:
                 sku += f" {t.color}"
             sku = sku.strip()
-            if sku:
-                label = sku
+        if not sku and pn and pn != "未知":
+            sku = sku_name_for_part_number(pn)
+        if sku:
+            label = sku
         by_part[label] = by_part.get(label, 0) + 1
         # R6-I8："按天"口径统一北京时间（与 admin overview 一致）
         day = (n.created_at + timedelta(hours=8)).strftime("%Y-%m-%d")

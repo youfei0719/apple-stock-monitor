@@ -441,3 +441,21 @@ def list_anchors(db: Session = Depends(get_db)):
     """城市锚点列表（调试/管理用）。"""
     _seed_if_empty(db)
     return get_config(db, CITY_ANCHORS_KEY, {}).get("anchors", [])
+
+
+def sku_name_for_part_number(part_number: str) -> str:
+    """P1：part_number -> 完整 SKU 名（如 MJYC4CH/A -> iPhone 18 Pro Max 512GB 银色）。
+
+    用于历史记录等老文案的展示替换。找不到时返回空字符串。
+    """
+    if not part_number:
+        return ""
+    for p in SEED_PRODUCTS:
+        if p.get("part_number") == part_number:
+            name = (p.get("name") or "").strip()
+            if p.get("capacity"):
+                name += f" {p['capacity']}"
+            if p.get("color"):
+                name += f" {p['color']}"
+            return name.strip()
+    return ""
