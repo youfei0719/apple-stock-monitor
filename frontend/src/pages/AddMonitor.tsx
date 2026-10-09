@@ -148,6 +148,8 @@ export default function AddMonitor() {
   const tasksUsed = isAnon
     ? (allTaskCount ?? tasks.length)
     : (quota?.tasks_used ?? allTaskCount ?? tasks.length);
+  // P1：已满额时（还没选也超）直接提示，不用等用户选完才说
+  const atQuota = tasksLimit !== undefined && tasksUsed >= tasksLimit;
   const overQuota = combos > 0 && tasksLimit !== undefined && tasksUsed + combos > tasksLimit;
 
   const submit = async () => {
@@ -530,10 +532,13 @@ export default function AddMonitor() {
           <NotifyChannels value={channels} onChange={setChannels} />
         </section>
 
-        {(submitErr || overQuota) && (
+        {(submitErr || overQuota || atQuota) && (
           <p className="text-sm text-bad text-center">
-            {submitErr || `将超出任务上限（${tasksLimit} 个）：已有 ${tasksUsed} 个，本次需生成 ${combos} 个，请减少机型或门店选择`}
-            {(showUpgradeLink || overQuota) && (
+            {submitErr ||
+              (atQuota && combos === 0
+                ? `任务已达上限（${tasksLimit} 个），无法再创建`
+                : `将超出任务上限（${tasksLimit} 个）：已有 ${tasksUsed} 个，本次需生成 ${combos} 个，请减少机型或门店选择`)}
+            {(showUpgradeLink || overQuota || atQuota) && (
               <>
                 {' '}
                 <a href="/me" className="underline font-medium">
@@ -544,12 +549,14 @@ export default function AddMonitor() {
           </p>
         )}
 
-        <PrimaryButton onClick={submit} disabled={submitting || overQuota}>
+        <PrimaryButton onClick={submit} disabled={submitting || overQuota || atQuota}>
           {submitting
             ? '生成中…'
-            : overQuota
-              ? `超出上限（${tasksLimit} 个）`
-              : `批量生成 ${partNumbers.length} 机型 × ${pickedStores.size} 门店`}
+            : atQuota && combos === 0
+              ? `已达上限（${tasksLimit} 个）`
+              : overQuota
+                ? `超出上限（${tasksLimit} 个）`
+                : `批量生成 ${partNumbers.length} 机型 × ${pickedStores.size} 门店`}
         </PrimaryButton>
         {/* P2：创建时显示剩余额度，用户不用猜还能建几个 */}
         {!isAnon && quota && quota.tasks_limit != null && (
