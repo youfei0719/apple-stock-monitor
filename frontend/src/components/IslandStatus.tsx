@@ -37,14 +37,15 @@ export default function IslandStatus({
   const idle = taskCount === 0 && !hasStock;
 
   return (
-    <div className="fixed top-0 left-0 right-0 z-50 flex justify-center pointer-events-none">
+    <div className="fixed top-0 inset-x-0 z-50 pointer-events-none">
       {/* P1：顶部用实底（不用渐隐）——滚动时内容从实底后滑过，不再与胶囊视觉硬切；
           h-16 与 PageHeader 的 pt-16 对齐 */}
       <div className="absolute inset-x-0 top-0 h-16 bg-bg" />
+      <div className="relative flex justify-center">
       <button
         onClick={handleClick}
         aria-live="polite"
-        className={`island relative pointer-events-auto mt-3 h-10 flex items-center justify-center gap-2 bg-island text-white shadow-island overflow-hidden ${
+        className={`island pointer-events-auto mt-3 h-10 flex items-center justify-center gap-2 bg-island text-white shadow-island overflow-hidden ${
           hasStock ? 'island-hot rounded-[26px]' : 'rounded-pill'
         }`}
         style={{
@@ -74,6 +75,7 @@ export default function IslandStatus({
           )}
         </span>
       </button>
+      </div>
     </div>
   );
 }
