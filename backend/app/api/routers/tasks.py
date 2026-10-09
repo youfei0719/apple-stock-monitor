@@ -576,6 +576,13 @@ def create_task(
             if replayed:
                 return replayed[0]
             raise APIError(409, "相同的幂等键正在处理中，请稍后重试", "idempotency_in_progress")
+    # Pro 默认 5 分钟重复提醒（持续有货不断推，对齐实时监控体验）；
+    # 非 Pro 保持 None（仅状态变化时通知）
+    _repeat = data.repeat_interval_sec
+    if _repeat is None and user:
+        _tier = effective_tier_of(user)
+        if _tier.get("name") == "pro":
+            _repeat = 300
     task_kwargs: dict = dict(
         user_id=user.id if user else None,
         device_id=None if user else x_device_id,
@@ -589,7 +596,7 @@ def create_task(
         store_numbers=store_numbers,
         stores=stores,
         mode=data.mode,
-        repeat_interval_sec=data.repeat_interval_sec,
+        repeat_interval_sec=_repeat,
         channels=channels,
         expires_at=_clamp_expires(data.expires_at, anonymous=user is None),
         auto_retire=data.auto_retire,

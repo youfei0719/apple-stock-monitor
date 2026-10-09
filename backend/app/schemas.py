@@ -136,7 +136,7 @@ class TaskCreateIn(BaseModel):
     capacity: str = ""
     stores: list[StoreIn] = Field(min_length=1, max_length=20)
     mode: str = "instant"
-    repeat_interval_sec: int | None = Field(default=None, ge=3600)
+    repeat_interval_sec: int | None = Field(default=None, ge=60)
     channels: ChannelsIn = Field(default_factory=ChannelsIn)
     expires_at: datetime | None = None
     # 僵尸任务自动结束开关（断裂-11）：连续 90 天无货自动暂停。DB 列需 models.py
@@ -161,7 +161,7 @@ class TaskPatchIn(BaseModel):
     expires_at: datetime | None = None
     channels: ChannelsIn | None = None
     mode: str | None = None
-    repeat_interval_sec: int | None = Field(default=None, ge=3600)
+    repeat_interval_sec: int | None = Field(default=None, ge=60)
     auto_retire: bool | None = None
 
 
