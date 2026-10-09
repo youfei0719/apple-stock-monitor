@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { api, fmtCny, type ChannelHealth, type Payment, type Plan, type Quota } from '../lib/api';
 import { useApp } from '../components/App';
 import { NotificationHistory } from '../components/NotifyChannels';
-import { Card, EmptyState, ErrorState, LoadingState, PageHeader, PrimaryButton } from '../components/ui';
+import { Card, EmptyState, ErrorState, LoadingState, PageHeader } from '../components/ui';
 
 const TIER_LABEL: Record<string, string> = {
   trial: '免费版',
@@ -539,7 +539,13 @@ export default function Me() {
           )}
           {!plansErr && plans !== null && plans.length > 0 && (
             <div className="grid grid-cols-2 gap-2.5">
-              {plans.map((p) => {
+              {[...plans]
+                .sort((a, b) => {
+                  // 排序：Pro 最前，标准其次，免费最后
+                  const order = { pro: 0, standard: 1, free: 2, trial: 3 };
+                  return (order[a.tier] ?? 99) - (order[b.tier] ?? 99);
+                })
+                .map((p) => {
                 const current = p.tier === displayTier;
                 const isProPlan = p.tier === 'pro';
                 const isStdPlan = p.tier === 'standard';
@@ -548,12 +554,14 @@ export default function Me() {
                   : isStdPlan
                     ? 'tier-mesh tier-mesh-blue text-ink'
                     : 'tier-mesh tier-mesh-silver text-ink';
+                const isPaid = isProPlan || isStdPlan;
                 return (
                   <div
                     key={p.tier}
+                    onClick={isPaid ? () => window.open(afdianUrl, '_blank', 'noopener') : undefined}
                     className={`p-4 rise-in relative overflow-hidden rounded-card shadow-card ${
                       current ? 'ring-2 ring-accent' : ''
-                    } ${tierMeshCls}`}
+                    } ${tierMeshCls} ${isPaid ? 'cursor-pointer active:scale-[0.98] transition' : ''}`}
                   >
                     {isProPlan && (
                       <div className="absolute top-0 inset-x-0 h-[2px] bg-gradient-to-r from-amber-300 via-yellow-400 to-amber-300 rounded-t-card" />
@@ -583,28 +591,21 @@ export default function Me() {
                           </li>
                         ))}
                     </ul>
+                    {isPaid && !current && (
+                      <p className={`mt-2 text-[11px] font-medium ${isProPlan ? 'text-amber-300' : 'text-accent'}`}>
+                        点击前往开通 →
+                      </p>
+                    )}
                   </div>
                 );
               })}
             </div>
           )}
+          {/* 点击档位卡直接跳转爱发电对应档位；赞助时备注用户 ID 以便自动开通 */}
+          <p className="mt-2 text-[11px] text-faint text-center">
+            点击档位卡前往爱发电赞助开通 · 赞助时在备注填写用户 ID #{me.id} 以便自动开通
+          </p>
         </section>
-
-        {/* 爱发电开通 */}
-        <Card className="p-5 rise-in">
-          <p className="font-medium">开通 / 续费会员</p>
-          <p className="mt-1.5 text-sm text-sub leading-relaxed">
-            通过爱发电赞助开通，支付成功后系统自动开通对应档位（标准 ¥9.9 / 30 天 · Pro ¥19.9 / 30 天）。
-          </p>
-          <div className="mt-4">
-            <PrimaryButton onClick={() => window.open(afdianUrl, '_blank', 'noopener')}>
-              前往爱发电开通
-            </PrimaryButton>
-          </div>
-          <p className="mt-2 text-xs text-faint text-center">
-            赞助时在备注 / 留言中填写你的用户 ID #{me.id}{' '}或注册邮箱，以便自动开通
-          </p>
-        </Card>
 
         {/* 付费记录 */}
         <section>
