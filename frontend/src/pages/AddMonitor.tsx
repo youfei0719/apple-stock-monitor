@@ -556,7 +556,7 @@ export default function AddMonitor() {
                 {/* P1：选了容量+颜色但商品编号未验证时，明确引导手动输入 */}
                 {needsManualPn && (
                   <p className="mt-3 text-xs text-bad">
-                    所选配置的 Apple 商品编号尚未收录，请用"高级：手动输入"填写（商品编号可从 Apple Store App 订单详情获取）
+                    这个配置暂时不能直接监控，请点右上角"高级：手动输入"填写 Apple 商品编号（在 Apple Store App 的订单详情里能找到）
                   </p>
                 )}
                 {(selectedCaps.size > 0 || selectedColors.size > 0) && selectedParts.length === 0 && !needsManualPn && (
