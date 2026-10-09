@@ -8,7 +8,6 @@ from contextlib import asynccontextmanager
 from datetime import timedelta
 
 from fastapi import FastAPI, Request
-from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
@@ -125,23 +124,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-# DEBUG-422：临时抓浏览器 422 的原始请求（定位后删除）
-@app.exception_handler(RequestValidationError)
-async def validation_error_handler(request: Request, exc: RequestValidationError):
-    try:
-        body = (await request.body())[:2000]
-    except Exception:
-        body = b"<unreadable>"
-    log.warning(
-        "http_422_debug",
-        path=request.url.path,
-        content_type=request.headers.get("content-type"),
-        body=body.decode("utf-8", errors="replace"),
-        errors=str(exc.errors())[:1000],
-    )
-    return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
 
 @app.exception_handler(APIError)

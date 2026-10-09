@@ -78,14 +78,17 @@ async function req<T>(path: string, init: RequestInit = {}, absolute = false): P
   let res: Response;
   try {
     // absolute=true 时跳过 API_BASE（如 /healthz 挂在站点根，不在 /api 下）
+    // P0：不能直接 ...init——init.headers 会整体覆盖上面合并好的 headers
+    // （Content-Type 丢失 → 浏览器默认 text/plain → 后端 422）。只取 method/body。
     res = await fetch(absolute ? path : `${API_BASE}${path}`, {
+      method: init.method ?? 'GET',
       credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
         'X-Device-Id': getDeviceId(),
         ...(init.headers ?? {}),
       },
-      ...init,
+      body: init.body,
     });
   } catch (e) {
     throw new ApiError(0, e instanceof Error ? `网络异常：${e.message}` : '网络异常');
