@@ -546,7 +546,8 @@ export default function AddMonitor() {
                         .filter((p) => selectedParts.includes(p.part_number))
                         .map((p) => (
                           <span key={p.part_number} className="text-[11px] px-2 py-1 rounded-pill bg-white shadow-card">
-                            {p.capacity} · {p.color} <span className="mono text-faint">{p.part_number}</span>
+                            {/* P1：不裸显 part_number，已有容量·颜色足够识别 */}
+                            {p.capacity} · {p.color}
                           </span>
                         ))}
                     </div>

@@ -120,8 +120,7 @@ function TaskCard({
               {task.color && <> · {task.color}</>}
             </p>
             <p className="mt-0.5 text-xs text-faint">
-              <span className="mono">{task.part_number}</span>
-              {' · '}
+              {/* P1：不裸显 part_number，上一行已有完整 SKU 名 */}
               {task.stores.length} 家门店
               {remaining !== null && !expired && (
                 <span className={expiringSoon ? ' text-bad font-medium' : ''}>

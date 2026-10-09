@@ -174,8 +174,7 @@ export default function TaskDetail() {
                   {task.color && <> · {task.color}</>}
                 </p>
                 <p className="mt-1 text-xs text-sub">
-                  <span className="mono">{task.part_number}</span>
-                  {' · '}
+                  {/* P1：不裸显 part_number，上一行已有完整 SKU 名 */}
                   {task.stores.length} 家门店：
                   {task.stores.map((s) => s.name?.replace('Apple ', '') || s.number).join('、')}
                 </p>
@@ -276,11 +275,11 @@ export default function TaskDetail() {
                         )}
                       </p>
                       <p className="mt-0.5 text-xs text-faint">
-                        <span className="mono">{r.part_number}</span>
+                        {/* P1：不裸显 part_number（任务单 SKU，此处冗余） */}
                         {/* P1：pickup_display 是苹果 API 原始值（available/unavailable），
                             不直接裸显英文，映射为中文 */}
-                        {r.pickup_display === 'available' && <> · 可店内取货</>}
-                        {r.pickup_display === 'unavailable' && r.state !== 'unavailable' && <> · 无货</>}
+                        {r.pickup_display === 'available' && <>可店内取货</>}
+                        {r.pickup_display === 'unavailable' && r.state !== 'unavailable' && <>无货</>}
                       </p>
                     </div>
                     <div className="flex flex-col items-end gap-1 shrink-0">
