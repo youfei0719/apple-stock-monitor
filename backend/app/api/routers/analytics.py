@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
-from app.api.routers.catalog import sku_name_for_part_number
+from app.api.routers.catalog import city_for_store_number, sku_name_for_part_number
 from app.core.db import get_db
 from app.core.timeutil import utcnow
 from app.models.models import MonitorTask, Notification, User
@@ -35,6 +35,13 @@ def _city_of(task: MonitorTask | None, body: str) -> str:
         cities.discard("")
         if cities:
             return "、".join(sorted(cities))
+    # P1：任务无城市信息时，从通知正文提取门店号（如 R793）查目录
+    if body:
+        import re
+        for m in re.finditer(r"R\d{3}", body):
+            city = city_for_store_number(m.group(0))
+            if city:
+                return city
     return "未知"
 
 

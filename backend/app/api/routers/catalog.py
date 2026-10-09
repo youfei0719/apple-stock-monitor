@@ -459,3 +459,13 @@ def sku_name_for_part_number(part_number: str) -> str:
                 name += f" {p['color']}"
             return name.strip()
     return ""
+
+
+def city_for_store_number(store_number: str) -> str:
+    """P1：门店号 -> 城市名（如 R793 -> 深圳）。找不到时返回空字符串。"""
+    if not store_number:
+        return ""
+    for s in SEED_STORES:
+        if s.get("number") == store_number:
+            return s.get("city", "")
+    return ""
