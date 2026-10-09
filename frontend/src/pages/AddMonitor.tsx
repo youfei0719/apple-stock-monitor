@@ -227,7 +227,8 @@ export default function AddMonitor() {
         if (repeatSec !== null) patch.repeat_interval_sec = repeatSec;
         if (Object.keys(patch).length > 0) {
           // R9-D4：PATCH 补齐阶段单独捕获——batch 已成功（任务已入库），
-          // 任一 PATCH 失败不能渲染成"创建失败"，否则用户重试会撞后端 409 查重；
+          // 任一 PATCH 失败不能渲染成"创建失败"，否则用户重试会重复走批量创建流程；
+          // R24 起同内容重试是幂等返回已建任务（内容键串行化），不再 409 查重/建出重复任务
           // 照常 refreshTasks + 跳首页，失败信息经首页横幅（location.state.notice）展示一次
           try {
             await Promise.all(created.map((t) => api.updateTask(t.id, patch)));

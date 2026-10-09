@@ -49,7 +49,7 @@ state ∈ `available | unavailable | unknown | verifying | cooling | paused | ex
 ## 历史与数据（全部 snake_case）
 - `GET /api/history/events?part_number=&store=&days=30` → 有货事件（活动日志）：`[{id, task_id, part_number, title, body, link, channel, created_at}]`
 - `GET /api/history/releases?days=7` → 放货记录（按天×机型聚合）：`[{day, part_number, events}]`（standard 及以上可用）
-- `GET /api/analytics/ranking?days=1` → 全国榜单（城市放货排行）：`[{city, events}]`
+- `GET /api/analytics/ranking?days=1` → 个人城市放货排行：`{scope: "personal", ranking: [{city, events}]}`（按当前用户自己的有货通知聚合，非全站榜单）
 - `GET /api/analytics/overview` → 数据分析摘要：`{days, total_events, by_part:[[part_number,count]...], by_day:[[day,count]...]}`
 - `GET /api/guide/purchase` → 到货购买指南（静态内容）：`{title, steps[]}`
 - `GET /api/stats/poll` → 上次查询/成功率/平均响应（按用户任务聚合）：`{tasks, polled_tasks, success_rate, avg_response_ms, last_poll_at, engine}`

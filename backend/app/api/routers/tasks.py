@@ -21,7 +21,7 @@ from app.core.timeutil import as_naive_utc as _as_naive_utc
 from app.core.timeutil import utcnow
 from app.models.models import IdempotencyRecord, MonitorTask, StockState, User
 from app.schemas import TaskBatchIn, TaskCreateIn, TaskOut, TaskPatchIn
-from app.services.lifecycle import null_notification_task_ids
+from app.services.lifecycle import null_notification_task_ids, purge_task_idempotency_records
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 log = get_logger("tasks")
@@ -401,6 +401,22 @@ def _content_idempotency_key(parts: list[str]) -> str:
     return f"content:{digest}"
 
 
+def _release_owned_content_key(
+    db: Session, rec: IdempotencyRecord | None, owned: bool
+) -> None:
+    """R25-P3-1：释放本次请求占住但未回写结果的内容键占位记录。
+
+    只释放 owned 且 task_ids 仍为空的记录（占位中途无任何行创建）。
+    确定性校验失败（批量冲突 409）时调用：冲突检查针对已提交行，重试
+    同内容必然再次 409 task_conflict（带具体冲突组合信息），释放不重开
+    并发建重复的安全口；否则占位残留 10 分钟，同内容修正重试会被 409
+    idempotency_in_progress 挡住、丢了具体冲突信息。
+    """
+    if owned and rec is not None and not rec.task_ids:
+        db.delete(rec)
+        db.flush()
+
+
 @router.get("", response_model=list[TaskOut])
 def list_tasks(
     status: str = Query(default="all", description="active=监控中, expired=已过期, all=全部"),
@@ -596,10 +612,14 @@ def batch_create(
     for pn, sn in combos_norm:
         key = (pn, frozenset([sn]))
         if key in seen:
+            # R25-P3-1：确定性校验失败、无任何行创建，先释放内容键占位
+            _release_owned_content_key(db, batch_content_rec, batch_content_owned)
             raise APIError(409, f"批量内重复：{pn} × {sn} 出现了多次", "task_conflict")
         seen.add(key)
         conflict = _find_conflict_in(owned, pn, [sn])
         if conflict:
+            # R25-P3-1：同上——释放占位，让重试拿到真正的 409 task_conflict
+            _release_owned_content_key(db, batch_content_rec, batch_content_owned)
             raise _conflict_error(conflict)
     channels = data.channels.model_dump(exclude_none=True)
     # R6-D4：非 trial 档任务必须配通知渠道
@@ -769,6 +789,10 @@ def delete_task(
     # 保留型号信息（见 B-N2）。（StockState 有 ORM cascade="all,delete" 兜底，
     # 无需显式处理。）
     null_notification_task_ids(db, task.id)
+    # R25-P2-1：清理指向该任务的幂等记录（内容键+用户键），否则删任务后
+    # 同内容立即重建（不同 key）会被旧记录挡 10 分钟（409
+    # idempotency_in_progress）。并发在途的记录 task_ids 为空，不受影响。
+    purge_task_idempotency_records(db, _idempotency_scope(user, x_device_id), task.id)
     db.delete(task)
     db.commit()
     log.info("task_deleted", task_id=task_id)

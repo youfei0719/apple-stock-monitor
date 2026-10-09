@@ -133,6 +133,37 @@ def null_notification_task_ids(db: Session, task_id: int) -> int:
     return n
 
 
+def purge_task_idempotency_records(db: Session, scope: str, task_id: int) -> int:
+    """删任务时清理 task_ids 含该任务 id 的幂等记录（R25-P2-1）。
+
+    内容键/用户键记录的 task_ids 指向已删任务时整条删除——否则删任务后
+    同内容立即重建（不同 key）会撞 uq_idempotency_scope_key，看到 task_ids
+    非空的旧记录，TTL（IDEMPOTENCY_CLAIM_TTL_MIN=10 分钟）内走 409
+    idempotency_in_progress（R24 引入的回归；删任务改渠道/改名后重建是
+    用户常用流）。并发在途的记录 task_ids 为空，不受影响，R24 并发测试
+    语义不变。tasks.delete_task 与 task_expiry_sweep 的 trial 删除共用。
+    返回清理的记录数。
+    """
+    recs = (
+        db.execute(
+            select(IdempotencyRecord).where(IdempotencyRecord.scope == scope)
+        )
+        .scalars()
+        .all()
+    )
+    n = 0
+    for rec in recs:
+        # task_ids 是 JSON 列，Python 层做成员判断（SQLite JSON contains
+        # 方言不可靠）；只删"已指向被删任务"的记录，在途占位（task_ids 为空）不动
+        if rec.task_ids and task_id in rec.task_ids:
+            db.delete(rec)
+            n += 1
+    if n:
+        db.flush()
+        log.info("idempotency_records_purged", scope=scope, task_id=task_id, count=n)
+    return n
+
+
 def resume_tier_limited_tasks(db: Session, user: User) -> list[MonitorTask]:
     """R9-I14：档位提升/续费成功后，自动恢复因档位超限被暂停的任务。
 
@@ -530,6 +561,12 @@ def task_expiry_sweep(db: Session) -> dict:
     for t in old_trials:
         # R9-I1：先置空再删（复用公共函数），否则通知悬空
         null_notification_task_ids(db, t.id)
+        # R25-P2-1：同 delete_task，清理指向该任务的幂等记录
+        purge_task_idempotency_records(
+            db,
+            f"u:{t.user_id}" if t.user_id is not None else f"d:{t.device_id}",
+            t.id,
+        )
         db.delete(t)
         stats["trial_deleted"] += 1
         log.info("trial_task_deleted", task_id=t.id)
