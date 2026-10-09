@@ -24,8 +24,8 @@ Task: `{id, name, group, category, part_number, product_name, color, capacity, s
 - state ∈ 展示七态（后端已按 paused/verifying/cooling/expired 换算），不是 Apple 原始字段。
 
 - `GET /api/tasks` → 列表（含每任务最新状态摘要）
-- `POST /api/tasks` → 201（按 tier 校验任务数上限）。支持 `Idempotency-Key` 请求头：重复 key 直接返回首次创建的任务（网络重试/重复提交不建重复任务）；同 key 首个请求仍在创建中时返回 409 `idempotency_in_progress`。
-- `POST /api/tasks/batch` `{part_numbers[], store_numbers[], name_template}` → 门店×型号批量生成
+- `POST /api/tasks` → 201（按 tier 校验任务数上限）。支持 `Idempotency-Key` 请求头：重复 key 直接返回首次创建的任务（网络重试/重复提交不建重复任务）；同 key 首个请求仍在创建中时返回 409 `idempotency_in_progress`。R24 起同内容重复提交（不同 key，如双 Tab/网络重试）不再 409 `task_conflict`，而是幂等返回已建任务（服务端按归属+型号+门店组合派生内容键串行化并发创建；并发创建中返回 409 `idempotency_in_progress`）。
+- `POST /api/tasks/batch` `{part_numbers[], store_numbers[], name_template}` → 门店×型号批量生成。同样支持 `Idempotency-Key`（语义同上：重复 key 返回首次创建结果，创建中返回 409 `idempotency_in_progress`）；同内容重复批量提交同样幂等返回首次创建的任务（R24）。
 - `PATCH /api/tasks/{id}`（改名/分组/暂停/有效期/渠道）
 - `DELETE /api/tasks/{id}`
 

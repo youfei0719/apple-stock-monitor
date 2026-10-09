@@ -3,11 +3,12 @@
 匿名体验：无会话时可用 X-Device-Id 创建 1 个任务（不计配额）。
 """
 
+import hashlib
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Header, Query, Request
 from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import _client_ip, get_current_user, get_optional_user
@@ -296,6 +297,10 @@ def _claim_idempotency_key(
     """占住幂等键。返回 (record, 是否由本次请求占住)。
 
     并发同 key 撞唯一约束时 IntegrityError → 回滚后取现存记录（不抛 500）。
+    R24-P2-1：撞 SQLite 写锁（"database is locked"，另一并发请求持有写锁超过
+    busy_timeout）时同样不抛 500——锁的持有者必然在创建相同内容（key 相同），
+    回滚后按"没抢到"处理，上游走 _idempotent_replay（有结果直接返回）或 409
+    idempotency_in_progress。
     首个请求占住 key 后若超过 IDEMPOTENCY_CLAIM_TTL_MIN 仍未写回结果
     （创建中途失败/崩溃），本次请求接管该 key；仍在创建中则返回 (记录, False)，
     调用方按 409 idempotency_in_progress 处理。
@@ -332,6 +337,14 @@ def _claim_idempotency_key(
             log.warning("idempotency_claim_takeover", scope=scope)
             return new_rec, True
         return rec, False
+    except OperationalError as e:
+        # R24-P2-1：见 docstring——只处理"database is locked"，其他
+        # OperationalError（如磁盘故障）照常抛出，不掩盖真实 DB 故障
+        if "database is locked" not in str(e):
+            raise
+        db.rollback()
+        log.warning("idempotency_claim_lock_contention", scope=scope)
+        return None, False
 
 
 def _idempotent_replay(
@@ -373,6 +386,19 @@ def _idempotent_replay(
             return None
         out.append(_task_out(task, db))
     return out
+
+
+def _content_idempotency_key(parts: list[str]) -> str:
+    """R24-P2-1：内容派生幂等键。
+
+    同归属（scope 已在 (scope, key) 唯一约束中隔离）+ 同内容（part_number /
+    排序后门店组合等归一化片段）→ 同一个 key。前端每次调用生成全新
+    Idempotency-Key 时，同内容不同 key 的并发请求也会撞到这个键：复用现有
+    uq_idempotency_scope_key 唯一约束做串行化，替代 _find_conflict 纯 SELECT
+    的 check-then-insert，从根本上消灭并发重复建任务。
+    """
+    digest = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+    return f"content:{digest}"
 
 
 @router.get("", response_model=list[TaskOut])
@@ -438,12 +464,33 @@ def create_task(
     store_numbers = [s["number"].strip().upper() for s in stores]
     channels = data.channels.model_dump(exclude_none=True)
     _require_channels(channels, user)
-    # 断裂-8：重复任务冲突检测
+    # R24-P2-1：在 _find_conflict 的纯 SELECT 之前先占住内容派生幂等键
+    # （scope|part_number|排序后门店），复用 uq_idempotency_scope_key 唯一约束
+    # 做并发串行化。前端每次调用生成全新 Idempotency-Key 时，同内容不同 key
+    # 的并发请求也会撞到同一内容键：抢到的继续走创建，没抢到的走
+    # _idempotent_replay（有 task_ids 直接返回已建任务）或 409
+    # idempotency_in_progress，不再 check-then-insert 建出重复任务。
+    content_key = _content_idempotency_key([part_number, *sorted(store_numbers)])
+    content_rec, content_owned = _claim_idempotency_key(db, scope, content_key)
+    if not content_owned:
+        # 并发同内容：首个请求已占住内容键——有结果直接返回已建任务，
+        # 否则说明首个请求还在创建中
+        replayed = _idempotent_replay(db, user, x_device_id, scope, content_key)
+        if replayed:
+            return replayed[0]
+        raise APIError(409, "相同内容的任务正在创建中，请稍后重试", "idempotency_in_progress")
+    # 断裂-8：重复任务冲突检测（R24-P2-1 语义变化：同内容重复提交不再
+    # 409 task_conflict，而是幂等返回已建任务，并把 task_ids 回写到内容键
+    # 记录，后续同内容请求直接 replay）
     conflict = _find_conflict(
         db, user.id if user else None, x_device_id, part_number, store_numbers
     )
     if conflict:
-        raise _conflict_error(conflict)
+        content_rec.task_ids = [conflict.id]
+        db.add(content_rec)
+        db.commit()
+        log.info("task_create_content_replay", task_id=conflict.id)
+        return _task_out(conflict, db)
     idem_rec = None
     if idem_key:
         idem_rec, owned = _claim_idempotency_key(db, scope, idem_key)
@@ -475,10 +522,14 @@ def create_task(
     db.add(task)
     db.commit()
     db.refresh(task)
+    # R24-P2-1：内容键回写 task_ids（后续同内容请求直接 replay）；用户幂等键
+    # 回写保持不变
+    content_rec.task_ids = [task.id]
+    db.add(content_rec)
     if idem_rec is not None:
         idem_rec.task_ids = [task.id]
         db.add(idem_rec)
-        db.commit()
+    db.commit()
     log.info("task_created", task_id=task.id, user_id=user.id if user else None)
     return _task_out(task, db)
 
@@ -521,6 +572,20 @@ def batch_create(
             f"批量生成将超出任务上限（{tier['tasks_limit']}），本次 {len(combos)} 个",
             "task_limit",
         )
+    # R24-P2-1：内容派生幂等键——在批量冲突检查之前先占住整批内容键
+    # （scope|category|mode|排序后 part×store 组合），复用唯一约束串行化
+    # 同内容不同 key 的并发批量请求。没抢到的走 replay（返回首次批量创建
+    # 的任务）或 409 idempotency_in_progress，不再并发建出重复任务。
+    combos_norm = [(part.strip().upper(), store.strip().upper()) for part, store in combos]
+    batch_content_key = _content_idempotency_key(
+        [data.category, data.mode] + [f"{pn}|{sn}" for pn, sn in sorted(combos_norm)]
+    )
+    batch_content_rec, batch_content_owned = _claim_idempotency_key(db, scope, batch_content_key)
+    if not batch_content_owned:
+        replayed = _idempotent_replay(db, user, None, scope, batch_content_key)
+        if replayed:
+            return replayed
+        raise APIError(409, "相同内容的批量任务正在创建中，请稍后重试", "idempotency_in_progress")
     # 断裂-8：批量内去重 + 与已有任务查重（409）；N7：门店号归一化后再查重
     # R10-P1-2：用户已有任务单次查询后内存比对（此前每 combo 一次 _find_conflict，
     # 每次全表拉回逐条比对，最多几百次查询）
@@ -528,7 +593,6 @@ def batch_create(
         db.execute(select(MonitorTask).where(MonitorTask.user_id == user.id)).scalars().all()
     )
     seen: set[tuple[str, frozenset]] = set()
-    combos_norm = [(part.strip().upper(), store.strip().upper()) for part, store in combos]
     for pn, sn in combos_norm:
         key = (pn, frozenset([sn]))
         if key in seen:
@@ -581,10 +645,14 @@ def batch_create(
             .scalars()
             .all()
         )
+    # R24-P2-1：内容键回写 task_ids（后续同内容批量请求直接 replay）；
+    # 用户幂等键回写保持不变
+    batch_content_rec.task_ids = [t.id for t in created]
+    db.add(batch_content_rec)
     if idem_rec is not None:
         idem_rec.task_ids = [t.id for t in created]
         db.add(idem_rec)
-        db.commit()
+    db.commit()
     log.info("task_batch_created", user_id=user.id, count=len(created))
     return [_task_out(t, db) for t in created]
 
