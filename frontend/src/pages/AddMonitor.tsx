@@ -53,7 +53,6 @@ export default function AddMonitor() {
   const [storeToast, setStoreToast] = useState<string | null>(null);
 
   const [nameTemplate, setNameTemplate] = useState('');
-  const [group, setGroup] = useState('');
   const [mode, setMode] = useState<'instant' | 'confirmed'>('instant');
   // 连续确认模式下的重复提醒间隔（秒）；后端字段 repeat_interval_sec 已存在，batch 接口走 PATCH 补齐
   const [repeatInterval, setRepeatInterval] = useState('');
@@ -211,7 +210,6 @@ export default function AddMonitor() {
                 .replace('{store_name}', storeName);
               await api.createTask({
                 name: taskName,
-                group: group.trim(),
                 category,
                 part_number: pn,
                 product_name: prod?.name ?? '',
@@ -235,7 +233,7 @@ export default function AddMonitor() {
           return;
         }
       } else {
-        // batch 接口直接接受 category/mode/channels；group/repeat_interval_sec 仍走 PATCH 补齐
+        // batch 接口直接接受 category/mode/channels；repeat_interval_sec 走 PATCH 补齐
         const created = await api.batchTasks({
           part_numbers: partNumbers,
           store_numbers,
@@ -247,7 +245,6 @@ export default function AddMonitor() {
         });
         doneCount = created.length;
         const patch: Partial<Task> = {};
-        if (group.trim()) patch.group = group.trim();
         if (repeatSec !== null) patch.repeat_interval_sec = repeatSec;
         if (Object.keys(patch).length > 0) {
           // R9-D4：PATCH 补齐阶段单独捕获——batch 已成功（任务已入库），
@@ -297,7 +294,7 @@ export default function AddMonitor() {
 
   return (
     <div>
-      <PageHeader title="添加监控" subtitle="机型 × 门店多维选择 · 支持批量生成" />
+      <PageHeader title="添加监控" subtitle="选机型、选门店，批量生成监控任务" />
       <div className="px-4 pb-28 space-y-5">
         {/* 品类 */}
         <section>
@@ -467,14 +464,6 @@ export default function AddMonitor() {
               placeholder="任务命名模板，如：iPhone 18 Pro Max × 万象城"
               className="w-full px-3 py-2.5 rounded-card-sm bg-bg text-sm outline-none placeholder:text-faint"
             />
-            <div className="flex gap-2">
-              <input
-                value={group}
-                onChange={(e) => setGroup(e.target.value)}
-                placeholder="分组（可选）"
-                className="flex-1 px-3 py-2.5 rounded-card-sm bg-bg text-sm outline-none placeholder:text-faint"
-              />
-            </div>
             <div className="grid grid-cols-2 gap-2">
               {(
                 [
@@ -562,8 +551,8 @@ export default function AddMonitor() {
         </PrimaryButton>
         {/* P2：创建时显示剩余额度，用户不用猜还能建几个 */}
         {!isAnon && quota && quota.tasks_limit != null && (
-          <p className="mt-2 text-xs text-faint text-center">
-            监控任务剩余额度：{Math.max(0, quota.tasks_limit - (quota.tasks_used ?? 0))} / {quota.tasks_limit}
+          <p className="mt-2 text-xs text-sub text-center">
+            还可创建 <span className="mono text-ink font-medium">{Math.max(0, quota.tasks_limit - (quota.tasks_used ?? 0))}</span> 个监控任务（共 {quota.tasks_limit} 个）
           </p>
         )}
       </div>

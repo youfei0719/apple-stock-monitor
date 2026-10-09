@@ -6,10 +6,10 @@ import { NotificationHistory } from '../components/NotifyChannels';
 import { Card, EmptyState, ErrorState, LoadingState, PageHeader, PrimaryButton } from '../components/ui';
 
 const TIER_LABEL: Record<string, string> = {
-  trial: '免费',
-  free: '免费',
-  standard: '标准',
-  pro: 'Pro',
+  trial: '免费版',
+  free: '免费版',
+  standard: '标准版',
+  pro: 'Pro 版',
 };
 
 const CHANNEL_LABEL: Record<string, string> = {
@@ -419,7 +419,7 @@ export default function Me() {
   // N2：展示档位统一用 /quota 的有效档位（quota.tier，过期按 free 算）；
   // /me 已由后端返回有效档位（auth.py:425 effective_tier，过期按 free 算），这里只做兜底
   const displayTier = quota?.tier ?? me.tier;
-  const tierLabel = `${TIER_LABEL[displayTier] ?? displayTier}版`;
+  const tierLabel = TIER_LABEL[displayTier] ?? displayTier;
   const expiry = quota ? fmtBeijingDate(quota.tier_expires_at) : null;
 
   return (
@@ -447,7 +447,7 @@ export default function Me() {
                 </p>
               )}
             </div>
-            <span className="mono text-xs text-white/60">#{String(me.id)}</span>
+            <span className="mono text-xs text-white/60">用户 ID #{String(me.id)}</span>
           </div>
           {quota && (
             <div className="mt-4 space-y-3">
