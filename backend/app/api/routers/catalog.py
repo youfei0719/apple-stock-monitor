@@ -101,7 +101,7 @@ SEED_PRODUCTS = [
         "name": "iPhone 18 Pro Max",
         "color": "黑色",
         "capacity": "512GB",
-        "price_cny": 11999,
+        "price_cny": 12999,
         "category": "iphone",
     },
     {
@@ -117,7 +117,7 @@ SEED_PRODUCTS = [
         "name": "iPhone 18 Pro Max",
         "color": "黑色",
         "capacity": "1TB",
-        "price_cny": 13999,
+        "price_cny": 14999,
         "category": "iphone",
     },
     {
@@ -158,7 +158,7 @@ SEED_PRODUCTS = [
         "name": "iPhone 18 Pro",
         "color": "黑色钛金属",
         "capacity": "512GB",
-        "price_cny": 9999,
+        "price_cny": 10999,
         "category": "iphone",
     },
     {
@@ -182,7 +182,7 @@ SEED_PRODUCTS = [
         "name": "iPhone 18 Pro",
         "color": "黑色钛金属",
         "capacity": "1TB",
-        "price_cny": 11999,
+        "price_cny": 12999,
         "category": "iphone",
     },
     {
