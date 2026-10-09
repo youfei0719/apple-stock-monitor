@@ -480,10 +480,10 @@ export default function AddMonitor() {
                 />
                 {expertText.trim() ? (
                   <p className="mt-2 text-xs text-sub">
-                    已识别 <span className="mono text-ink">{selectedParts.length}</span> 个 part number
+                    已识别 <span className="mono text-ink">{selectedParts.length}</span> 个配置
                   </p>
                 ) : (
-                  <p className="mt-2 text-xs text-faint">每行一个 part number，如 MJYC4CH/A</p>
+                  <p className="mt-2 text-xs text-faint">每行一个 Apple 商品编号</p>
                 )}
               </Card>
             ) : (
@@ -553,10 +553,10 @@ export default function AddMonitor() {
                     </div>
                   </Card>
                 )}
-                {/* P1：选了容量+颜色但 part_number 未验证时，明确引导手动输入 */}
+                {/* P1：选了容量+颜色但商品编号未验证时，明确引导手动输入 */}
                 {needsManualPn && (
                   <p className="mt-3 text-xs text-bad">
-                    所选配置的 part number 尚未收录，请用"高级：手动输入"填写（part number 可从 Apple Store App 订单详情获取）
+                    所选配置的 Apple 商品编号尚未收录，请用"高级：手动输入"填写（商品编号可从 Apple Store App 订单详情获取）
                   </p>
                 )}
                 {(selectedCaps.size > 0 || selectedColors.size > 0) && selectedParts.length === 0 && !needsManualPn && (
