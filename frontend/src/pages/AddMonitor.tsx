@@ -15,17 +15,44 @@ const CATEGORIES: { id: string; label: string; soon?: boolean }[] = [
   { id: 'watch', label: 'Watch', soon: true },
 ];
 
-function SectionTitle({ children }: { children: React.ReactNode }) {
-  return <h2 className="text-[13px] font-semibold text-sub mb-2">{children}</h2>;
+/** 向导步骤 */
+const STEPS = ['选机型', '选配置', '选门店', '确认创建'] as const;
+
+function Stepper({ step }: { step: number }) {
+  return (
+    <div className="flex gap-1.5 mb-5">
+      {STEPS.map((label, i) => (
+        <div key={label} className="flex-1">
+          <div
+            className={`h-1 rounded-full transition ${
+              i < step ? 'bg-island' : i === step ? 'bg-accent' : 'bg-line'
+            }`}
+          />
+          <p
+            className={`mt-1.5 text-[11px] text-center ${
+              i === step ? 'text-ink font-semibold' : 'text-faint'
+            }`}
+          >
+            {label}
+          </p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function SectionQ({ children }: { children: React.ReactNode }) {
+  return <h2 className="text-[17px] font-semibold mb-1">{children}</h2>;
+}
+
+function SectionHint({ children }: { children: React.ReactNode }) {
+  return <p className="text-[13px] text-sub mb-3">{children}</p>;
 }
 
 export default function AddMonitor() {
   const navigate = useNavigate();
   const { refreshTasks, me, tasks } = useApp();
-  // UI-3：提交前按 tasks_limit 预检上限（登录用户拉 /quota；匿名按 trial 1 个算）
   const [quota, setQuota] = useState<Quota | null>(null);
-  // R10-死代码4：UI-3 预检的 tasksUsed 回退不能用 tab 过滤后的 tasks（useApp 的 tasks
-  // 随 Home tab 变化，低频不准）——这里单独拉一次全量计数
   const [allTaskCount, setAllTaskCount] = useState<number | null>(null);
   useEffect(() => {
     if (me) api.quota().then(setQuota).catch(() => setQuota(null));
@@ -35,19 +62,24 @@ export default function AddMonitor() {
       .catch(() => setAllTaskCount(null));
   }, [me]);
   const isAnon = me === null;
-  // UX：门店目录在线刷新是管理员功能（后端走 TOTP 二次验证），非管理员直接置灰
   const canRefreshCatalog = me?.is_admin === true;
 
+  // 向导状态
+  const [step, setStep] = useState(0);
   const [category, setCategory] = useState('iphone');
   const [products, setProducts] = useState<Product[] | null>(null);
   const [prodErr, setProdErr] = useState<string | null>(null);
-  const [picked, setPicked] = useState<Set<string>>(new Set());
+
+  // Step 1: 选机型（按产品名分组）
+  const [selectedModel, setSelectedModel] = useState<string | null>(null);
+
+  // Step 2: 选配置（容量/颜色多选）
+  const [selectedCaps, setSelectedCaps] = useState<Set<string>>(new Set());
+  const [selectedColors, setSelectedColors] = useState<Set<string>>(new Set());
   const [expert, setExpert] = useState(false);
   const [expertText, setExpertText] = useState('');
-  // UX：机型按容量/颜色筛选，不用在几十个组合里大海捞针
-  const [capFilter, setCapFilter] = useState<string | null>(null);
-  const [colorFilter, setColorFilter] = useState<string | null>(null);
 
+  // Step 3: 选门店
   const [stores, setStores] = useState<StoreRef[] | null>(null);
   const [storeErr, setStoreErr] = useState<string | null>(null);
   const [pickedStores, setPickedStores] = useState<Set<string>>(new Set());
@@ -55,15 +87,14 @@ export default function AddMonitor() {
   const [refreshing, setRefreshing] = useState(false);
   const [storeToast, setStoreToast] = useState<string | null>(null);
 
+  // Step 4: 配置
   const [nameTemplate, setNameTemplate] = useState('');
   const [mode, setMode] = useState<'instant' | 'confirmed'>('instant');
-  // 连续确认模式下的重复提醒间隔（秒）；后端字段 repeat_interval_sec 已存在，batch 接口走 PATCH 补齐
   const [repeatInterval, setRepeatInterval] = useState('');
   const [channels, setChannels] = useState<TaskChannels>({});
 
   const [submitting, setSubmitting] = useState(false);
   const [submitErr, setSubmitErr] = useState<string | null>(null);
-  // P2：配额超限时给升级引导，转化路径别断
   const [showUpgradeLink, setShowUpgradeLink] = useState(false);
 
   const loadProducts = async () => {
@@ -83,8 +114,6 @@ export default function AddMonitor() {
     try {
       setStores(await api.stores(refresh));
     } catch (e) {
-      // D10：403（门店目录刷新仅管理员可用）不清空已有列表，toast 提示即可；
-      // R6-I14：429（refresh_limited）同样不清空列表，toast 提示即可
       if (e instanceof ApiError && (e.status === 403 || e.status === 429 || e.code === 'refresh_limited')) {
         if (refresh) {
           setStoreToast(
@@ -105,9 +134,11 @@ export default function AddMonitor() {
   };
 
   useEffect(() => {
-    setPicked(new Set());
-    setCapFilter(null);
-    setColorFilter(null);
+    setSelectedModel(null);
+    setSelectedCaps(new Set());
+    setSelectedColors(new Set());
+    setExpert(false);
+    setExpertText('');
     loadProducts();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [category]);
@@ -116,39 +147,58 @@ export default function AddMonitor() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const partNumbers = useMemo(() => {
+  // 按产品名分组（Step 1 用）
+  const modelGroups = useMemo(() => {
+    const map = new Map<string, Product[]>();
+    for (const p of products ?? []) {
+      if (!map.has(p.name)) map.set(p.name, []);
+      map.get(p.name)!.push(p);
+    }
+    return [...map.entries()].map(([name, items]) => ({
+      name,
+      count: items.length,
+      minPrice: Math.min(...items.map((i) => i.price_cny ?? 0)),
+    }));
+  }, [products]);
+
+  // 选中机型的所有变体（Step 2 用）
+  const modelProducts = useMemo(() => {
+    if (!selectedModel) return [];
+    return (products ?? []).filter((p) => p.name === selectedModel);
+  }, [products, selectedModel]);
+
+  const capacities = useMemo(() => {
+    const set = new Set<string>();
+    modelProducts.forEach((p) => p.capacity && set.add(p.capacity));
+    return [...set];
+  }, [modelProducts]);
+
+  const colors = useMemo(() => {
+    const set = new Set<string>();
+    modelProducts.forEach((p) => p.color && set.add(p.color));
+    return [...set];
+  }, [modelProducts]);
+
+  // 选中的 part numbers（容量∩颜色交集；某维度未选=全选该维度）
+  const selectedParts = useMemo(() => {
     if (expert) {
       return expertText
         .split(/[\s,，;；\n]+/)
         .map((s) => s.trim().toUpperCase())
         .filter(Boolean);
     }
-    return [...picked];
-  }, [expert, expertText, picked]);
-
-  // 机型筛选：容量/颜色维度
-  const capacities = useMemo(() => {
-    const set = new Set<string>();
-    (products ?? []).forEach((p) => p.capacity && set.add(p.capacity));
-    return [...set];
-  }, [products]);
-  const colors = useMemo(() => {
-    const set = new Set<string>();
-    (products ?? []).forEach((p) => p.color && set.add(p.color));
-    return [...set];
-  }, [products]);
-  const filteredProducts = useMemo(() => {
-    return (products ?? []).filter(
-      (p) =>
-        (!capFilter || p.capacity === capFilter) &&
-        (!colorFilter || p.color === colorFilter),
-    );
-  }, [products, capFilter, colorFilter]);
+    return modelProducts
+      .filter(
+        (p) =>
+          (selectedCaps.size === 0 || (p.capacity && selectedCaps.has(p.capacity))) &&
+          (selectedColors.size === 0 || (p.color && selectedColors.has(p.color))),
+      )
+      .map((p) => p.part_number);
+  }, [expert, expertText, modelProducts, selectedCaps, selectedColors]);
 
   const filteredStores = useMemo(() => {
     const q = storeQuery.trim().toLowerCase();
     if (!q || !stores) return stores ?? [];
-    // R6-I3：脏 catalog 数据（缺 name/city/number）不再让 toLowerCase 崩掉渲染
     return stores.filter(
       (s) =>
         (s.name ?? '').toLowerCase().includes(q) ||
@@ -157,7 +207,6 @@ export default function AddMonitor() {
     );
   }, [stores, storeQuery]);
 
-  // UX：门店按城市分组，每组可一键全选/取消，长列表不再是大海捞针
   const storesByCity = useMemo(() => {
     const map = new Map<string, StoreRef[]>();
     for (const s of filteredStores) {
@@ -168,6 +217,13 @@ export default function AddMonitor() {
     return [...map.entries()].sort(([a], [b]) => a.localeCompare(b, 'zh-CN'));
   }, [filteredStores]);
 
+  const toggle = (set: Set<string>, key: string): Set<string> => {
+    const next = new Set(set);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    return next;
+  };
+
   const toggleCity = (cityStores: StoreRef[]) => {
     const nums = cityStores.map((s) => s.number);
     const allOn = nums.every((n) => pickedStores.has(n));
@@ -177,36 +233,41 @@ export default function AddMonitor() {
     setPickedStores(next);
   };
 
-  const toggle = (set: Set<string>, key: string): Set<string> => {
-    const next = new Set(set);
-    if (next.has(key)) next.delete(key);
-    else next.add(key);
-    return next;
-  };
-
-  // P2：配额计算提到组件层，渲染时按钮可直接用 overQuota 禁用明示
-  // R10-死代码4：回退用全量计数（allTaskCount），不用 tab 过滤后的 tasks.length
-  const combos = partNumbers.length * pickedStores.size;
+  // 配额
+  const combos = selectedParts.length * pickedStores.size;
   const tasksLimit = isAnon ? 1 : quota?.tasks_limit;
   const tasksUsed = isAnon
     ? (allTaskCount ?? tasks.length)
     : (quota?.tasks_used ?? allTaskCount ?? tasks.length);
-  // P1：已满额时（还没选也超）直接提示，不用等用户选完才说
   const atQuota = tasksLimit !== undefined && tasksUsed >= tasksLimit;
   const overQuota = combos > 0 && tasksLimit !== undefined && tasksUsed + combos > tasksLimit;
+
+  // 步骤校验
+  const canNext = () => {
+    if (step === 0) return selectedModel !== null;
+    if (step === 1) return selectedParts.length > 0;
+    if (step === 2) return pickedStores.size > 0;
+    return true;
+  };
+
+  const nextHint = () => {
+    if (step === 0 && !selectedModel) return '先选一款机型';
+    if (step === 1 && selectedParts.length === 0) return '选至少一种容量或颜色';
+    if (step === 2 && pickedStores.size === 0) return '选至少一家门店';
+    return null;
+  };
 
   const submit = async () => {
     setSubmitErr(null);
     const store_numbers = [...pickedStores];
-    if (partNumbers.length === 0) {
-      setSubmitErr('请先选择机型（或点「高级」手动输入 Part Number）');
+    if (selectedParts.length === 0) {
+      setSubmitErr('请先选择机型配置');
       return;
     }
     if (store_numbers.length === 0) {
       setSubmitErr('请至少选择一家 Apple 直营店');
       return;
     }
-    // 持续提醒间隔下限 3600 秒（与后端 ge=3600 对齐）
     const ri = parseInt(repeatInterval, 10);
     if (mode === 'confirmed' && repeatInterval.trim()) {
       if (!Number.isFinite(ri) || ri < MIN_REPEAT_INTERVAL_SEC) {
@@ -214,10 +275,9 @@ export default function AddMonitor() {
         return;
       }
     }
-    // UI-3：提交前先按 tasks_limit 提示上限，别等提交时吃 403（combos/tasksLimit/tasksUsed 已在组件层计算）
     if (overQuota) {
       setSubmitErr(
-        `将超出任务上限（${tasksLimit} 个）：已有 ${tasksUsed} 个，本次需生成 ${combos} 个，请减少机型或门店选择`,
+        `将超出任务上限（${tasksLimit} 个）：已有 ${tasksUsed} 个，本次需生成 ${combos} 个，请减少选择`,
       );
       setShowUpgradeLink(true);
       return;
@@ -225,26 +285,19 @@ export default function AddMonitor() {
     setShowUpgradeLink(false);
     setSubmitting(true);
     try {
-      // F-1：登录用户走批量接口；匿名用户走单任务接口逐个创建
-      // （后端 /tasks/batch 要求登录，匿名调 batch 会 401）
       const nameTpl = nameTemplate.trim() || '{part_name} × {store_name}';
       const repeatSec = mode === 'confirmed' && repeatInterval.trim() && Number.isFinite(ri) ? ri : null;
-      // R10-I4：空 webhook URL 后端会 422（min_length=1），提前过滤掉未填写的行
-      // （与 TaskDetail.saveChannels 共用 lib.cleanChannels）
       const clean = cleanChannels(channels);
-      // P0：成功数按后端真实返回展示——两个分支各自把实际创建数写到这里
       let doneCount = 0;
       if (isAnon) {
         const storeByNumber = new Map((stores ?? []).map((s) => [s.number, s]));
         const productByPn = new Map((products ?? []).map((p) => [p.part_number, p]));
         let createdCount = 0;
         try {
-          for (const pn of partNumbers) {
+          for (const pn of selectedParts) {
             for (const sn of store_numbers) {
               const prod = productByPn.get(pn);
               const info = storeByNumber.get(sn);
-              // P1：命名模板支持人类可读占位符 {part_name} {store_name}，
-              // 查不到时回退 part_number / store_number
               const partName = prod ? `${prod.name} ${prod.capacity ?? ''} ${prod.color ?? ''}`.trim() : pn;
               const storeName = info ? (info.name?.replace('Apple ', '') || sn) : sn;
               const taskName = nameTpl
@@ -277,11 +330,9 @@ export default function AddMonitor() {
           return;
         }
       } else {
-        // batch 接口直接接受 category/mode/channels；repeat_interval_sec 走 PATCH 补齐
         const created = await api.batchTasks({
-          part_numbers: partNumbers,
+          part_numbers: selectedParts,
           store_numbers,
-          // 后端支持 {part_number} / {store_number} / {part_name} / {store_name} 四种占位符
           name_template: nameTpl,
           category,
           mode,
@@ -291,21 +342,17 @@ export default function AddMonitor() {
         const patch: Partial<Task> = {};
         if (repeatSec !== null) patch.repeat_interval_sec = repeatSec;
         if (Object.keys(patch).length > 0) {
-          // R9-D4：PATCH 补齐阶段单独捕获——batch 已成功（任务已入库），
-          // 任一 PATCH 失败不能渲染成"创建失败"，否则用户重试会重复走批量创建流程；
-          // R24 起同内容重试是幂等返回已建任务（内容键串行化），不再 409 查重/建出重复任务
-          // 照常 refreshTasks + 跳首页，失败信息经首页横幅（location.state.notice）展示一次
           try {
             await Promise.all(created.map((t) => api.updateTask(t.id, patch)));
           } catch (patchErr) {
             try {
               await refreshTasks('active');
             } catch {
-              /* 刷新失败不影响：任务已创建，首页会自行重试加载 */
+              /* 忽略 */
             }
             navigate('/', {
               state: {
-                notice: `任务已创建，但分组/重复间隔设置失败：${patchErr instanceof Error ? patchErr.message : '未知错误'}`,
+                notice: `任务已创建，但重复间隔设置失败：${patchErr instanceof Error ? patchErr.message : '未知错误'}`,
               },
             });
             return;
@@ -313,8 +360,6 @@ export default function AddMonitor() {
         }
       }
       await refreshTasks('active');
-      // P0：成功提示用后端真实返回的创建数，不再用本地静态文案；
-      // 失败走 submitErr（后端 detail 原文），不再有"创建了 N 个"的误导
       navigate('/', {
         state: { notice: `已创建 ${doneCount} 个监控任务` },
       });
@@ -325,351 +370,389 @@ export default function AddMonitor() {
     }
   };
 
-  // 预计月消耗（上限估算，按成功发送计）：
-  // ceil(30*24*3600 / interval) × 门店数 × 机型数（R13-P2-7：此前漏乘机型数）
   const riNum = parseInt(repeatInterval, 10);
   const showEstimate =
     mode === 'confirmed' && Number.isFinite(riNum) && riNum >= MIN_REPEAT_INTERVAL_SEC;
   const monthlyEstimate = showEstimate
     ? Math.ceil((30 * 24 * 3600) / riNum) *
       Math.max(1, pickedStores.size) *
-      Math.max(1, partNumbers.length)
+      Math.max(1, selectedParts.length)
     : 0;
 
   return (
     <div>
-      <PageHeader title="添加监控" subtitle="选机型、选门店，批量生成监控任务" />
-      <div className="px-4 pb-28 space-y-5">
-        {/* 品类 */}
-        <section>
-          <SectionTitle>品类</SectionTitle>
-          <div className="grid grid-cols-4 gap-2">
-            {CATEGORIES.map((c) => (
-              <button
-                key={c.id}
-                onClick={() => setCategory(c.id)}
-                /* UX：长期无机型的品类直接置灰不可点，标注"即将支持"——
-                   不再让用户点进去看"稍后再试" */
-                disabled={c.soon}
-                title={c.soon ? '即将支持' : undefined}
-                className={`py-2 rounded-card-sm text-sm font-medium transition active:scale-95 flex flex-col items-center justify-center gap-0.5 ${
-                  category === c.id ? 'bg-island text-white' : 'bg-white text-sub shadow-card'
-                } ${c.soon ? 'opacity-45' : ''}`}
-              >
-                <span>{c.label}</span>
-                {c.soon && <span className="text-[10px] font-normal opacity-80">即将支持</span>}
-              </button>
-            ))}
-          </div>
-        </section>
+      <PageHeader title="添加监控" subtitle={`第 ${step + 1} 步，共 ${STEPS.length} 步`} />
+      <div className="px-4 pb-28">
+        <Stepper step={step} />
 
-        {/* 机型选择 / 专家模式 */}
-        <section>
-          <div className="flex items-center justify-between mb-2">
-            <SectionTitle>机型</SectionTitle>
-            <button
-              onClick={() => setExpert((v) => !v)}
-              className="text-xs text-accent font-medium"
-            >
-              {expert ? '切换为列表选择' : '高级：手动输入 Part Number'}
-            </button>
-          </div>
-          {expert ? (
-            <Card className="p-4">
-              <textarea
-                value={expertText}
-                onChange={(e) => setExpertText(e.target.value)}
-                placeholder={'每行一个，如：\nMJYC4CH/A\nMJYD4CH/A'}
-                rows={4}
-                className="w-full mono text-sm bg-transparent outline-none resize-none placeholder:text-faint"
-              />
-              {/* UX：空输入时显示引导文案，有输入后才显示"已识别 N 个"——
-                  避免"已识别 0 个"在输入前就没有意义 */}
-              {expertText.trim() ? (
-                <p className="mt-2 text-xs text-sub">
-                  已识别 <span className="mono text-ink">{partNumbers.length}</span> 个 part number
-                </p>
-              ) : (
-                <p className="mt-2 text-xs text-faint">每行一个 part number，如 MJYC4CH/A</p>
-              )}
-            </Card>
-          ) : prodErr ? (
-            <ErrorState message={prodErr} onRetry={loadProducts} />
-          ) : products === null ? (
-            <LoadingState rows={2} />
-          ) : products.length === 0 ? (
-            <EmptyState title="该品类暂无机型" hint="换个品类试试" action={null} />
-          ) : (
-            <>
-              {/* 容量/颜色筛选 */}
-              {(capacities.length > 1 || colors.length > 1) && (
-                <div className="mb-2 space-y-1.5">
-                  {capacities.length > 1 && (
-                    <div className="flex gap-1.5 overflow-x-auto pb-0.5">
-                      <button
-                        onClick={() => setCapFilter(null)}
-                        className={`px-3 py-1.5 rounded-pill text-xs font-medium whitespace-nowrap transition active:scale-95 ${
-                          capFilter === null ? 'bg-island text-white' : 'bg-white text-sub shadow-card'
-                        }`}
-                      >
-                        全部容量
-                      </button>
-                      {capacities.map((c) => (
-                        <button
-                          key={c}
-                          onClick={() => setCapFilter(capFilter === c ? null : c)}
-                          className={`px-3 py-1.5 rounded-pill text-xs font-medium whitespace-nowrap transition active:scale-95 ${
-                            capFilter === c ? 'bg-island text-white' : 'bg-white text-sub shadow-card'
-                          }`}
-                        >
-                          {c}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  {colors.length > 1 && (
-                    <div className="flex gap-1.5 overflow-x-auto pb-0.5">
-                      <button
-                        onClick={() => setColorFilter(null)}
-                        className={`px-3 py-1.5 rounded-pill text-xs font-medium whitespace-nowrap transition active:scale-95 ${
-                          colorFilter === null ? 'bg-island text-white' : 'bg-white text-sub shadow-card'
-                        }`}
-                      >
-                        全部颜色
-                      </button>
-                      {colors.map((c) => (
-                        <button
-                          key={c}
-                          onClick={() => setColorFilter(colorFilter === c ? null : c)}
-                          className={`px-3 py-1.5 rounded-pill text-xs font-medium whitespace-nowrap transition active:scale-95 ${
-                            colorFilter === c ? 'bg-island text-white' : 'bg-white text-sub shadow-card'
-                          }`}
-                        >
-                          {c}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-              <div className="space-y-2 max-h-72 overflow-y-auto">
-                {filteredProducts.map((p) => {
-                const on = picked.has(p.part_number);
-                return (
-                  <button
-                    key={p.part_number}
-                    onClick={() => setPicked(toggle(picked, p.part_number))}
-                    className={`w-full text-left p-3.5 rounded-card-sm transition active:scale-[0.99] ${
-                      on ? 'bg-island text-white' : 'bg-white shadow-card'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[15px] font-medium truncate">
-                        <span className="product-name">{p.name}</span>
-                      </span>
-                      <span className={`mono text-sm shrink-0 ${on ? 'text-white/90' : 'text-sub'}`}>
-                        {/* R6-I3：缺 price_cny 的脏条目回退 0，避免 toLocaleString 崩溃 */}
-                        ¥{(p.price_cny ?? 0).toLocaleString('zh-CN')}
-                      </span>
-                    </div>
-                    <div className={`mt-1 text-xs ${on ? 'text-white/70' : 'text-sub'}`}>
-                      {p.capacity && <>{p.capacity} · </>}
-                      {p.color && <>{p.color} · </>}
-                      <span className="mono">{p.part_number}</span>
-                    </div>
-                  </button>
-                );
-              })}
+        {/* Step 0: 选机型 */}
+        {step === 0 && (
+          <section>
+            <SectionQ>你要监控哪款 iPhone？</SectionQ>
+            <SectionHint>先选机型，下一步再选具体配置</SectionHint>
+            <div className="grid grid-cols-4 gap-2 mb-4">
+              {CATEGORIES.map((c) => (
+                <button
+                  key={c.id}
+                  onClick={() => setCategory(c.id)}
+                  disabled={c.soon}
+                  title={c.soon ? '即将支持' : undefined}
+                  className={`py-2 rounded-card-sm text-sm font-medium transition active:scale-95 flex flex-col items-center justify-center gap-0.5 ${
+                    category === c.id ? 'bg-island text-white' : 'bg-white text-sub shadow-card'
+                  } ${c.soon ? 'opacity-45' : ''}`}
+                >
+                  <span>{c.label}</span>
+                  {c.soon && <span className="text-[10px] font-normal opacity-80">即将支持</span>}
+                </button>
+              ))}
+            </div>
+            {prodErr ? (
+              <ErrorState message={prodErr} onRetry={loadProducts} />
+            ) : products === null ? (
+              <LoadingState rows={2} />
+            ) : modelGroups.length === 0 ? (
+              <EmptyState title="该品类暂无机型" hint="换个品类试试" action={null} />
+            ) : (
+              <div className="space-y-2.5">
+                {modelGroups.map((g) => {
+                  const on = selectedModel === g.name;
+                  return (
+                    <button
+                      key={g.name}
+                      onClick={() => setSelectedModel(g.name)}
+                      className={`w-full text-left p-4 rounded-card transition active:scale-[0.99] border-2 ${
+                        on ? 'bg-white border-accent shadow-card' : 'bg-white border-transparent shadow-card'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-[17px] font-semibold product-name">{g.name}</span>
+                        {on && <span className="text-accent text-lg">✓</span>}
+                      </div>
+                      <p className="mt-1 text-[13px] text-sub">
+                        {g.count} 种配置 · <span className="mono">¥{g.minPrice.toLocaleString('zh-CN')} 起</span>
+                      </p>
+                    </button>
+                  );
+                })}
               </div>
-            </>
-          )}
-        </section>
-
-        {/* 门店 */}
-        <section>
-          <div className="flex items-center justify-between mb-2">
-            <SectionTitle>门店（{pickedStores.size} 家已选）</SectionTitle>
-            {/* P2：管理员功能不对普通/匿名用户展示，避免困惑 */}
-            {canRefreshCatalog && (
-              <button
-                onClick={() => loadStores(1)}
-                disabled={refreshing}
-                className="text-xs text-accent font-medium disabled:opacity-40"
-              >
-                {refreshing ? '刷新中…' : '在线刷新门店目录'}
-              </button>
             )}
-          </div>
-          {storeToast && (
-            <p className="mb-2 rounded-card-sm bg-[#fff7e8] border border-[#f0c36d] px-3 py-2 text-xs text-[#b25e09]">
-              {storeToast}
-            </p>
-          )}
-          <input
-            value={storeQuery}
-            onChange={(e) => setStoreQuery(e.target.value)}
-            placeholder="搜索城市 / 门店名 / 编号"
-            className="w-full mb-2 px-4 py-3 rounded-card-sm bg-white shadow-card text-sm outline-none placeholder:text-faint"
-          />
-          {storeErr ? (
-            <ErrorState message={storeErr} onRetry={() => loadStores()} />
-          ) : stores === null ? (
-            <LoadingState rows={2} />
-          ) : (
-            <div className="space-y-3 max-h-96 overflow-y-auto">
-              {storesByCity.map(([city, cityStores]) => {
-                const pickedInCity = cityStores.filter((s) => pickedStores.has(s.number)).length;
-                const allOn = pickedInCity === cityStores.length;
-                return (
-                  <div key={city}>
-                    <div className="flex items-center justify-between mb-1.5 px-1">
-                      <span className="text-xs font-semibold text-sub">
-                        {city}
-                        <span className="mono font-normal text-faint ml-1.5">
-                          {pickedInCity}/{cityStores.length}
-                        </span>
-                      </span>
-                      <button
-                        onClick={() => toggleCity(cityStores)}
-                        className="text-xs text-accent font-medium active:scale-95 transition"
-                      >
-                        {allOn ? '取消全选' : '全选'}
-                      </button>
-                    </div>
-                    <div className="space-y-2">
-                      {cityStores.map((s) => {
-                        const on = pickedStores.has(s.number);
+          </section>
+        )}
+
+        {/* Step 1: 选配置 */}
+        {step === 1 && (
+          <section>
+            <div className="flex items-center justify-between mb-1">
+              <SectionQ>选具体配置</SectionQ>
+              <button
+                onClick={() => setExpert((v) => !v)}
+                className="text-xs text-accent font-medium"
+              >
+                {expert ? '返回列表选择' : '高级：手动输入'}
+              </button>
+            </div>
+            <SectionHint>{selectedModel} · 点即选中，可多选</SectionHint>
+            {expert ? (
+              <Card className="p-4">
+                <textarea
+                  value={expertText}
+                  onChange={(e) => setExpertText(e.target.value)}
+                  placeholder={'每行一个，如：\nMJYC4CH/A\nMJYD4CH/A'}
+                  rows={4}
+                  className="w-full mono text-sm bg-transparent outline-none resize-none placeholder:text-faint"
+                />
+                {expertText.trim() ? (
+                  <p className="mt-2 text-xs text-sub">
+                    已识别 <span className="mono text-ink">{selectedParts.length}</span> 个 part number
+                  </p>
+                ) : (
+                  <p className="mt-2 text-xs text-faint">每行一个 part number，如 MJYC4CH/A</p>
+                )}
+              </Card>
+            ) : (
+              <>
+                {capacities.length > 0 && (
+                  <>
+                    <p className="text-[13px] font-semibold text-sub mb-2 mt-4">容量</p>
+                    <div className="flex flex-wrap gap-2">
+                      {capacities.map((c) => {
+                        const on = selectedCaps.has(c);
+                        const price = modelProducts.find((p) => p.capacity === c)?.price_cny;
                         return (
                           <button
-                            key={s.number}
-                            onClick={() => setPickedStores(toggle(pickedStores, s.number))}
-                            className={`w-full text-left px-4 py-3 rounded-card-sm flex items-center justify-between transition active:scale-[0.99] ${
-                              on ? 'bg-island text-white' : 'bg-white shadow-card'
+                            key={c}
+                            onClick={() => setSelectedCaps(toggle(selectedCaps, c))}
+                            className={`px-4 py-3 rounded-card-sm transition active:scale-95 border-2 ${
+                              on ? 'bg-island text-white border-island' : 'bg-white border-transparent shadow-card'
                             }`}
                           >
-                            <span className="text-[15px] truncate">
-                              {s.name}{' '}
-                              <span className={`text-xs ml-2 ${on ? 'text-white/70' : 'text-faint'}`}>
-                                <span className="mono">{s.number}</span>
-                              </span>
-                            </span>
-                            <span
-                              className={`w-5 h-5 rounded-full border-2 shrink-0 ml-2 ${
-                                on ? 'bg-ok border-ok' : 'border-line'
-                              }`}
-                            />
+                            <div className="text-[15px] font-semibold">{c}</div>
+                            {price != null && (
+                              <div className={`mono text-xs mt-0.5 ${on ? 'text-white/70' : 'text-sub'}`}>
+                                ¥{price.toLocaleString('zh-CN')}
+                              </div>
+                            )}
                           </button>
                         );
                       })}
                     </div>
-                  </div>
-                );
-              })}
-              {filteredStores.length === 0 && (
-                <EmptyState title="没有匹配的门店" hint="换个关键词试试" action={null} />
-              )}
-            </div>
-          )}
-        </section>
+                  </>
+                )}
+                {colors.length > 0 && (
+                  <>
+                    <p className="text-[13px] font-semibold text-sub mb-2 mt-4">颜色</p>
+                    <div className="flex flex-wrap gap-2">
+                      {colors.map((c) => {
+                        const on = selectedColors.has(c);
+                        return (
+                          <button
+                            key={c}
+                            onClick={() => setSelectedColors(toggle(selectedColors, c))}
+                            className={`px-4 py-2.5 rounded-pill transition active:scale-95 border-2 ${
+                              on ? 'bg-island text-white border-island' : 'bg-white border-transparent shadow-card text-sub'
+                            }`}
+                          >
+                            <span className="text-sm font-medium">{c}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+                {selectedParts.length > 0 && (
+                  <Card className="mt-4 p-3.5 bg-bg">
+                    <p className="text-xs text-sub">
+                      已选 <span className="mono text-ink font-semibold">{selectedParts.length}</span> 种配置：
+                    </p>
+                    <div className="mt-1.5 flex flex-wrap gap-1.5">
+                      {modelProducts
+                        .filter((p) => selectedParts.includes(p.part_number))
+                        .map((p) => (
+                          <span key={p.part_number} className="text-[11px] px-2 py-1 rounded-pill bg-white shadow-card">
+                            {p.capacity} · {p.color} <span className="mono text-faint">{p.part_number}</span>
+                          </span>
+                        ))}
+                    </div>
+                  </Card>
+                )}
+              </>
+            )}
+          </section>
+        )}
 
-        {/* 任务配置 */}
-        <section>
-          <SectionTitle>任务配置</SectionTitle>
-          <Card className="p-4 space-y-3">
-            <input
-              value={nameTemplate}
-              onChange={(e) => setNameTemplate(e.target.value)}
-              placeholder="任务命名模板，如：iPhone 18 Pro Max × 万象城"
-              className="w-full px-3 py-2.5 rounded-card-sm bg-bg text-sm outline-none placeholder:text-faint"
-            />
-            <div className="grid grid-cols-2 gap-2">
-              {(
-                [
-                  { id: 'instant', label: '即时提醒' },
-                  { id: 'confirmed', label: '连续确认' },
-                ] as const
-              ).map((m) => (
-                <button
-                  key={m.id}
-                  onClick={() => setMode(m.id)}
-                  className={`py-2.5 rounded-card-sm text-sm font-medium transition active:scale-95 ${
-                    mode === m.id ? 'bg-island text-white' : 'bg-bg text-sub'
-                  }`}
-                >
-                  {m.label}
-                </button>
-              ))}
-            </div>
-            {/* R23-P3-7（产品）：engine evaluate_transition —— instant 模式首轮有货仅静默建基线、
-                从下一次状态变化开始通知；此处说明，避免新建任务第一轮收不到通知的困惑 */}
-            {mode === 'instant' && (
-              <p className="text-[11px] text-faint leading-relaxed">
-                有货立刻通知你，最灵敏，新建任务第一轮只记状态不打扰。
+        {/* Step 2: 选门店 */}
+        {step === 2 && (
+          <section>
+            <SectionQ>你要监控哪些门店？</SectionQ>
+            <SectionHint>按城市分组，可一键全选（{pickedStores.size} 家已选）</SectionHint>
+            {canRefreshCatalog && (
+              <button
+                onClick={() => loadStores(1)}
+                disabled={refreshing}
+                className="text-xs text-accent font-medium disabled:opacity-40 mb-2"
+              >
+                {refreshing ? '刷新中…' : '在线刷新门店目录'}
+              </button>
+            )}
+            {storeToast && (
+              <p className="mb-2 rounded-card-sm bg-[#fff7e8] border border-[#f0c36d] px-3 py-2 text-xs text-[#b25e09]">
+                {storeToast}
               </p>
             )}
-            {mode === 'confirmed' && (
-              <>
-                <p className="text-[11px] text-faint leading-relaxed">
-                  连续两轮都看到有货才通知，过滤偶发误报；下面可再设持续提醒间隔。
-                </p>
+            <input
+              value={storeQuery}
+              onChange={(e) => setStoreQuery(e.target.value)}
+              placeholder="搜索城市 / 门店名 / 编号"
+              className="w-full mb-3 px-4 py-3 rounded-card-sm bg-white shadow-card text-sm outline-none placeholder:text-faint"
+            />
+            {storeErr ? (
+              <ErrorState message={storeErr} onRetry={() => loadStores()} />
+            ) : stores === null ? (
+              <LoadingState rows={3} />
+            ) : (
+              <div className="space-y-4">
+                {storesByCity.map(([city, cityStores]) => {
+                  const pickedInCity = cityStores.filter((s) => pickedStores.has(s.number)).length;
+                  const allOn = pickedInCity === cityStores.length && cityStores.length > 0;
+                  return (
+                    <div key={city}>
+                      <div className="flex items-center justify-between mb-2 px-1">
+                        <span className="text-[13px] font-semibold">
+                          {city}
+                          <span className="mono font-normal text-faint ml-1.5">
+                            {pickedInCity}/{cityStores.length}
+                          </span>
+                        </span>
+                        <button
+                          onClick={() => toggleCity(cityStores)}
+                          className="text-[13px] text-accent font-medium active:scale-95 transition"
+                        >
+                          {allOn ? '取消全选' : '全选'}
+                        </button>
+                      </div>
+                      <div className="space-y-2">
+                        {cityStores.map((s) => {
+                          const on = pickedStores.has(s.number);
+                          return (
+                            <button
+                              key={s.number}
+                              onClick={() => setPickedStores(toggle(pickedStores, s.number))}
+                              className={`w-full text-left px-4 py-3.5 rounded-card-sm flex items-center justify-between transition active:scale-[0.99] border-2 ${
+                                on ? 'bg-island text-white border-island' : 'bg-white border-transparent shadow-card'
+                              }`}
+                            >
+                              <span className="text-[15px] font-medium truncate">
+                                {s.name}
+                                <span className={`mono text-xs ml-2 ${on ? 'text-white/60' : 'text-faint'}`}>
+                                  {s.number}
+                                </span>
+                              </span>
+                              <span
+                                className={`w-6 h-6 rounded-full border-2 shrink-0 ml-2 flex items-center justify-center ${
+                                  on ? 'bg-ok border-ok text-white text-sm' : 'border-line'
+                                }`}
+                              >
+                                {on && '✓'}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+                {filteredStores.length === 0 && (
+                  <EmptyState title="没有匹配的门店" hint="换个关键词试试" action={null} />
+                )}
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* Step 3: 确认创建 */}
+        {step === 3 && (
+          <section className="space-y-5">
+            <div>
+              <SectionQ>有货时怎么通知你？</SectionQ>
+              <div className="grid grid-cols-2 gap-2 mt-3">
+                <button
+                  onClick={() => setMode('instant')}
+                  className={`p-4 rounded-card-sm text-left transition active:scale-95 border-2 ${
+                    mode === 'instant' ? 'bg-white border-accent shadow-card' : 'bg-white border-transparent shadow-card'
+                  }`}
+                >
+                  <p className="text-[15px] font-semibold">有货就通知</p>
+                  <p className="mt-1 text-xs text-sub leading-relaxed">最灵敏，有货立刻告诉你</p>
+                </button>
+                <button
+                  onClick={() => setMode('confirmed')}
+                  className={`p-4 rounded-card-sm text-left transition active:scale-95 border-2 ${
+                    mode === 'confirmed' ? 'bg-white border-accent shadow-card' : 'bg-white border-transparent shadow-card'
+                  }`}
+                >
+                  <p className="text-[15px] font-semibold">确认后再通知</p>
+                  <p className="mt-1 text-xs text-sub leading-relaxed">连续两轮看到有货才通知，防误报</p>
+                </button>
+              </div>
+              {mode === 'confirmed' && (
                 <input
                   value={repeatInterval}
                   onChange={(e) => setRepeatInterval(e.target.value)}
                   inputMode="numeric"
                   placeholder="持续提醒间隔（秒，最小 3600）"
-                  className="w-full px-3 py-2.5 rounded-card-sm bg-bg text-sm outline-none placeholder:text-faint mono"
+                  className="mt-2 w-full px-3 py-2.5 rounded-card-sm bg-white shadow-card text-sm outline-none placeholder:text-faint mono"
                 />
-                {showEstimate && (
-                  <p className="text-xs text-sub leading-relaxed">
-                    预计月消耗 ≈ <span className="mono text-ink font-medium">{monthlyEstimate}</span>{' '}
-                    次
-                    <span className="text-faint">（上限估算，按实际发送成功的通知条数计）</span>
-                  </p>
-                )}
-                <p className="text-[11px] text-faint leading-relaxed">
-                  持续有货时每隔该时间再提醒一次；间隔至少 1 小时，防止快速烧完周期配额。
+              )}
+              {showEstimate && (
+                <p className="mt-2 text-xs text-sub">
+                  预计月消耗 ≈ <span className="mono text-ink font-medium">{monthlyEstimate}</span> 次
+                  <span className="text-faint">（按实际发送成功计）</span>
                 </p>
-              </>
-            )}
-          </Card>
-        </section>
+              )}
+            </div>
 
-        {/* 通知渠道（与任务详情页同一套表单） */}
-        <section>
-          <NotifyChannels value={channels} onChange={setChannels} />
-        </section>
+            <div>
+              <SectionQ>通知发到哪里？</SectionQ>
+              <div className="mt-3">
+                <NotifyChannels value={channels} onChange={setChannels} />
+              </div>
+            </div>
 
-        {(submitErr || overQuota || atQuota) && (
-          <p className="text-sm text-bad text-center">
-            {submitErr ||
-              (atQuota && combos === 0
-                ? `任务已达上限（${tasksLimit} 个），无法再创建`
-                : `将超出任务上限（${tasksLimit} 个）：已有 ${tasksUsed} 个，本次需生成 ${combos} 个，请减少机型或门店选择`)}
-            {(showUpgradeLink || overQuota || atQuota) && (
-              <>
-                {' '}
-                <a href="/me" className="underline font-medium">
-                  去开通会员
-                </a>
-              </>
-            )}
-          </p>
+            <div>
+              <SectionQ>任务名</SectionQ>
+              <SectionHint>不填就用默认格式</SectionHint>
+              <input
+                value={nameTemplate}
+                onChange={(e) => setNameTemplate(e.target.value)}
+                placeholder="如：iPhone 18 Pro Max × 万象城"
+                className="w-full px-4 py-3 rounded-card-sm bg-white shadow-card text-sm outline-none placeholder:text-faint"
+              />
+            </div>
+
+            {/* 汇总 */}
+            <Card className="p-4 bg-bg">
+              <p className="text-[13px] font-semibold mb-2">将创建 {combos} 个监控任务</p>
+              <p className="text-xs text-sub leading-relaxed">
+                {selectedParts.length} 种配置 × {pickedStores.size} 家门店
+              </p>
+              {(submitErr || overQuota || atQuota) && (
+                <p className="mt-2 text-sm text-bad">
+                  {submitErr ||
+                    (atQuota && combos === 0
+                      ? `任务已达上限（${tasksLimit} 个），无法再创建`
+                      : `将超出任务上限（${tasksLimit} 个）：已有 ${tasksUsed} 个，本次需生成 ${combos} 个`)}
+                  {(showUpgradeLink || overQuota || atQuota) && (
+                    <>
+                      {' '}
+                      <a href="/me" className="underline font-medium">
+                        去开通会员
+                      </a>
+                    </>
+                  )}
+                </p>
+              )}
+            </Card>
+          </section>
         )}
 
-        <PrimaryButton onClick={submit} disabled={submitting || overQuota || atQuota}>
-          {submitting
-            ? '生成中…'
-            : atQuota && combos === 0
-              ? `已达上限（${tasksLimit} 个）`
-              : overQuota
-                ? `超出上限（${tasksLimit} 个）`
-                : combos === 1
-                  ? '创建监控任务'
-                  : `批量生成 ${partNumbers.length} 机型 × ${pickedStores.size} 门店`}
-        </PrimaryButton>
-        {/* P2：创建时显示剩余额度，用户不用猜还能建几个 */}
+        {/* 导航按钮 */}
+        <div className="flex gap-2.5 mt-8">
+          {step > 0 && (
+            <button
+              onClick={() => setStep(step - 1)}
+              className="px-6 py-3.5 rounded-card-sm bg-white shadow-card text-[15px] font-medium text-sub transition active:scale-95"
+            >
+              上一步
+            </button>
+          )}
+          {step < 3 ? (
+            <button
+              onClick={() => canNext() && setStep(step + 1)}
+              disabled={!canNext()}
+              className={`flex-1 py-3.5 rounded-card-sm text-[15px] font-semibold transition active:scale-[0.99] ${
+                canNext() ? 'bg-accent text-white' : 'bg-line text-faint'
+              }`}
+            >
+              {nextHint() ?? `下一步：${STEPS[step + 1]}`}
+            </button>
+          ) : (
+            <PrimaryButton
+              onClick={submit}
+              disabled={submitting || overQuota || atQuota}
+              className="flex-1"
+            >
+              {submitting
+                ? '生成中…'
+                : atQuota && combos === 0
+                  ? `已达上限（${tasksLimit} 个）`
+                  : overQuota
+                    ? `超出上限（${tasksLimit} 个）`
+                    : `创建 ${combos} 个监控任务`}
+            </PrimaryButton>
+          )}
+        </div>
         {!isAnon && quota && quota.tasks_limit != null && (
-          <p className="mt-2 text-xs text-sub text-center">
+          <p className="mt-3 text-xs text-sub text-center">
             还可创建 <span className="mono text-ink font-medium">{Math.max(0, quota.tasks_limit - (quota.tasks_used ?? 0))}</span> 个监控任务（共 {quota.tasks_limit} 个）
           </p>
         )}
