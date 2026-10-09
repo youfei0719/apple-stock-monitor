@@ -17,7 +17,7 @@ def parse():
     m = re.search(r"SEED_PRODUCTS = \[(.*?)\n\]", content, re.DOTALL)
     products = []
     for pm in re.finditer(
-        r'"part_number": "([^"]+)",\s*"name": "([^"]+)",\s*"color": "([^"]+)",\s*'
+        r'"part_number": "([^"]*)",\s*"name": "([^"]+)",\s*"color": "([^"]+)",\s*'
         r'"capacity": "([^"]+)",\s*"price_cny": (\d+),\s*"category": "([^"]+)"',
         m.group(1),
     ):
@@ -47,17 +47,26 @@ def parse():
 
 def validate_products(products):
     errors = []
-    # 1. 字段完整
+    # 1. 字段完整（part_number 允许为空，表示未验证需手动输入）
     for p in products:
-        for f in ["part_number", "name", "color", "capacity", "price_cny", "category"]:
+        for f in ["name", "color", "capacity", "price_cny", "category"]:
             if not p.get(f):
                 errors.append(f"产品缺少字段 {f}: {p}")
-    # 2. part_number 唯一
+        if "part_number" not in p:
+            errors.append(f"产品缺少 part_number 键: {p}")
+    # 2. part_number 唯一（空字符串除外，空表示未验证需手动输入）
     seen = set()
     for p in products:
-        if p["part_number"] in seen:
-            errors.append(f"part_number 重复: {p['part_number']}")
-        seen.add(p["part_number"])
+        pn = p["part_number"]
+        if not pn:
+            continue
+        if pn in seen:
+            errors.append(f"part_number 重复: {pn}")
+        seen.add(pn)
+    # 2b. 统计未验证的
+    unverified = [p for p in products if not p["part_number"]]
+    if unverified:
+        print(f"  ! {len(unverified)} 个 SKU 无 part_number（需用户手动输入）")
     # 3. 价格一致
     price_map = {}
     for p in products:

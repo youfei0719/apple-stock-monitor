@@ -190,11 +190,24 @@ export default function AddMonitor() {
     return modelProducts
       .filter(
         (p) =>
+          p.part_number && // 空 part_number 表示未验证，不可直接选
           (selectedCaps.size === 0 || (p.capacity && selectedCaps.has(p.capacity))) &&
           (selectedColors.size === 0 || (p.color && selectedColors.has(p.color))),
       )
       .map((p) => p.part_number);
   }, [expert, expertText, modelProducts, selectedCaps, selectedColors]);
+
+  // 用户选了容量/颜色，但对应 SKU 的 part_number 尚未验证（需手动输入）
+  const needsManualPn = useMemo(() => {
+    if (expert) return false;
+    if (selectedCaps.size === 0 && selectedColors.size === 0) return false;
+    const matched = modelProducts.filter(
+      (p) =>
+        (selectedCaps.size === 0 || (p.capacity && selectedCaps.has(p.capacity))) &&
+        (selectedColors.size === 0 || (p.color && selectedColors.has(p.color))),
+    );
+    return matched.length > 0 && matched.every((p) => !p.part_number);
+  }, [expert, modelProducts, selectedCaps, selectedColors]);
 
   const filteredStores = useMemo(() => {
     const q = storeQuery.trim().toLowerCase();
@@ -539,10 +552,15 @@ export default function AddMonitor() {
                     </div>
                   </Card>
                 )}
-                {/* P1：选了容量+颜色但组合不存在时，说清原因，不让用户困惑"为什么选了没反应" */}
-                {(selectedCaps.size > 0 || selectedColors.size > 0) && selectedParts.length === 0 && (
+                {/* P1：选了容量+颜色但 part_number 未验证时，明确引导手动输入 */}
+                {needsManualPn && (
                   <p className="mt-3 text-xs text-bad">
-                    所选容量与颜色没有对应配置，请调整选择（或用"高级：手动输入"直接填 part number）
+                    所选配置的 part number 尚未收录，请用"高级：手动输入"填写（part number 可从 Apple Store App 订单详情获取）
+                  </p>
+                )}
+                {(selectedCaps.size > 0 || selectedColors.size > 0) && selectedParts.length === 0 && !needsManualPn && (
+                  <p className="mt-3 text-xs text-bad">
+                    所选容量与颜色没有对应配置，请调整选择
                   </p>
                 )}
               </>
