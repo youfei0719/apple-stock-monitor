@@ -30,7 +30,9 @@ export default function Login() {
     setUnverified(false);
     setTotpRequired(false);
     if (!email.trim() || !password) {
-      setError('请填写邮箱和密码');
+      if (!email.trim() && !password) setError('请填写邮箱和密码');
+      else if (!email.trim()) setError('请填写邮箱');
+      else setError('请填写密码');
       return;
     }
     // R10-P2-4：注册加前端密码强度预校验（后端要求 8 位+字母数字），别等后端 422 英文直出；
@@ -187,7 +189,7 @@ export default function Login() {
           </div>
         </Card>
         <p className="mt-4 text-center text-xs text-faint">
-          注册即开通免费版（匿名体验的任务会自动迁移过来）· 为保护账号安全，连续输错 5 次后将暂时锁定 15 分钟
+          注册即开通免费版（匿名体验的任务会自动迁移过来）
         </p>
       </div>
     </div>

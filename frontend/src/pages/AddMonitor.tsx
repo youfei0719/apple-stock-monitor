@@ -434,7 +434,7 @@ export default function AddMonitor() {
                     }`}
                   >
                     <span className="text-[15px] truncate">
-                      {s.name}
+                      {s.name}{' '}
                       <span className={`text-xs ml-2 ${on ? 'text-white/70' : 'text-faint'}`}>
                         {/* UX：门店名已含城市时不再重复拼接（如"Apple 上海环贸 iapm"不再加"上海"）；
                             P2：分隔符" · "始终保留，门店名与编号之间不断连 */}
@@ -464,7 +464,7 @@ export default function AddMonitor() {
             <input
               value={nameTemplate}
               onChange={(e) => setNameTemplate(e.target.value)}
-              placeholder="任务命名模板，如：{part_name} × {store_name}"
+              placeholder="任务命名模板，如：iPhone 18 Pro Max × 万象城"
               className="w-full px-3 py-2.5 rounded-card-sm bg-bg text-sm outline-none placeholder:text-faint"
             />
             <div className="flex gap-2">
@@ -556,7 +556,9 @@ export default function AddMonitor() {
               ? `已达上限（${tasksLimit} 个）`
               : overQuota
                 ? `超出上限（${tasksLimit} 个）`
-                : `批量生成 ${partNumbers.length} 机型 × ${pickedStores.size} 门店`}
+                : combos === 1
+                  ? '创建监控任务'
+                  : `批量生成 ${partNumbers.length} 机型 × ${pickedStores.size} 门店`}
         </PrimaryButton>
         {/* P2：创建时显示剩余额度，用户不用猜还能建几个 */}
         {!isAnon && quota && quota.tasks_limit != null && (

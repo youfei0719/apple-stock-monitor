@@ -255,6 +255,7 @@ export default function TaskDetail() {
                         <span className="text-[10px] text-warn">数据可能过期</span>
                       )}
                       <span className="mono text-[10px] text-faint">
+                        查询于{' '}
                         {r.updated_at
                           ? // R9-I7：全站显式北京时间（与页脚承诺一致）
                             // P2：格式与 /me、/history 统一为"MM/DD HH:mm"

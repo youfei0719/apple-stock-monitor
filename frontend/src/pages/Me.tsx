@@ -26,7 +26,7 @@ const CHANNEL_LABEL: Record<string, string> = {
 /** 付费记录档位中文名（N20：按 tier_to 映射，不显示裸英文） */
 const PAID_TIER_LABEL: Record<string, string> = {
   standard: '标准版',
-  pro: 'Pro版',
+  pro: 'Pro 版',
   trial: '免费版',
   free: '免费版',
 };
@@ -65,7 +65,7 @@ function planFeatures(p: Plan): string[] {
 
 function planPeriodLabel(p: Plan): string {
   if (p.price_cny === 0) return '¥0';
-  return `¥${p.price_cny} / 30天`;
+  return `¥${p.price_cny} / 30 天`;
 }
 
 /** 北京时间格式化（配额按购买日 +30 天滚动，展示时标注北京时间） */
@@ -454,10 +454,10 @@ export default function Me() {
               <QuotaBar label="推送配额" used={quota.push_used} limit={quota.push_limit} />
               <QuotaBar label="监控任务" used={quota.tasks_used} limit={quota.tasks_limit} />
               <p className="text-xs text-white/60">
-                刷新间隔 <span className="mono text-white">{quota.refresh_interval_sec}s</span>
+                刷新间隔 <span className="mono text-white">{quota.refresh_interval_sec} 秒</span>
                 {' · '}
                 {/* F-N2：quota_period_key 实际是下次重置日（购买日 +30 天锚点），不是"周期起始" */}
-                下次重置{' '}
+                配额下次重置{' '}
                 <span className="mono text-white">
                   {fmtBeijingDate(quota.quota_reset_at) ?? quota.period}
                 </span>
@@ -572,7 +572,7 @@ export default function Me() {
         <Card className="p-5 rise-in">
           <p className="font-medium">开通 / 续费会员</p>
           <p className="mt-1.5 text-sm text-sub leading-relaxed">
-            通过爱发电赞助开通，支付成功后系统自动开通对应档位（标准 ¥9.9/30天 · Pro ¥19.9/30天）。
+            通过爱发电赞助开通，支付成功后系统自动开通对应档位（标准 ¥9.9 / 30 天 · Pro ¥19.9 / 30 天）。
           </p>
           <div className="mt-4">
             <PrimaryButton onClick={() => window.open(afdianUrl, '_blank', 'noopener')}>
@@ -636,7 +636,7 @@ export default function Me() {
 
         <button
           onClick={onLogout}
-          className="w-full py-3 rounded-card-sm bg-white text-bad text-[15px] font-medium shadow-card active:scale-[0.98] transition"
+          className="w-full py-3 rounded-card-sm bg-white text-sub text-[15px] font-medium shadow-card active:scale-[0.98] transition"
         >
           退出登录
         </button>

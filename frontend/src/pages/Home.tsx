@@ -145,7 +145,7 @@ function TaskCard({
             <span>
               有货 <span className="mono text-ink">{availableCount}</span>
               {' / '}
-              <span className="mono">{total}</span> 个组合
+              <span className="mono">{total}</span> 家门店
             </span>
             {updatedAt && (
               <span>
