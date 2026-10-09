@@ -77,17 +77,9 @@ SEED_CITY_ANCHORS = [
 ]
 
 # 种子产品（part number 为真实查询键；用户也可在专家模式直接输入任意 part number）
-# P1：丰富 iPhone 18 全系——之前只有 Pro Max 2 个配置可选，太少
+# P1：完整 SKU 矩阵——每个机型的容量×颜色全组合，不留"选了没货"的坑
 SEED_PRODUCTS = [
-    # iPhone 18 Pro Max（已有 2 个，补全 1TB）
-    {
-        "part_number": "MJYC4CH/A",
-        "name": "iPhone 18 Pro Max",
-        "color": "银色",
-        "capacity": "512GB",
-        "price_cny": 12999,
-        "category": "iphone",
-    },
+    # iPhone 18 Pro Max：256GB/512GB/1TB × 银色/黑色 = 6
     {
         "part_number": "MJY64CH/A",
         "name": "iPhone 18 Pro Max",
@@ -97,11 +89,11 @@ SEED_PRODUCTS = [
         "category": "iphone",
     },
     {
-        "part_number": "MJYD4CH/A",
+        "part_number": "MJY84CH/A",
         "name": "iPhone 18 Pro Max",
         "color": "银色",
-        "capacity": "1TB",
-        "price_cny": 14999,
+        "capacity": "256GB",
+        "price_cny": 9999,
         "category": "iphone",
     },
     {
@@ -112,13 +104,61 @@ SEED_PRODUCTS = [
         "price_cny": 11999,
         "category": "iphone",
     },
-    # iPhone 18 Pro
+    {
+        "part_number": "MJYC4CH/A",
+        "name": "iPhone 18 Pro Max",
+        "color": "银色",
+        "capacity": "512GB",
+        "price_cny": 12999,
+        "category": "iphone",
+    },
+    {
+        "part_number": "MJY94CH/A",
+        "name": "iPhone 18 Pro Max",
+        "color": "黑色",
+        "capacity": "1TB",
+        "price_cny": 13999,
+        "category": "iphone",
+    },
+    {
+        "part_number": "MJYD4CH/A",
+        "name": "iPhone 18 Pro Max",
+        "color": "银色",
+        "capacity": "1TB",
+        "price_cny": 14999,
+        "category": "iphone",
+    },
+    # iPhone 18 Pro：256GB/512GB/1TB × 黑色钛金属/白色钛金属/原色钛金属 = 9
     {
         "part_number": "MJX64CH/A",
         "name": "iPhone 18 Pro",
         "color": "黑色钛金属",
         "capacity": "256GB",
         "price_cny": 8999,
+        "category": "iphone",
+    },
+    {
+        "part_number": "MJX84CH/A",
+        "name": "iPhone 18 Pro",
+        "color": "白色钛金属",
+        "capacity": "256GB",
+        "price_cny": 8999,
+        "category": "iphone",
+    },
+    {
+        "part_number": "MJX94CH/A",
+        "name": "iPhone 18 Pro",
+        "color": "原色钛金属",
+        "capacity": "256GB",
+        "price_cny": 8999,
+        "category": "iphone",
+    },
+    {
+        "part_number": "MJXA4CH/A",
+        "name": "iPhone 18 Pro",
+        "color": "黑色钛金属",
+        "capacity": "512GB",
+        "price_cny": 9999,
         "category": "iphone",
     },
     {
@@ -130,6 +170,22 @@ SEED_PRODUCTS = [
         "category": "iphone",
     },
     {
+        "part_number": "MJXE4CH/A",
+        "name": "iPhone 18 Pro",
+        "color": "原色钛金属",
+        "capacity": "512GB",
+        "price_cny": 10999,
+        "category": "iphone",
+    },
+    {
+        "part_number": "MJXB4CH/A",
+        "name": "iPhone 18 Pro",
+        "color": "黑色钛金属",
+        "capacity": "1TB",
+        "price_cny": 11999,
+        "category": "iphone",
+    },
+    {
         "part_number": "MJXD4CH/A",
         "name": "iPhone 18 Pro",
         "color": "原色钛金属",
@@ -137,7 +193,15 @@ SEED_PRODUCTS = [
         "price_cny": 12999,
         "category": "iphone",
     },
-    # iPhone 18（标准版）
+    {
+        "part_number": "MJXF4CH/A",
+        "name": "iPhone 18 Pro",
+        "color": "白色钛金属",
+        "capacity": "1TB",
+        "price_cny": 12999,
+        "category": "iphone",
+    },
+    # iPhone 18：128GB/256GB/512GB × 黑色/白色/群青色/粉色 = 12
     {
         "part_number": "MJW24CH/A",
         "name": "iPhone 18",
@@ -147,7 +211,39 @@ SEED_PRODUCTS = [
         "category": "iphone",
     },
     {
+        "part_number": "MJW34CH/A",
+        "name": "iPhone 18",
+        "color": "白色",
+        "capacity": "128GB",
+        "price_cny": 5999,
+        "category": "iphone",
+    },
+    {
+        "part_number": "MJW44CH/A",
+        "name": "iPhone 18",
+        "color": "群青色",
+        "capacity": "128GB",
+        "price_cny": 5999,
+        "category": "iphone",
+    },
+    {
+        "part_number": "MJW54CH/A",
+        "name": "iPhone 18",
+        "color": "粉色",
+        "capacity": "128GB",
+        "price_cny": 5999,
+        "category": "iphone",
+    },
+    {
         "part_number": "MJW64CH/A",
+        "name": "iPhone 18",
+        "color": "黑色",
+        "capacity": "256GB",
+        "price_cny": 6999,
+        "category": "iphone",
+    },
+    {
+        "part_number": "MJW74CH/A",
         "name": "iPhone 18",
         "color": "白色",
         "capacity": "256GB",
@@ -155,9 +251,49 @@ SEED_PRODUCTS = [
         "category": "iphone",
     },
     {
+        "part_number": "MJW84CH/A",
+        "name": "iPhone 18",
+        "color": "群青色",
+        "capacity": "256GB",
+        "price_cny": 6999,
+        "category": "iphone",
+    },
+    {
+        "part_number": "MJW94CH/A",
+        "name": "iPhone 18",
+        "color": "粉色",
+        "capacity": "256GB",
+        "price_cny": 6999,
+        "category": "iphone",
+    },
+    {
+        "part_number": "MJWA4CH/A",
+        "name": "iPhone 18",
+        "color": "黑色",
+        "capacity": "512GB",
+        "price_cny": 8999,
+        "category": "iphone",
+    },
+    {
+        "part_number": "MJWB4CH/A",
+        "name": "iPhone 18",
+        "color": "白色",
+        "capacity": "512GB",
+        "price_cny": 8999,
+        "category": "iphone",
+    },
+    {
         "part_number": "MJWC4CH/A",
         "name": "iPhone 18",
         "color": "群青色",
+        "capacity": "512GB",
+        "price_cny": 8999,
+        "category": "iphone",
+    },
+    {
+        "part_number": "MJWD4CH/A",
+        "name": "iPhone 18",
+        "color": "粉色",
         "capacity": "512GB",
         "price_cny": 8999,
         "category": "iphone",
