@@ -172,6 +172,8 @@ def channels_health(
                 "configured": key in task_channels or key in recent_channels,
                 "configured_basis": "task_config_or_recent_30d_activity",
                 "success_rate_7d": round(sent / (sent + failed), 4) if (sent + failed) else None,
+                # P2：返回样本数，前端展示"100%（2 次）"避免小样本误导
+                "sample_7d": sent + failed,
                 "last_failure_at": last_fail.created_at.isoformat() + "Z" if last_fail else None,
                 "last_failure_reason": last_fail.error if last_fail else None,
             }

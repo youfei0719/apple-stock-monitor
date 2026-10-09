@@ -351,6 +351,7 @@ export interface ChannelHealth {
   name: string;
   configured: boolean;
   success_rate_7d: number | null;
+  sample_7d: number;
   last_failure_at: string | null;
   last_failure_reason: string | null;
 }

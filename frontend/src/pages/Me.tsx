@@ -157,7 +157,9 @@ function ChannelHealthCard() {
                   <p className="mt-0.5 text-xs text-sub">
                     近 7 天成功率：
                     <span className="mono text-ink">
-                      {c.success_rate_7d == null ? '暂无数据' : `${(c.success_rate_7d * 100).toFixed(0)}%`}
+                      {c.success_rate_7d == null
+                        ? '暂无数据'
+                        : `${(c.success_rate_7d * 100).toFixed(0)}%（${c.sample_7d} 次）`}
                     </span>
                   </p>
                   {c.last_failure_at && (
@@ -453,15 +455,18 @@ export default function Me() {
             <div className="mt-4 space-y-3">
               <QuotaBar label="推送配额" used={quota.push_used} limit={quota.push_limit} />
               <QuotaBar label="监控任务" used={quota.tasks_used} limit={quota.tasks_limit} />
-              <p className="text-xs text-white/60">
-                刷新间隔 <span className="mono text-white">{quota.refresh_interval_sec} 秒</span>
-                {' · '}
-                {/* F-N2：quota_period_key 实际是下次重置日（购买日 +30 天锚点），不是"周期起始" */}
-                配额下次重置{' '}
-                <span className="mono text-white">
-                  {fmtBeijingDate(quota.quota_reset_at) ?? quota.period}
-                </span>
-              </p>
+              <div className="mt-1 space-y-1">
+                <p className="text-xs text-white/60">
+                  刷新间隔 <span className="mono text-white">{quota.refresh_interval_sec} 秒</span>
+                </p>
+                <p className="text-xs text-white/60">
+                  {/* F-N2：quota_period_key 实际是下次重置日（购买日 +30 天锚点），不是"周期起始" */}
+                  配额下次重置{' '}
+                  <span className="mono text-white">
+                    {fmtBeijingDate(quota.quota_reset_at) ?? quota.period}
+                  </span>
+                </p>
+              </div>
               <p className="text-[11px] text-white/50">
                 配额按实际发送成功的通知条数扣减 · 付费档以购买日 +30
                 天为一周期滚动重置，免费版按自然月重置

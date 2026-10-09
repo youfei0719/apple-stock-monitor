@@ -119,7 +119,13 @@ export default function Login() {
             ).map((m) => (
               <button
                 key={m.id}
-                onClick={() => setMode(m.id)}
+                onClick={() => {
+                  setMode(m.id);
+                  // P2：切换页签时清空错误，避免登录的"密码错误"残留在注册页
+                  setError(null);
+                  setUnverified(false);
+                  setTotpRequired(false);
+                }}
                 className={`py-2 rounded-pill text-sm font-medium transition ${
                   mode === m.id ? 'bg-white shadow-card text-ink' : 'text-sub'
                 }`}
@@ -148,6 +154,12 @@ export default function Login() {
               onKeyDown={(e) => e.key === 'Enter' && submit()}
               className="w-full px-4 py-3 rounded-card-sm bg-bg text-[15px] outline-none placeholder:text-faint"
             />
+            {/* P2：注册时提前告知密码规则，不用等提交失败才知道 */}
+            {mode === 'register' && (
+              <p className="text-[11px] text-faint leading-relaxed">
+                密码至少 8 位，需包含字母和数字
+              </p>
+            )}
           </div>
           {error && <p className="mt-3 text-sm text-bad text-center">{error}</p>}
           {/* R8-U-2：totp_required 时给"前往后台登录"按钮（后台是独立应用，/admin 不在前端路由里，

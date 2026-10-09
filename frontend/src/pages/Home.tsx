@@ -228,6 +228,10 @@ function TaskCard({
         {actionMsg && (
           <p className="mt-1.5 text-[11px] text-center text-bad">{actionMsg}</p>
         )}
+        {/* P2：暂停前就明示占用名额，不让用户事后才发现 */}
+        {!task.paused && !expired && (
+          <p className="mt-1.5 text-[10px] text-faint text-center">暂停后仍占用任务名额</p>
+        )}
       </div>
       {/* R8-U-8：应用内删除确认（底部弹出卡片），替代 window.confirm */}
       {confirmingDelete && (
