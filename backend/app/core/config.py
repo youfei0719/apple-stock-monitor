@@ -82,8 +82,8 @@ class Settings(BaseSettings):
     # --- 会员档位刷新间隔（秒），可在 .env 覆盖 ---
     TIER_INTERVAL_TRIAL: int = 300
     TIER_INTERVAL_FREE: int = 300
-    TIER_INTERVAL_STANDARD: int = 30
-    TIER_INTERVAL_PRO: int = 10
+    TIER_INTERVAL_STANDARD: int = 60
+    TIER_INTERVAL_PRO: int = 30
 
     @property
     def provider_order(self) -> list[str]:

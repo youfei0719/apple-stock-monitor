@@ -38,7 +38,7 @@ log = get_logger("engine")
 
 COOLDOWN_KEY = "apple_cooldown"
 CONFIRMED_ROUNDS = 2
-MAX_COOLDOWN_SEC = 3600
+MAX_COOLDOWN_SEC = 600
 
 # ---- 通知失败重试（断裂-5） ----
 MAX_NOTIFY_RETRIES = 3  # 含 tick 内立即重试 1 次 + 定时重试 2 次

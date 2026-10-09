@@ -252,13 +252,19 @@ class AppleClient:
                     stores=len(store_numbers),
                 )
                 return provider.query(parts, store_numbers)
-            except AppleRateLimitError:
+            except AppleRateLimitError as e:
+                # 限流也试下一个 provider：不同接口可能走不同限流桶，
+                # 全部被限才抛给引擎做退避
                 log.warning("apple_rate_limited", provider=provider.name)
-                raise
+                last_err = e
+                continue
             except AppleError as e:
                 log.warning("apple_provider_failed", provider=provider.name, error=str(e))
                 last_err = e
                 continue
+        # 如果最后一个是限流错误，抛限流给引擎退避；否则抛普通错误
+        if isinstance(last_err, AppleRateLimitError):
+            raise last_err
         raise AppleError(f"all providers failed: {last_err}")
 
     def discover_stores(self, location: str) -> list[dict]:
