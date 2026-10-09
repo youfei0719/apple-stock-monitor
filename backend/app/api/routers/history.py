@@ -1,5 +1,6 @@
 """历史与数据：有货事件（活动日志）、放货记录。"""
 
+import re
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query
@@ -60,13 +61,28 @@ def events(
     for n, t in db.execute(q).all():
         # R5-B-N2：part_number 取通知创建时的快照列，任务删除后仍有型号信息
         pn = n.part_number or (t.part_number if t else "") or ""
+        # P1：历史老文案里裸写了 part_number（如 MJYC4CH/A），展示时替换为完整 SKU 名
+        title, body = n.title, n.body
+        if t and pn and (t.product_name or t.capacity or t.color):
+            sku = (t.product_name or "").strip()
+            if t.capacity:
+                sku += f" {t.capacity}"
+            if t.color:
+                sku += f" {t.color}"
+            sku = sku.strip()
+            if sku:
+                title = (title or "").replace(pn, sku)
+                body = (body or "").replace(pn, sku)
+        # P1：老文案门店名查找失败时会写成 "R793（R793）"，展示时合并重复
+        if body:
+            body = re.sub(r"(\S+?)（\1）", r"\1", body)
         out.append(
             {
                 "id": n.id,
                 "task_id": n.task_id,
                 "part_number": pn,
-                "title": n.title,
-                "body": n.body,
+                "title": title,
+                "body": body,
                 "link": n.link,
                 "channel": n.channel,
                 "created_at": n.created_at.isoformat() + "Z",
