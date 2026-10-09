@@ -257,8 +257,11 @@ export default function TaskDetail() {
                       <span className="mono text-[10px] text-faint">
                         {r.updated_at
                           ? // R9-I7：全站显式北京时间（与页脚承诺一致）
-                            new Date(r.updated_at).toLocaleTimeString('zh-CN', {
+                            // P2：格式与 /me、/history 统一为"MM/DD HH:mm"
+                            new Date(r.updated_at).toLocaleString('zh-CN', {
                               timeZone: 'Asia/Shanghai',
+                              month: '2-digit',
+                              day: '2-digit',
                               hour: '2-digit',
                               minute: '2-digit',
                             })

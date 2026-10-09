@@ -393,19 +393,16 @@ export default function AddMonitor() {
         <section>
           <div className="flex items-center justify-between mb-2">
             <SectionTitle>门店（{pickedStores.size} 家已选）</SectionTitle>
-            {/* UX：非管理员直接置灰标注"管理员功能"——不等用户点了转圈再告知没权限 */}
-            <button
-              onClick={() => loadStores(1)}
-              disabled={refreshing || !canRefreshCatalog}
-              title={canRefreshCatalog ? undefined : '管理员功能'}
-              className="text-xs text-accent font-medium disabled:opacity-40"
-            >
-              {refreshing
-                ? '刷新中…'
-                : canRefreshCatalog
-                  ? '在线刷新门店目录'
-                  : '在线刷新门店目录（管理员功能）'}
-            </button>
+            {/* P2：管理员功能不对普通/匿名用户展示，避免困惑 */}
+            {canRefreshCatalog && (
+              <button
+                onClick={() => loadStores(1)}
+                disabled={refreshing}
+                className="text-xs text-accent font-medium disabled:opacity-40"
+              >
+                {refreshing ? '刷新中…' : '在线刷新门店目录'}
+              </button>
+            )}
           </div>
           {storeToast && (
             <p className="mb-2 rounded-card-sm bg-[#fff7e8] border border-[#f0c36d] px-3 py-2 text-xs text-[#b25e09]">
@@ -533,10 +530,10 @@ export default function AddMonitor() {
           <NotifyChannels value={channels} onChange={setChannels} />
         </section>
 
-        {submitErr && (
+        {(submitErr || overQuota) && (
           <p className="text-sm text-bad text-center">
-            {submitErr}
-            {showUpgradeLink && (
+            {submitErr || `将超出任务上限（${tasksLimit} 个）：已有 ${tasksUsed} 个，本次需生成 ${combos} 个，请减少机型或门店选择`}
+            {(showUpgradeLink || overQuota) && (
               <>
                 {' '}
                 <a href="/me" className="underline font-medium">

@@ -64,7 +64,7 @@ function planFeatures(p: Plan): string[] {
 }
 
 function planPeriodLabel(p: Plan): string {
-  if (p.price_cny === 0) return '免费';
+  if (p.price_cny === 0) return '¥0';
   return `¥${p.price_cny} / 30天`;
 }
 
