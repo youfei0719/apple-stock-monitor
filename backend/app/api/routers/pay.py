@@ -1,22 +1,30 @@
 """支付（爱发电）：回调自动开通/续期会员、付费记录查询。
 
-签名校验：HMAC-SHA256(raw_body, key=AFDIAN_TOKEN) 的 hex 与请求头
-X-Afdian-Signature 比对（头名经社区 afdianbot 用法确认）。
+签名校验（2026-10-09 与爱发电真实回调对拍确认）：RSA-SHA256，非 HMAC。
+- 回调体为 JSON：{"data": {"type": "order", "order": {...}, "sign": "<base64>"}}。
+- 待签名字符串 = out_trade_no + user_id + plan_id + total_amount
+  （订单字段原样拼接，无分隔符；plan_id 为空时按空字符串）。
+- sign 为爱发电用其私钥对上述字符串做 SHA256withRSA 签名后 base64；
+  用爱发电官方公钥（AFDIAN_PUBLIC_KEY）验签。
+- 金额字段 total_amount 为元字符串（如 "9.90"），解析为分后与档位价比对。
 
-重要：该算法【未与爱发电官方文档核对】（官方 Webhook 签名文档未公开可查），
-【联调前勿用】。上线前必须用爱发电后台的真实回调做一次签名对拍，
-确认算法一致后再启用。若对拍不符，按官方文档修正本函数。
+此前按社区文档写的 HMAC-SHA256(x-afdian-signature 头) 已被真实回调证伪
+（爱发电根本不发该头），2026-10-09 改为上述 RSA 方案。
 
-验签为 fail-closed：AFDIAN_TOKEN 为空、签名缺失或不符一律拒绝。
+验签为 fail-closed：JSON 非法、data.type 非 order、字段缺失、签名无效
+一律拒绝（403），绝不放行。
 
 对账兜底：webhook 丢失 / 金额异常 / 退款无承接 → 设计见
 docs/reviews/reconciliation-plan.md（首版只留文档，未实现）。
 """
 
-import hashlib
-import hmac
+import base64
 import json
+import re
 
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import desc, select, text
 from sqlalchemy.exc import IntegrityError
@@ -149,17 +157,76 @@ def _add_payment_atomic(db: Session, payment: Payment) -> Payment | None:
     return payment
 
 
-def verify_afdian_signature(raw_body: bytes, signature: str | None) -> bool:
-    """验签（fail-closed）：无 token / 无签名 / 不符一律返回 False。"""
-    token = (settings.AFDIAN_TOKEN or "").strip()
-    if not token:
-        # fail-closed：没有配置 token 时直接拒绝，绝不放行
-        log.error("afdian_signature_rejected_no_token")
+# 爱发电官方 RSA 公钥（公开信息，用于验签 webhook 的 data.sign）。
+# 来源：爱发电开放平台文档（经 churchtao/daoyou 生产项目交叉验证）。
+# 若爱发电轮换公钥导致验签全败，属 fail-closed（回调被拒、订单不丢——
+# 可经开放 API 查单补录），更新此常量并重新对拍即可。
+AFDIAN_PUBLIC_KEY = """-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwwdaCg1Bt+UKZKs0R54y
+lYnuANma49IpgoOwNmk3a0rhg/PQuhUJ0EOZSowIC44l0K3+fqGns3Ygi4AfmEfS
+4EKbdk1ahSxu7Zkp2rHMt+R9GarQFQkwSS/5x1dYiHNVMiR8oIXDgjmvxuNes2Cr
+8fw9dEF0xNBKdkKgG2qAawcN1nZrdyaKWtPVT9m2Hl0ddOO9thZmVLFOb9NVzgYf
+jEgI+KWX6aY19Ka/ghv/L4t1IXmz9pctablN5S0CRWpJW3Cn0k6zSXgjVdKm4uN7
+jRlgSRaf/Ind46vMCm3N2sgwxu/g3bnooW+db0iLo13zzuvyn727Q3UDQ0MmZcEW
+MQIDAQAB
+-----END PUBLIC KEY-----"""
+
+# total_amount 为元字符串（"9.90"/"38"），严格格式防 "1.234"/"-1" 浑水摸鱼。
+_CNY_RE = re.compile(r"^(0|[1-9]\d{0,9})(?:\.(\d{1,2}))?$")
+
+
+def _parse_cny_to_fen(value: object) -> int | None:
+    """爱发电 webhook 的 total_amount（元字符串）→ 分；格式非法返回 None。"""
+    if not isinstance(value, str):
+        value = str(value)
+    m = _CNY_RE.match(value.strip())
+    if not m:
+        return None
+    fen = int(m.group(1)) * 100 + int((m.group(2) or "").ljust(2, "0") or 0)
+    return fen
+
+
+def _afdian_public_key():
+    return serialization.load_pem_public_key(AFDIAN_PUBLIC_KEY.encode("utf-8"))
+
+
+def verify_afdian_webhook(payload: object) -> bool:
+    """验签（fail-closed）：RSA-SHA256(data.sign) over 订单字段拼接串。
+
+    任何异常（非 dict、type 非 order、字段缺失、base64 非法、验签不通过）
+    一律返回 False，调用方统一 403。
+    """
+    try:
+        if not isinstance(payload, dict):
+            return False
+        data = payload.get("data")
+        if not isinstance(data, dict) or data.get("type") != "order":
+            return False
+        order = data.get("order")
+        if not isinstance(order, dict):
+            return False
+        sign_b64 = data.get("sign")
+        if not isinstance(sign_b64, str) or not sign_b64:
+            return False
+        out_trade_no = str(order.get("out_trade_no") or "")
+        if not out_trade_no:
+            return False
+        signed_text = (
+            out_trade_no
+            + str(order.get("user_id") or "")
+            + str(order.get("plan_id") or "")
+            + str(order.get("total_amount") or "")
+        )
+        signature = base64.b64decode(sign_b64)
+        _afdian_public_key().verify(
+            signature,
+            signed_text.encode("utf-8"),
+            padding.PKCS1v15(),
+            hashes.SHA256(),
+        )
+        return True
+    except (InvalidSignature, ValueError, TypeError):
         return False
-    if not signature:
-        return False
-    digest = hmac.new(token.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(digest, signature.strip())
 
 
 def _tier_by_plan() -> dict[str, str]:
@@ -183,18 +250,16 @@ async def _read_raw_body(request: Request) -> bytes:
 
 @router.post("/pay/afdian-webhook")
 def afdian_webhook(
-    request: Request,
     db: Session = Depends(get_db),
     raw: bytes = Depends(_read_raw_body),
 ):
-    signature = request.headers.get("x-afdian-signature")
-    if not verify_afdian_signature(raw, signature):
-        log.warning("afdian_bad_signature")
-        raise APIError(403, "签名校验失败", "bad_signature")
     try:
         payload = json.loads(raw.decode("utf-8"))
     except Exception as e:
         raise APIError(400, "payload 不是合法 JSON", "bad_payload") from e
+    if not verify_afdian_webhook(payload):
+        log.warning("afdian_bad_signature")
+        raise APIError(403, "签名校验失败", "bad_signature")
 
     data = payload.get("data") or {}
     order = data.get("order") or {}
@@ -202,18 +267,15 @@ def afdian_webhook(
     plan_id = str(order.get("plan_id") or data.get("plan_id") or "")
     user_id_raw = order.get("user_id") or data.get("user_id") or ""
     remark = str(order.get("remark") or data.get("remark") or "")
-    # total_amount 单位为分
-    # R10-P2-1：解析放进 try——total_amount 非数字（如空字符串/乱码）时
-    # 此前 ValueError → 500 → 爱发电无限重试黑洞。解析失败记为 None，下方
-    # 走 amount_mismatch 落库待人工（amount_cny 记 0），返回 200。
-    raw_amount = order.get("total_amount") or data.get("total_amount") or 0
-    try:
-        amount_fen = int(float(raw_amount))
-    except (TypeError, ValueError):
+    # total_amount 为元字符串（如 "9.90"）；解析失败记为 None，下方走
+    # amount_mismatch 落库待人工（amount_cny 记 0），返回 200。
+    # R10-P2-1：解析放进 try——此前 ValueError → 500 → 爱发电无限重试黑洞。
+    raw_amount = order.get("total_amount") or data.get("total_amount") or ""
+    amount_fen = _parse_cny_to_fen(raw_amount)
+    if amount_fen is None:
         log.error(
             "afdian_amount_unparsable", order_id=order_id, raw_amount=str(raw_amount)[:50]
         )
-        amount_fen = None
 
     if not order_id:
         raise APIError(400, "缺少订单号", "bad_order")

@@ -235,37 +235,52 @@ def test_task_batch_in_limits():
 
 
 # ---- D5: 未知 plan_id 落库 unknown_plan 返回 200 ----
-def test_unknown_plan_recorded(db, monkeypatch):
-    import hashlib
-    import hmac
+def _test_rsa_keypair():
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pub_pem = (
+        key.public_key()
+        .public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+        .decode("utf-8")
+    )
+    return key, pub_pem
+
+
+_TEST_PRIV_KEY, _TEST_PUB_PEM = _test_rsa_keypair()
+
+
+def _signed_webhook_raw(order: dict) -> bytes:
+    """按爱发电真实协议构造签名回调体：RSA-SHA256(data.sign)。"""
+    import base64
     import json
 
-    monkeypatch.setattr(pay_router.settings, "AFDIAN_TOKEN", "test-token")
-    payload = {
-        "data": {
-            "order": {
-                "out_trade_no": "OID-R4-UNKNOWN",
-                "plan_id": "no-such-plan",
-                "total_amount": 1900,
-                "remark": "",
-            }
-        }
-    }
-    raw = json.dumps(payload).encode()
-    sig = hmac.new(b"test-token", raw, hashlib.sha256).hexdigest()
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import padding
 
-    async def receive():
-        return {"type": "http.request", "body": raw, "more_body": False}
-
-    req = Request(
-        scope={
-            "type": "http",
-            "headers": [(b"x-afdian-signature", sig.encode())],
-            "client": ("9.9.9.9", 1234),
-        },
-        receive=receive,
+    signed_text = (
+        str(order.get("out_trade_no") or "")
+        + str(order.get("user_id") or "")
+        + str(order.get("plan_id") or "")
+        + str(order.get("total_amount") or "")
     )
-    out = pay_router.afdian_webhook(req, db, raw)
+    sig = _TEST_PRIV_KEY.sign(signed_text.encode("utf-8"), padding.PKCS1v15(), hashes.SHA256())
+    payload = {"data": {"type": "order", "order": order, "sign": base64.b64encode(sig).decode()}}
+    return json.dumps(payload).encode("utf-8")
+
+
+def test_unknown_plan_recorded(db, monkeypatch):
+    monkeypatch.setattr(pay_router, "AFDIAN_PUBLIC_KEY", _TEST_PUB_PEM)
+    order = {
+        "out_trade_no": "OID-R4-UNKNOWN",
+        "user_id": "12345",
+        "plan_id": "no-such-plan",
+        "total_amount": "19.00",
+        "remark": "",
+    }
+    raw = _signed_webhook_raw(order)
+    out = pay_router.afdian_webhook(db, raw)
     assert out["ok"] is True
     assert out["status"] == "unknown_plan"
     p = db.execute(
@@ -309,3 +324,90 @@ def test_quota_period_column_width():
     from app.models.models import QuotaUsage
 
     assert QuotaUsage.period.property.columns[0].type.length == 10
+
+
+# ---- RSA 验签（2026-10-09 真实回调对拍后的协议） ----
+def _order(**kw):
+    base = {
+        "out_trade_no": "OID-RSA-1",
+        "user_id": "u123",
+        "plan_id": "p456",
+        "total_amount": "9.90",
+    }
+    base.update(kw)
+    return base
+
+
+def test_verify_afdian_webhook_ok(monkeypatch):
+    monkeypatch.setattr(pay_router, "AFDIAN_PUBLIC_KEY", _TEST_PUB_PEM)
+    raw = _signed_webhook_raw(_order())
+    import json
+
+    assert pay_router.verify_afdian_webhook(json.loads(raw)) is True
+
+
+def test_verify_afdian_webhook_tampered_amount(monkeypatch):
+    """金额被篡改 → 验签失败（fail-closed）。"""
+    import json
+
+    monkeypatch.setattr(pay_router, "AFDIAN_PUBLIC_KEY", _TEST_PUB_PEM)
+    raw = _signed_webhook_raw(_order())
+    payload = json.loads(raw)
+    payload["data"]["order"]["total_amount"] = "999.00"
+    assert pay_router.verify_afdian_webhook(payload) is False
+
+
+def test_verify_afdian_webhook_missing_sign():
+    import json
+
+    raw = _signed_webhook_raw(_order())
+    payload = json.loads(raw)
+    del payload["data"]["sign"]
+    assert pay_router.verify_afdian_webhook(payload) is False
+
+
+def test_verify_afdian_webhook_wrong_type():
+    import json
+
+    raw = _signed_webhook_raw(_order())
+    payload = json.loads(raw)
+    payload["data"]["type"] = "refund"
+    assert pay_router.verify_afdian_webhook(payload) is False
+
+
+def test_verify_afdian_webhook_not_dict():
+    assert pay_router.verify_afdian_webhook([]) is False
+    assert pay_router.verify_afdian_webhook(None) is False
+
+
+def test_webhook_bad_signature_returns_403(db, monkeypatch):
+    """伪造回调 → 403，不落库。"""
+    from app.api.errors import APIError
+
+    monkeypatch.setattr(pay_router, "AFDIAN_PUBLIC_KEY", _TEST_PUB_PEM)
+    order = _order(out_trade_no="OID-RSA-EVIL")
+    order["total_amount"] = "9.90"
+    # 用同样的 key 签名但随后篡改金额 → 签名对不上
+    import json
+
+    raw = _signed_webhook_raw(order)
+    payload = json.loads(raw)
+    payload["data"]["order"]["total_amount"] = "0.01"
+    raw2 = json.dumps(payload).encode()
+    with pytest.raises(APIError) as ei:
+        pay_router.afdian_webhook(db, raw2)
+    assert ei.value.status_code == 403
+    n = db.execute(select(Payment).where(Payment.order_id == "OID-RSA-EVIL")).scalar_one_or_none()
+    assert n is None
+
+
+def test_parse_cny_to_fen():
+    p = pay_router._parse_cny_to_fen
+    assert p("9.90") == 990
+    assert p("19.9") == 1990
+    assert p("38") == 3800
+    assert p("0.01") == 1
+    assert p("abc") is None
+    assert p("1.234") is None
+    assert p("-1") is None
+    assert p("") is None

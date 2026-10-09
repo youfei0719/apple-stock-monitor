@@ -15,8 +15,6 @@ R9-O3  未验证账号不泄露密码正确性（auth.py:348-363）：不存在�
 R9-O4  sessions 清理：改密删其他 session（当前保留）、退出删当前 session
 """
 
-import hashlib
-import hmac
 import json
 import os
 import sys
@@ -193,35 +191,53 @@ def _count(db, user_id, **kw):
     )
 
 
-def _webhook_grant(db, monkeypatch, user, plan_id="plan_std", amount=990, order_tag="w"):
-    """走真实 afdian_webhook（pay.py:303 路径）：remark 带 user_id 关联用户。"""
-    monkeypatch.setattr(pay_router.settings, "AFDIAN_TOKEN", "test-token")
-    monkeypatch.setattr(pay_router.settings, "AFDIAN_PLAN_STANDARD", plan_id)
-    payload = {
-        "data": {
-            "order": {
-                "out_trade_no": f"OID-R9-I14-{order_tag}",
-                "plan_id": plan_id,
-                "total_amount": amount,
-                "remark": str(user.id),
-            }
-        }
-    }
-    raw = json.dumps(payload).encode()
-    sig = hmac.new(b"test-token", raw, hashlib.sha256).hexdigest()
+def _test_rsa_keypair():
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
 
-    async def receive():
-        return {"type": "http.request", "body": raw, "more_body": False}
-
-    req = Request(
-        scope={
-            "type": "http",
-            "headers": [(b"x-afdian-signature", sig.encode())],
-            "client": ("9.9.9.9", 1234),
-        },
-        receive=receive,
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pub_pem = (
+        key.public_key()
+        .public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+        .decode("utf-8")
     )
-    return pay_router.afdian_webhook(req, db, raw)
+    return key, pub_pem
+
+
+_TEST_PRIV_KEY, _TEST_PUB_PEM = _test_rsa_keypair()
+
+
+def _signed_webhook_raw(order: dict) -> bytes:
+    """按爱发电真实协议构造签名回调体：RSA-SHA256(data.sign)。"""
+    import base64
+
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import padding
+
+    signed_text = (
+        str(order.get("out_trade_no") or "")
+        + str(order.get("user_id") or "")
+        + str(order.get("plan_id") or "")
+        + str(order.get("total_amount") or "")
+    )
+    sig = _TEST_PRIV_KEY.sign(signed_text.encode("utf-8"), padding.PKCS1v15(), hashes.SHA256())
+    payload = {"data": {"type": "order", "order": order, "sign": base64.b64encode(sig).decode()}}
+    return json.dumps(payload).encode("utf-8")
+
+
+def _webhook_grant(db, monkeypatch, user, plan_id="plan_std", amount="9.90", order_tag="w"):
+    """走真实 afdian_webhook（pay.py:303 路径）：remark 带 user_id 关联用户。"""
+    monkeypatch.setattr(pay_router, "AFDIAN_PUBLIC_KEY", _TEST_PUB_PEM)
+    monkeypatch.setattr(pay_router.settings, "AFDIAN_PLAN_STANDARD", plan_id)
+    order = {
+        "out_trade_no": f"OID-R9-I14-{order_tag}",
+        "user_id": "12345",
+        "plan_id": plan_id,
+        "total_amount": amount,
+        "remark": str(user.id),
+    }
+    raw = _signed_webhook_raw(order)
+    return pay_router.afdian_webhook(db, raw)
 
 
 def test_i14_webhook_grant_resumes_only_tier_limited_capped_by_slots(db, monkeypatch):
@@ -283,34 +299,18 @@ def test_i14_patch_user_upgrade_resumes_tier_limited(db):
 def test_i14_no_resume_on_non_upgrade(db, monkeypatch):
     """非升级路径不恢复：金额异常订单落库（不 grant）时 tier_limit 任务保持暂停。"""
     u = _tier_limited_setup(db, "r9i14n@example.com", n_active=1, n_tier_limited=2)
-    monkeypatch.setattr(pay_router.settings, "AFDIAN_TOKEN", "test-token")
+    monkeypatch.setattr(pay_router, "AFDIAN_PUBLIC_KEY", _TEST_PUB_PEM)
     monkeypatch.setattr(pay_router.settings, "AFDIAN_PLAN_STANDARD", "plan_std")
-    # 金额不符 → amount_mismatch 落库，不 grant
-    payload = {
-        "data": {
-            "order": {
-                "out_trade_no": "OID-R9-I14-MISMATCH",
-                "plan_id": "plan_std",
-                "total_amount": 1,
-                "remark": str(u.id),
-            }
-        }
+    # 金额不符（¥0.01 vs 档位 ¥9.90）→ amount_mismatch 落库，不 grant
+    order = {
+        "out_trade_no": "OID-R9-I14-MISMATCH",
+        "user_id": "12345",
+        "plan_id": "plan_std",
+        "total_amount": "0.01",
+        "remark": str(u.id),
     }
-    raw = json.dumps(payload).encode()
-    sig = hmac.new(b"test-token", raw, hashlib.sha256).hexdigest()
-
-    async def receive():
-        return {"type": "http.request", "body": raw, "more_body": False}
-
-    req = Request(
-        scope={
-            "type": "http",
-            "headers": [(b"x-afdian-signature", sig.encode())],
-            "client": ("9.9.9.9", 1234),
-        },
-        receive=receive,
-    )
-    out = pay_router.afdian_webhook(req, db, raw)
+    raw = _signed_webhook_raw(order)
+    out = pay_router.afdian_webhook(db, raw)
     assert out["status"] == "amount_mismatch"
     paused = [t for t in _count(db, u.id) if t.paused]
     assert len(paused) == 2  # 保持暂停，没有被恢复

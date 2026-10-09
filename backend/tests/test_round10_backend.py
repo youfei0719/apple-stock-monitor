@@ -16,9 +16,6 @@ R10-I5 admin GET /users 加 offset 真分页（limit/max 200 配合，响应仍�
 R10-I6 admin overview 返回 effective_tier 会员分布 + 有效付费会员数
 """
 
-import hashlib
-import hmac
-import json
 import os
 import sys
 import uuid
@@ -207,37 +204,56 @@ def test_idempotent_replay_returns_same_tasks(db):
     assert len(n) == 1
 
 
+def _test_rsa_keypair():
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pub_pem = (
+        key.public_key()
+        .public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+        .decode("utf-8")
+    )
+    return key, pub_pem
+
+
+_TEST_PRIV_KEY, _TEST_PUB_PEM = _test_rsa_keypair()
+
+
+def _signed_webhook_raw(order: dict) -> bytes:
+    """按爱发电真实协议构造签名回调体：RSA-SHA256(data.sign)。"""
+    import base64
+    import json
+
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import padding
+
+    signed_text = (
+        str(order.get("out_trade_no") or "")
+        + str(order.get("user_id") or "")
+        + str(order.get("plan_id") or "")
+        + str(order.get("total_amount") or "")
+    )
+    sig = _TEST_PRIV_KEY.sign(signed_text.encode("utf-8"), padding.PKCS1v15(), hashes.SHA256())
+    payload = {"data": {"type": "order", "order": order, "sign": base64.b64encode(sig).decode()}}
+    return json.dumps(payload).encode("utf-8")
+
+
 # ============ R10-P2-1：金额解析失败不 500 ============
 def test_webhook_unparsable_amount_recorded_not_500(db, monkeypatch):
     """total_amount 非数字 → 不抛 500（爱发电会无限重试），按
     amount_mismatch 落库待人工，返回 200。"""
-    monkeypatch.setattr(pay_router.settings, "AFDIAN_TOKEN", "test-token")
+    monkeypatch.setattr(pay_router, "AFDIAN_PUBLIC_KEY", _TEST_PUB_PEM)
     monkeypatch.setattr(pay_router.settings, "AFDIAN_PLAN_STANDARD", "plan_std")
-    payload = {
-        "data": {
-            "order": {
-                "out_trade_no": "OID-R10-P21",
-                "plan_id": "plan_std",
-                "total_amount": "abc",
-                "remark": "",
-            }
-        }
+    order = {
+        "out_trade_no": "OID-R10-P21",
+        "user_id": "12345",
+        "plan_id": "plan_std",
+        "total_amount": "abc",
+        "remark": "",
     }
-    raw = json.dumps(payload).encode()
-    sig = hmac.new(b"test-token", raw, hashlib.sha256).hexdigest()
-
-    async def receive():
-        return {"type": "http.request", "body": raw, "more_body": False}
-
-    req = Request(
-        scope={
-            "type": "http",
-            "headers": [(b"x-afdian-signature", sig.encode())],
-            "client": ("9.9.9.9", 1234),
-        },
-        receive=receive,
-    )
-    out = pay_router.afdian_webhook(req, db, raw)
+    raw = _signed_webhook_raw(order)
+    out = pay_router.afdian_webhook(db, raw)
     assert out["ok"] is True
     assert out["status"] == "amount_mismatch"
     p = db.execute(
