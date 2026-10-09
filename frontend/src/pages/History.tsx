@@ -170,7 +170,7 @@ export default function History() {
 
     if (tab === 'events') {
       if (!events || events.length === 0)
-        return <EmptyState title="数据积累中" hint="有货事件会出现在这里" action={null} />;
+        return <EmptyState title="还没有抓到过有货" hint="监控到有货时，这里会留下记录" action={null} />;
       // 后端 GET /history/events 返回 {id, task_id, part_number, title, body, link, channel, created_at}
       return (
         <div className="space-y-2.5">
@@ -222,7 +222,7 @@ export default function History() {
           </Card>
         );
       if (!releases || releases.length === 0)
-        return <EmptyState title="数据积累中" hint="近 7 天的放货会记录在这里" action={null} />;
+        return <EmptyState title="近 7 天没有放货" hint="有放货时这里会按天记录" action={null} />;
       // 后端 GET /history/releases 返回 {day, part_number, events}（按天×机型聚合）
       return (
         <div className="space-y-2.5">
@@ -245,8 +245,8 @@ export default function History() {
       if (!ranking || ranking.length === 0)
         return (
           <EmptyState
-            title="数据积累中"
-            hint="仅统计你自己的到货通知，今日还没有放货记录"
+            title="今天还没有放货"
+            hint="仅统计你自己的到货通知"
             action={null}
           />
         );
@@ -289,13 +289,11 @@ export default function History() {
     return (
       <div className="space-y-3">
         <Card className="p-4 rise-in">
-          <p className="text-sm font-medium mb-3">查询统计</p>
+          <p className="text-sm font-medium mb-3">监控运行状态</p>
           <div className="grid grid-cols-2 gap-3">
             {[
-              { label: '已轮询任务', value: poll ? String(poll.polled_tasks) : '—', mono: true },
-              { label: '成功率', value: poll?.success_rate != null ? `${(poll.success_rate * 100).toFixed(1)}%` : '—', mono: true },
-              { label: '平均响应', value: poll?.avg_response_ms != null ? `${Math.round(poll.avg_response_ms)} ms` : '—', mono: true },
-              { label: '上次查询', value: poll?.last_poll_at ? fmt(poll.last_poll_at) : '—', mono: true },
+              { label: '正在监控的任务', value: poll ? String(poll.polled_tasks) : '—', mono: true },
+              { label: '上次检查时间', value: poll?.last_poll_at ? fmt(poll.last_poll_at) : '—', mono: true },
             ].map((k) => (
               <div key={k.label} className="rounded-card-sm bg-bg p-3">
                 <p className="text-xs text-sub">{k.label}</p>
@@ -303,6 +301,9 @@ export default function History() {
               </div>
             ))}
           </div>
+          <p className="mt-3 text-[11px] text-faint leading-relaxed">
+            引擎按你的会员档位间隔轮询苹果接口，遇到限流会自动退避。
+          </p>
         </Card>
         {overview && Object.keys(overview).length > 0 && (
           <OverviewSummary overview={overview} />
@@ -313,7 +314,7 @@ export default function History() {
 
   return (
     <div>
-      <PageHeader title="历史" subtitle="活动日志 · 放货记录 · 我的放货分布 · 数据分析" />
+      <PageHeader title="历史" subtitle="看看都抓到过哪些有货" />
       <div className="px-4 pb-4">
         <div className="flex gap-2 mb-4 overflow-x-auto">
           {TABS.map((t) => (

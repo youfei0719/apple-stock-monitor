@@ -137,7 +137,7 @@ export default function TaskDetail() {
 
   return (
     <div>
-      <PageHeader title={task?.name ?? '库存状态'} subtitle="门店 × 配置 · 实时状态" />
+      <PageHeader title={task?.name ?? '库存状态'} subtitle="各门店实时库存" />
       <div className="px-4 pb-4">
         <Link to="/" className="inline-block mb-3 text-sm text-accent">
           ← 返回监控列表
@@ -153,8 +153,12 @@ export default function TaskDetail() {
           return (
             <div className="mb-4">
               <div className="flex items-center justify-between gap-3">
-                <p className="text-[15px] font-medium truncate">{task.name}</p>
                 <StockStateBadge state={sum.state} size="sm" />
+                {task.mode === 'confirmed' && (
+                  <span className="text-[11px] px-1.5 py-0.5 rounded-pill bg-accent/10 text-accent font-medium">
+                    连续确认
+                  </span>
+                )}
               </div>
               {showRenew && (
                 <div className="mt-3">
