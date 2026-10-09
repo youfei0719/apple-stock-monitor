@@ -180,6 +180,8 @@ export default function AddMonitor() {
       // R10-I4：空 webhook URL 后端会 422（min_length=1），提前过滤掉未填写的行
       // （与 TaskDetail.saveChannels 共用 lib.cleanChannels）
       const clean = cleanChannels(channels);
+      // P0：成功数按后端真实返回展示——两个分支各自把实际创建数写到这里
+      let doneCount = 0;
       if (isAnon) {
         const storeByNumber = new Map((stores ?? []).map((s) => [s.number, s]));
         const productByPn = new Map((products ?? []).map((p) => [p.part_number, p]));
@@ -205,6 +207,7 @@ export default function AddMonitor() {
               createdCount++;
             }
           }
+          doneCount = createdCount;
         } catch (e) {
           if (createdCount > 0) await refreshTasks('active');
           const msg = e instanceof Error ? e.message : '创建失败';
@@ -224,6 +227,7 @@ export default function AddMonitor() {
           mode,
           channels: clean,
         });
+        doneCount = created.length;
         const patch: Partial<Task> = {};
         if (group.trim()) patch.group = group.trim();
         if (repeatSec !== null) patch.repeat_interval_sec = repeatSec;
@@ -250,7 +254,11 @@ export default function AddMonitor() {
         }
       }
       await refreshTasks('active');
-      navigate('/');
+      // P0：成功提示用后端真实返回的创建数，不再用本地静态文案；
+      // 失败走 submitErr（后端 detail 原文），不再有"创建了 N 个"的误导
+      navigate('/', {
+        state: { notice: `已创建 ${doneCount} 个监控任务` },
+      });
     } catch (e) {
       setSubmitErr(e instanceof Error ? e.message : '创建失败');
     } finally {
@@ -413,8 +421,9 @@ export default function AddMonitor() {
                     <span className="text-[15px] truncate">
                       {s.name}
                       <span className={`text-xs ml-2 ${on ? 'text-white/70' : 'text-faint'}`}>
-                        {/* UX：门店名已含城市时不再重复拼接（如"Apple 上海环贸 iapm"不再加"上海"） */}
-                        {s.city && !s.name.includes(s.city) ? `${s.city} · ` : ''}
+                        {/* UX：门店名已含城市时不再重复拼接（如"Apple 上海环贸 iapm"不再加"上海"）；
+                            P2：分隔符" · "始终保留，门店名与编号之间不断连 */}
+                        · {s.city && !s.name.includes(s.city) ? `${s.city} · ` : ''}
                         <span className="mono">{s.number}</span>
                       </span>
                     </span>
@@ -473,11 +482,14 @@ export default function AddMonitor() {
                 从下一次状态变化开始通知；此处说明，避免新建任务第一轮收不到通知的困惑 */}
             {mode === 'instant' && (
               <p className="text-[11px] text-faint leading-relaxed">
-                新建任务首次检测到有货时仅建立基线，从下一次状态变化开始通知。
+                即时提醒：无货变有货立即通知一次；新建任务首次检测到有货时仅建立基线，从下一次状态变化开始通知。
               </p>
             )}
             {mode === 'confirmed' && (
               <>
+                <p className="text-[11px] text-faint leading-relaxed">
+                  连续确认：连续 2 轮检测到有货才通知，过滤单轮误报；下面可再设持续提醒间隔。
+                </p>
                 <input
                   value={repeatInterval}
                   onChange={(e) => setRepeatInterval(e.target.value)}
@@ -512,13 +524,8 @@ export default function AddMonitor() {
         <PrimaryButton onClick={submit} disabled={submitting}>
           {submitting
             ? '生成中…'
-            : isAnon
-              ? `创建 ${partNumbers.length * pickedStores.size} 个监控任务`
-              : `批量生成 ${partNumbers.length} 机型 × ${pickedStores.size} 门店`}
+            : `批量生成 ${partNumbers.length} 机型 × ${pickedStores.size} 门店`}
         </PrimaryButton>
-        <p className="text-center text-xs text-faint">
-          共创建 <span className="mono">{partNumbers.length * pickedStores.size}</span> 个监控任务
-        </p>
       </div>
     </div>
   );

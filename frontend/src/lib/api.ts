@@ -274,6 +274,7 @@ export interface Me {
   quota: { push_used: number; push_limit: number; tasks_used: number; tasks_limit: number };
   totp_enabled: boolean;
   is_admin: boolean;
+  email_verified: boolean;
 }
 
 export interface Plan {

@@ -46,9 +46,17 @@ function useTest() {
       const res = await api.notifyTest(channel, target.trim());
       const ok = res.ok !== false;
       // R6-U4：测试失败时优先展示后端返回的 error 原因（而不是吞掉只看 message）
+      // P2：防御式转字符串——后端字段形态漂移时也不渲染 "[object Object]"
+      const raw = res.error ?? res.message;
+      const msg =
+        typeof raw === 'string' && raw.trim()
+          ? raw
+          : ok
+            ? '测试消息已发送'
+            : '发送失败';
       setResults((r) => ({
         ...r,
-        [key]: { ok, msg: res.error || res.message || (ok ? '测试消息已发送' : '发送失败') },
+        [key]: { ok, msg },
       }));
     } catch (e) {
       // R10-P2-6：档位不支持被拒（code=channel_not_supported）时统一文案
@@ -239,8 +247,10 @@ export default function NotifyChannels({
   const channelNote =
     tier === 'trial'
       ? // UX：档位名全站统一叫「免费版」；本站是网页，没有 App
-        '免费版仅支持站内通知（在本站内查看）；Bark / 群机器人暂未开放（所有档位均不支持）。'
-      : '当前档位仅支持邮件推送；Bark / 群机器人暂未开放（所有档位均不支持）。';
+        // P2：后端真相 trial=["page"]、free/standard/pro=["email"]，无任何档位含
+        // bark/webhook——"暂未开放"与"所有档位均不支持"自相矛盾，统一为"当前未开放"
+        '免费版仅支持站内通知（在本站内查看）；Bark / 群机器人当前未开放。'
+      : '当前档位仅支持邮件推送；Bark / 群机器人当前未开放。';
 
   const set = (patch: Partial<TaskChannels>) => onChange({ ...value, ...patch });
 
@@ -278,25 +288,11 @@ export default function NotifyChannels({
           </p>
         )}
 
-        {/* Bark——R10-I3：后端所有档位直接 400，输入框禁用；下方 helper 注明暂未开放 */}
-        <div>
-          <div className="flex gap-2">
-            <input
-              value={value.bark_key ?? ''}
-              onChange={(e) => set({ bark_key: e.target.value })}
-              placeholder="Bark Key"
-              disabled
-              title="Bark 推送暂未开放"
-              className={`${inputCls} mono opacity-60`}
-            />
-            <TestButton
-              busy={busy === 'bark'}
-              disabled
-              onClick={() => run('bark', 'bark', value.bark_key ?? '')}
-            />
-          </div>
-          <p className="mt-1.5 text-[11px] text-faint">Bark 推送暂未开放</p>
-          <TestResult r={results.bark} />
+        {/* Bark——P2：纯展示文本，不做成可点击的样子（输入框+灰色按钮易误导）；
+            后端所有档位直接 400，当前未开放 */}
+        <div className="flex items-center justify-between py-1">
+          <p className="text-sm text-sub">Bark 推送</p>
+          <p className="text-xs text-faint">当前未开放</p>
         </div>
 
         {/* 邮箱——R11-P1-3：trial 档后端 _require_channels 对 email 直接 400，
@@ -324,6 +320,13 @@ export default function NotifyChannels({
               onClick={() => run('email', 'email', value.email ?? '')}
             />
           </div>
+          {/* P0：已验证邮箱自动算作邮件渠道——未填写时明确告诉用户发到哪里，
+              避免"我没填邮箱，通知去哪了"的困惑 */}
+          {!(value.email ?? '').trim() && me?.email_verified && tier !== 'trial' && (
+            <p className="mt-1.5 text-[11px] text-faint">
+              未填写时将使用你的注册邮箱（{me.email}）接收通知
+            </p>
+          )}
           <TestResult r={results.email} />
         </div>
 
@@ -337,7 +340,7 @@ export default function NotifyChannels({
                   value={w.platform}
                   onChange={(e) => setWebhook(i, { platform: e.target.value })}
                   disabled
-                  title="群机器人通知暂未开放（所有档位均不支持）"
+                  title="群机器人通知当前未开放"
                   className="shrink-0 px-2.5 py-2.5 rounded-card-sm bg-bg text-sm outline-none opacity-60"
                 >
                   {PLATFORMS.map((p) => (
@@ -351,7 +354,7 @@ export default function NotifyChannels({
                   onChange={(e) => setWebhook(i, { url: e.target.value })}
                   placeholder="群机器人 webhook URL（暂未开放）"
                   disabled
-                  title="群机器人通知暂未开放（所有档位均不支持）"
+                  title="群机器人通知当前未开放"
                   className={`${inputCls} mono opacity-60`}
                 />
                 <TestButton
@@ -373,7 +376,7 @@ export default function NotifyChannels({
           <button
             onClick={addWebhook}
             disabled
-            title="群机器人通知暂未开放（所有档位均不支持）"
+            title="群机器人通知当前未开放"
             className="w-full py-2.5 rounded-card-sm border border-dashed border-line text-[13px] text-faint transition disabled:opacity-50"
           >
             ＋ 添加群机器人（企业微信 / 钉钉 / 飞书）· 暂未开放

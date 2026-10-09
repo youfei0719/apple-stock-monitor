@@ -499,6 +499,7 @@ def me(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
         quota=_quota_for(db, user),
         totp_enabled=user.totp_enabled,
         is_admin=bool(user.is_admin),
+        email_verified=bool(user.email_verified),
     )
 
 

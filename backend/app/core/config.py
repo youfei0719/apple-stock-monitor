@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     AFDIAN_USER_ID: str = ""
     AFDIAN_TOKEN: str = ""
     # 自家爱发电赞助页 URL（前端付费指引跳转用；默认占位，生产环境在 .env 配真实地址）
-    AFDIAN_PAGE_URL: str = "https://afdian.com"
+    AFDIAN_PAGE_URL: str = "https://afdian.com/a/stockmon"
     # 占位默认值已移除：prod 启动时若为空直接拒绝启动（见 main.lifespan）
     AFDIAN_PLAN_STANDARD: str = ""
     AFDIAN_PLAN_PRO: str = ""

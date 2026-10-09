@@ -222,6 +222,22 @@ def _channels_empty(channels: dict | None) -> bool:
     )
 
 
+def _fill_verified_email(channels: dict, user: User | None) -> dict:
+    """P0：已验证邮箱自动算作邮件渠道。
+
+    用户注册时已验证邮箱，逻辑上邮箱就是可用渠道——不再要求为每个任务
+    重复填写一遍。仅当未显式配置 email 时回填用户已验证邮箱；显式填写的
+    优先。匿名（user=None，走 trial 站内触达）不受影响。
+    回填发生在入库前，因此 notifier 能真实发到该邮箱，且 _require_channels
+    的空渠道检查自然通过（email 在 free/standard/pro 档位均开放）。
+    """
+    ch = dict(channels or {})
+    if not (ch.get("email") or "").strip() and user is not None:
+        if getattr(user, "email_verified", False) and (user.email or "").strip():
+            ch["email"] = user.email.strip()
+    return ch
+
+
 # 后-D-2：渠道中文名映射（与 notify.py /notify/test 的 _names 口径一致，
 # 另补 wecom/dingtalk/feishu 三个群机器人平台）
 _CHANNEL_NAMES = {
@@ -479,6 +495,9 @@ def create_task(
     # N7：门店号归一化（strip+upper）后再查重/入库，大小写或空格不一致不产生重复任务
     store_numbers = [s["number"].strip().upper() for s in stores]
     channels = data.channels.model_dump(exclude_none=True)
+    # P0：已验证邮箱自动算作邮件渠道（回填在 _require_channels 之前，
+    # 空渠道检查自然通过；回填值随任务入库，notifier 真实可达）
+    channels = _fill_verified_email(channels, user)
     _require_channels(channels, user)
     # R24-P2-1：在 _find_conflict 的纯 SELECT 之前先占住内容派生幂等键
     # （scope|part_number|排序后门店），复用 uq_idempotency_scope_key 唯一约束
@@ -622,6 +641,9 @@ def batch_create(
             _release_owned_content_key(db, batch_content_rec, batch_content_owned)
             raise _conflict_error(conflict)
     channels = data.channels.model_dump(exclude_none=True)
+    # P0：已验证邮箱自动算作邮件渠道（回填在 _require_channels 之前，
+    # 空渠道检查自然通过；回填值随任务入库，notifier 真实可达）
+    channels = _fill_verified_email(channels, user)
     # R6-D4：非 trial 档任务必须配通知渠道
     _require_channels(channels, user)
     idem_rec = None
@@ -706,7 +728,11 @@ def patch_task(
         _validate_expires_at(data.expires_at)
     if data.channels is not None:
         # R6-D4：非 trial 档任务不允许把渠道清空（空渠道的到货边沿会被静默消费）
-        _require_channels(data.channels.model_dump(exclude_none=True), user)
+        # P0：已验证邮箱自动算作邮件渠道，语义与创建一致（清掉显式邮箱后仍有
+        # 注册邮箱可用，不会 400）；回填值直接入库，notifier 真实可达
+        data_channels = _fill_verified_email(data.channels.model_dump(exclude_none=True), user)
+        _require_channels(data_channels, user)
+        task.channels = data_channels
     if data.paused is not None:
         # R6-I9：手动暂停/恢复同步暂停原因——恢复时清空原因，避免脏原因残留
         task.paused_reason = "manual" if data.paused else None
@@ -715,8 +741,6 @@ def patch_task(
         v = getattr(data, field)
         if v is not None:
             setattr(task, field, v)
-    if data.channels is not None:
-        task.channels = data.channels.model_dump(exclude_none=True)
     if data.auto_retire is not None:
         task.auto_retire = data.auto_retire
     if data.expires_at is not None:

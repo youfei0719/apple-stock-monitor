@@ -45,6 +45,8 @@ class MeOut(BaseModel):
     totp_enabled: bool
     # UX：前端据此直接置灰"在线刷新门店目录"（管理员功能），不等点了转圈再 403
     is_admin: bool = False
+    # P0：前端通知渠道无填写时提示"将使用注册邮箱"，以此判断邮箱是否可用
+    email_verified: bool = False
 
 
 class PasswordChangeIn(BaseModel):

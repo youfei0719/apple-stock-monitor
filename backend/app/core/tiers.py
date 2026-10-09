@@ -28,7 +28,7 @@ TIERS: dict[str, dict] = {
         "channels": ["email"],
         "history": True,
         "priority": False,
-        "price_cny": 19,
+        "price_cny": 9.9,
     },
     "pro": {
         "name": "Pro",
@@ -39,7 +39,7 @@ TIERS: dict[str, dict] = {
         "channels": ["email"],
         "history": True,
         "priority": True,
-        "price_cny": 39,
+        "price_cny": 19.9,
     },
 }
 

@@ -20,7 +20,7 @@ from app.api.routers import tasks as tasks_router
 from app.core.db import Base
 from app.core.timeutil import utcnow
 from app.models.models import IdempotencyRecord, MonitorTask, Notification, StockState, User
-from app.schemas import TaskCreateIn, TaskPatchIn
+from app.schemas import TaskBatchIn, TaskCreateIn, TaskPatchIn
 from app.services import engine as engine_mod
 from app.services import lifecycle as lifecycle_mod
 from app.services.apple_client import AppleRateLimitError
@@ -162,12 +162,46 @@ def test_d3_membership_sweep_still_downgrades_normal_users(db):
 
 
 # ---------- R6-D4：空渠道 400（创建/PATCH），trial 豁免 ----------
-def test_d4_create_empty_channels_400_for_paid(db):
+# P0（第二轮走查）：已验证邮箱自动算作邮件渠道——verified 用户空渠道不再 400，
+# 而是回填注册邮箱后创建成功；未验证用户仍 400。
+def test_d4_create_empty_channels_400_for_unverified(db):
     u = _user(db, tier="free", email="d4@example.com")
+    u.email_verified = False
+    db.add(u)
+    db.commit()
     with pytest.raises(APIError) as ei:
         tasks_router.create_task(_task_in(), _req(), u, db, None)
     assert ei.value.status_code == 400
     assert ei.value.code == "channels_required"
+
+
+def test_d4_create_empty_channels_autofill_verified_email(db):
+    u = _user(db, tier="free", email="d4v@example.com")
+    assert u.email_verified is True
+    out = tasks_router.create_task(_task_in(), _req(), u, db, None)
+    assert out.id is not None
+    t = db.get(MonitorTask, out.id)
+    assert t.channels.get("email") == "d4v@example.com"
+
+
+def test_d4_batch_empty_channels_autofill_verified_email(db):
+    u = _user(db, tier="free", email="d4b@example.com")
+    created = tasks_router.batch_create(
+        TaskBatchIn(
+            part_numbers=["MJYC4CH/A"],
+            store_numbers=["R484"],
+            name_template="{part_number} x {store_number}",
+            category="iphone",
+            mode="instant",
+            channels={},
+        ),
+        _req(),
+        u,
+        db,
+    )
+    assert len(created) == 1
+    t = db.get(MonitorTask, created[0].id)
+    assert t.channels.get("email") == "d4b@example.com"
 
 
 def test_d4_create_empty_channels_ok_for_trial(db):
@@ -175,8 +209,11 @@ def test_d4_create_empty_channels_ok_for_trial(db):
     assert out.id is not None
 
 
-def test_d4_patch_clear_channels_400(db):
+def test_d4_patch_clear_channels_400_for_unverified(db):
     u = _user(db, tier="free", email="d4p@example.com")
+    u.email_verified = False
+    db.add(u)
+    db.commit()
     out = tasks_router.create_task(
         _task_in(channels={"email": "a@b.c"}), _req(), u, db, None
     )
@@ -184,6 +221,16 @@ def test_d4_patch_clear_channels_400(db):
         tasks_router.patch_task(out.id, TaskPatchIn(channels={}), u, db, None)
     assert ei.value.status_code == 400
     assert ei.value.code == "channels_required"
+
+
+def test_d4_patch_clear_channels_autofill_verified_email(db):
+    u = _user(db, tier="free", email="d4pv@example.com")
+    out = tasks_router.create_task(
+        _task_in(channels={"email": "a@b.c"}), _req(), u, db, None
+    )
+    patched = tasks_router.patch_task(out.id, TaskPatchIn(channels={}), u, db, None)
+    t = db.get(MonitorTask, patched.id)
+    assert t.channels.get("email") == "d4pv@example.com"
 
 
 def test_d4_engine_zero_channels_skipped_and_no_event_advance(db, eng, monkeypatch):

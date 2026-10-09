@@ -35,10 +35,13 @@ export default function IslandStatus({
 
   return (
     <div className="fixed top-0 left-0 right-0 z-50 flex justify-center pointer-events-none">
+      {/* P2：顶部渐隐底——页面滚动时列表从胶囊下方滑过不再硬切，
+          内容在岛区渐隐，iOS 式处理 */}
+      <div className="absolute inset-x-0 top-0 h-20 bg-gradient-to-b from-bg to-transparent" />
       <button
         onClick={handleClick}
         aria-live="polite"
-        className={`island pointer-events-auto mt-3 h-10 flex items-center justify-center gap-2 bg-island text-white shadow-island overflow-hidden ${
+        className={`island relative pointer-events-auto mt-3 h-10 flex items-center justify-center gap-2 bg-island text-white shadow-island overflow-hidden ${
           hasStock ? 'island-hot rounded-[26px]' : 'rounded-pill'
         }`}
         style={{

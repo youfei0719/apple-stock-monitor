@@ -128,6 +128,41 @@ app.add_middleware(
 
 @app.exception_handler(APIError)
 async def api_error_handler(request: Request, exc: APIError):
+    # P0：APIError 不再静默——warning 级日志（code + path + user_id），
+    # 业务 4xx 也能从日志定位（如 channels_required 批量创建失败）。
+    # 日志失败绝不影响响应；user_id 查不到时记 None。
+    user_id = None
+    try:
+        token = request.cookies.get("session_token")
+        if token:
+            db = SessionLocal()
+            try:
+                from sqlalchemy import select
+
+                from app.core.security import token_digest
+                from app.models.models import Session as DbSession
+
+                s = (
+                    db.execute(
+                        select(DbSession).where(
+                            DbSession.token_digest == token_digest(token)
+                        )
+                    ).scalar_one_or_none()
+                )
+                if s and s.expires_at >= utcnow():
+                    user_id = s.user_id
+            finally:
+                db.close()
+    except Exception:
+        user_id = None
+    log.warning(
+        "api_error",
+        code=exc.code,
+        status=exc.status_code,
+        path=request.url.path,
+        user_id=user_id,
+        detail=str(exc.detail)[:200],
+    )
     return JSONResponse(
         status_code=exc.status_code, content={"detail": exc.detail, "code": exc.code}
     )

@@ -86,7 +86,9 @@ function QuotaBar({ label, used, limit }: { label: string; used: number; limit: 
   return (
     <div>
       <div className="flex items-center justify-between text-sm mb-1.5">
-        <span className="text-sub">
+        {/* P2：配额卡是深色底（bg-island），不用浅色底的 text-sub/text-faint，
+            否则标签与数字对比度崩掉近乎隐形 */}
+        <span className="text-white/70">
           {label}
           {full && (
             <span className="ml-2 text-[11px] px-1.5 py-0.5 rounded-pill bg-bad/20 text-bad font-medium">
@@ -99,12 +101,12 @@ function QuotaBar({ label, used, limit }: { label: string; used: number; limit: 
             </span>
           )}
         </span>
-        <span className="mono">
+        <span className="mono text-white">
           {used}
-          <span className="text-faint"> / {limit}</span>
+          <span className="text-white/50"> / {limit}</span>
         </span>
       </div>
-      <div className="h-2 rounded-full bg-bg overflow-hidden">
+      <div className="h-2 rounded-full bg-white/15 overflow-hidden">
         <div
           className={`h-full rounded-full transition-all ${full ? 'bg-bad' : warn ? 'bg-warn' : 'bg-accent'}`}
           style={{ width: `${pct}%` }}
@@ -311,7 +313,7 @@ export default function Me() {
   const [plans, setPlans] = useState<Plan[] | null>(null);
   const [quota, setQuota] = useState<Quota | null>(null);
   const [payments, setPayments] = useState<Payment[] | null>(null);
-  const [afdianUrl, setAfdianUrl] = useState<string>('https://afdian.com');
+  const [afdianUrl, setAfdianUrl] = useState<string>('https://afdian.com/a/stockmon');
   // R8-I-11：各接口错误态独立——任一接口失败不再吃掉整页
   // （配额/档位不能因付费记录接口抖动而消失）
   const [plansErr, setPlansErr] = useState<string | null>(null);
@@ -578,7 +580,7 @@ export default function Me() {
             </PrimaryButton>
           </div>
           <p className="mt-2 text-xs text-faint text-center">
-            赞助时在备注 / 留言中填写你的用户 ID #{me.id} 或注册邮箱，以便自动开通
+            赞助时在备注 / 留言中填写你的用户 ID #{me.id}{' '}或注册邮箱，以便自动开通
           </p>
         </Card>
 

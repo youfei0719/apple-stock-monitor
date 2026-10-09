@@ -155,7 +155,7 @@ export default function History() {
         <Card className="p-8 text-center rise-in">
           <p className="text-ink font-medium">历史数据需要登录后查看</p>
           <p className="mt-2 text-sm text-sub">
-            注册 / 登录后可查看活动日志、放货记录与数据分析，匿名创建的任务会自动迁移过来。
+            注册 / 登录后可查看活动日志、放货记录、我的放货分布与数据分析，匿名创建的任务会自动迁移过来。
           </p>
           <Link
             to="/login"
@@ -313,7 +313,7 @@ export default function History() {
 
   return (
     <div>
-      <PageHeader title="历史" subtitle="活动日志 · 放货记录 · 我的放货分布" />
+      <PageHeader title="历史" subtitle="活动日志 · 放货记录 · 我的放货分布 · 数据分析" />
       <div className="px-4 pb-4">
         <div className="flex gap-2 mb-4 overflow-x-auto">
           {TABS.map((t) => (
