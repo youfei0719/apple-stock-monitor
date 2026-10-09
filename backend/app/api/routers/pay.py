@@ -196,24 +196,6 @@ def verify_afdian_webhook(payload: object) -> bool:
     任何异常（非 dict、type 非 order、字段缺失、base64 非法、验签不通过）
     一律返回 False，调用方统一 403。
     """
-    # TEMP-DEBUG 2026-10-09：抓爱发电测试回调原文，定位验签失败原因；定位后删除
-    try:
-        _dbg_data = payload.get("data") if isinstance(payload, dict) else None
-        _dbg_order = _dbg_data.get("order") if isinstance(_dbg_data, dict) else None
-        log.warning(
-            "afdian_debug_payload",
-            top_keys=list(payload.keys()) if isinstance(payload, dict) else None,
-            data_type=_dbg_data.get("type") if isinstance(_dbg_data, dict) else None,
-            has_sign=bool(_dbg_data.get("sign")) if isinstance(_dbg_data, dict) else False,
-            sign_len=len(_dbg_data.get("sign") or "") if isinstance(_dbg_data, dict) else 0,
-            order_keys=list(_dbg_order.keys()) if isinstance(_dbg_order, dict) else None,
-            out_trade_no=str((_dbg_order or {}).get("out_trade_no")),
-            user_id=str((_dbg_order or {}).get("user_id")),
-            plan_id=str((_dbg_order or {}).get("plan_id")),
-            total_amount=str((_dbg_order or {}).get("total_amount")),
-        )
-    except Exception:
-        pass
     try:
         if not isinstance(payload, dict):
             return False
@@ -243,9 +225,7 @@ def verify_afdian_webhook(payload: object) -> bool:
             hashes.SHA256(),
         )
         return True
-    except (InvalidSignature, ValueError, TypeError) as e:
-        # TEMP-DEBUG 2026-10-09：定位后删除
-        log.warning("afdian_debug_verify_fail", exc_type=type(e).__name__)
+    except (InvalidSignature, ValueError, TypeError):
         return False
 
 
