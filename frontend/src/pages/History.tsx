@@ -294,7 +294,7 @@ export default function History() {
           <p className="text-sm font-medium mb-3">监控运行状态</p>
           <div className="grid grid-cols-2 gap-3">
             {[
-              { label: '正在监控的任务', value: poll ? String(poll.polled_tasks) : '—', mono: true },
+              { label: '本轮已检查', value: poll ? `${poll.polled_tasks} / ${poll.tasks} 个任务` : '—', mono: true },
               { label: '上次检查时间', value: poll?.last_poll_at ? fmt(poll.last_poll_at) : '—', mono: true },
             ].map((k) => (
               <div key={k.label} className="rounded-card-sm bg-bg p-3">

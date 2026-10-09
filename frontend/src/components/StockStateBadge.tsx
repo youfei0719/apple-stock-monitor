@@ -31,7 +31,7 @@ const META: Record<StockState, { label: string; cls: string; dot: string }> = {
     dot: 'bg-accent island-dot',
   },
   cooling: {
-    label: '限流等待中',
+    label: '等待恢复',
     cls: 'bg-[#fff1ea] text-[#c2410c] border-[#f5c6a5]',
     dot: 'bg-warn',
   },
@@ -56,8 +56,11 @@ export default function StockStateBadge({
   size?: 'sm' | 'md';
 }) {
   const m = META[state] ?? META.unknown;
+  // P1：cooling 状态给小白解释——查询太频繁被 Apple 暂时限制，稍后自动恢复，无需操作
+  const title = state === 'cooling' ? '查询太频繁，Apple 暂时限制了访问，稍后自动恢复，无需你操作' : undefined;
   return (
     <span
+      title={title}
       className={`inline-flex items-center gap-1.5 rounded-pill border font-medium whitespace-nowrap ${
         size === 'sm' ? 'px-2 py-0.5 text-[11px]' : 'px-2.5 py-1 text-xs'
       } ${m.cls}`}

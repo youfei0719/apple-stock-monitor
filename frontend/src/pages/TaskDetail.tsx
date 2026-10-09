@@ -139,9 +139,15 @@ export default function TaskDetail() {
     <div>
       <PageHeader title={task?.name ?? '库存状态'} subtitle="各门店实时库存" />
       <div className="px-4 pb-4">
-        <Link to="/" className="inline-block mb-3 text-sm text-accent">
-          ← 返回监控列表
-        </Link>
+        <div className="flex items-center justify-between mb-3">
+          <Link to="/" className="inline-block text-sm text-accent">
+            ← 返回监控列表
+          </Link>
+          {/* P1：会员续费入口——任务页也能直达 /me，不用靠底部导航找 */}
+          <Link to="/me" className="text-xs text-faint">
+            会员与续费 →
+          </Link>
+        </div>
         {task && (() => {
           // N19：任务展示态统一走 summarizeTask（与后端 _display_state 一致的聚合口径）
           const sum = summarizeTask(task);
@@ -160,6 +166,20 @@ export default function TaskDetail() {
                   </span>
                 )}
               </div>
+              {/* P1：展示任务配置（机型/门店），用户能核对自己选了什么 */}
+              <Card className="mt-3 p-3.5">
+                <p className="text-[13px] font-medium">
+                  {task.product_name}
+                  {task.capacity && <> · {task.capacity}</>}
+                  {task.color && <> · {task.color}</>}
+                </p>
+                <p className="mt-1 text-xs text-sub">
+                  <span className="mono">{task.part_number}</span>
+                  {' · '}
+                  {task.stores.length} 家门店：
+                  {task.stores.map((s) => s.name?.replace('Apple ', '') || s.number).join('、')}
+                </p>
+              </Card>
               {showRenew && (
                 <div className="mt-3">
                   <button
@@ -191,7 +211,17 @@ export default function TaskDetail() {
         {error && <ErrorState message={error} onRetry={load} />}
         {!error && rows === null && <LoadingState rows={4} />}
         {!error && rows !== null && rows.length === 0 && (
-          <EmptyState title="暂无状态数据" hint="引擎可能还未完成第一轮查询" action={null} />
+          <EmptyState
+            title="暂无状态数据"
+            hint={
+              me?.tier === 'pro'
+                ? '刚创建的任务约 1 分钟内完成首次检查，请稍后下拉刷新'
+                : me?.tier === 'standard'
+                  ? '刚创建的任务约 2 分钟内完成首次检查，请稍后下拉刷新'
+                  : '引擎正在排队检查，请稍后下拉刷新'
+            }
+            action={null}
+          />
         )}
         {/* 通知渠道配置（与添加监控页同一套表单） */}
         {!error && (

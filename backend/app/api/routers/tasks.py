@@ -128,7 +128,10 @@ def _display_state(task: MonitorTask, row: StockState | None) -> str:
 def _task_out(task: MonitorTask, db: Session) -> TaskOut:
     # R4-P1-B5：list_tasks 用 selectinload 预加载 states，这里直接读关系，
     # 其他入口（create/get）走懒加载，不再每任务一次 StockState 查询
-    rows = task.states
+    # P1：只统计当前配置的门店——任务改过门店后，旧门店的历史行不计入，
+    # 否则"有货 X / Y 家门店"的 Y 与任务副标题的门店数对不上
+    current_stores = {s.get("number") for s in (task.stores or []) if isinstance(s, dict)}
+    rows = [r for r in task.states if not current_stores or r.store_number in current_stores]
     by_store: dict[str, dict] = {}
     for r in rows:
         by_store.setdefault(r.store_number, {})[r.part_number] = {

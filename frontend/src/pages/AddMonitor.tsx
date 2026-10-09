@@ -753,7 +753,11 @@ export default function AddMonitor() {
         </div>
         {!isAnon && quota && quota.tasks_limit != null && (
           <p className="mt-3 text-xs text-sub text-center">
-            还可创建 <span className="mono text-ink font-medium">{Math.max(0, quota.tasks_limit - (quota.tasks_used ?? 0))}</span> 个监控任务（共 {quota.tasks_limit} 个）
+            {/* P1：说清名额口径——已用 X / 共 Y，避免"我第一次用怎么已经用了"的困惑 */}
+            任务名额 <span className="mono text-ink font-medium">{quota.tasks_used ?? 0} / {quota.tasks_limit}</span>
+            {combos > 0 && (
+              <>（本次创建后 {Math.min(quota.tasks_limit, (quota.tasks_used ?? 0) + combos)} / {quota.tasks_limit}</>
+            )}
           </p>
         )}
       </div>

@@ -332,6 +332,12 @@ export default function NotifyChannels({
               未填写时将使用你的注册邮箱（{me.email}）接收通知
             </p>
           )}
+          {/* P1：测试邮箱限制事前说明，不让用户靠试错发现 */}
+          {tier !== 'trial' && (
+            <p className="mt-1.5 text-[11px] text-faint">
+              发送测试只能发到你账号绑定的邮箱
+            </p>
+          )}
           <TestResult r={results.email} />
         </div>
 
