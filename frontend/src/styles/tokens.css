@@ -119,51 +119,56 @@ body {
 }
 
 /* ------------------------------------------------------------------
- * 会员档位流动渐变（参考 glint-vault 流光高亮效果卡）
- * 免费=银灰流动，标准=蓝色流动，Pro=金色流动
- * 流动速度：免费最缓（12s），标准中等（8s），Pro 最快（6s）
+ * 会员档位 mesh 流动渐变（参考 glint-vault Paper Shaders 的 mesh gradient）
+ * 多层径向渐变叠加，丝滑流动；三档速度统一 10s，只用颜色区分等级
+ * 免费=银灰 mesh，标准=蓝色 mesh，Pro=金色 mesh
  * ------------------------------------------------------------------ */
-@keyframes tier-flow {
-  0% {
-    background-position: 0% 50%;
+@-webkit-keyframes mesh-flow {
+  0%, 100% {
+    background-position: 0% 0%, 100% 0%, 50% 100%;
   }
-  50% {
-    background-position: 100% 50%;
+  33% {
+    background-position: 100% 30%, 20% 80%, 80% 20%;
   }
-  100% {
-    background-position: 0% 50%;
+  66% {
+    background-position: 30% 100%, 80% 20%, 10% 60%;
+  }
+}
+@keyframes mesh-flow {
+  0%, 100% {
+    background-position: 0% 0%, 100% 0%, 50% 100%;
+  }
+  33% {
+    background-position: 100% 30%, 20% 80%, 80% 20%;
+  }
+  66% {
+    background-position: 30% 100%, 80% 20%, 10% 60%;
   }
 }
 
-.tier-flow-silver {
-  background: linear-gradient(135deg, #f5f5f7, #e8e8ec, #f0f0f3, #e5e5e9);
-  background-size: 300% 300%;
-  -webkit-animation: tier-flow 12s ease infinite;
-  animation: tier-flow 12s ease infinite;
+.tier-mesh {
+  background-size: 200% 200%, 200% 200%, 200% 200%;
+  -webkit-animation: mesh-flow 10s ease-in-out infinite;
+  animation: mesh-flow 10s ease-in-out infinite;
 }
 
-.tier-flow-blue {
-  background: linear-gradient(135deg, #dbeafe, #bfdbfe, #e0e7ff, #c7d2fe);
-  background-size: 300% 300%;
-  -webkit-animation: tier-flow 8s ease infinite;
-  animation: tier-flow 8s ease infinite;
+.tier-mesh-silver {
+  background-image:
+    radial-gradient(ellipse 80% 60% at 20% 20%, #f0f0f3 0%, transparent 70%),
+    radial-gradient(ellipse 70% 80% at 80% 30%, #e2e2e8 0%, transparent 70%),
+    radial-gradient(ellipse 90% 70% at 50% 80%, #f5f5f7 0%, #e8e8ec 100%);
 }
 
-.tier-flow-gold {
-  background: linear-gradient(135deg, #2a2118, #4a3a1a, #2a2118, #5a4a1f, #2a2118);
-  background-size: 300% 300%;
-  -webkit-animation: tier-flow 6s ease infinite;
-  animation: tier-flow 6s ease infinite;
+.tier-mesh-blue {
+  background-image:
+    radial-gradient(ellipse 80% 60% at 20% 20%, #dbeafe 0%, transparent 70%),
+    radial-gradient(ellipse 70% 80% at 80% 30%, #c7d2fe 0%, transparent 70%),
+    radial-gradient(ellipse 90% 70% at 50% 80%, #e0e7ff 0%, #bfdbfe 100%);
 }
 
-@-webkit-keyframes tier-flow {
-  0% {
-    background-position: 0% 50%;
-  }
-  50% {
-    background-position: 100% 50%;
-  }
-  100% {
-    background-position: 0% 50%;
-  }
+.tier-mesh-gold {
+  background-image:
+    radial-gradient(ellipse 80% 60% at 20% 20%, #4a3a1a 0%, transparent 70%),
+    radial-gradient(ellipse 70% 80% at 80% 30%, #5a4a1f 0%, transparent 70%),
+    radial-gradient(ellipse 90% 70% at 50% 80%, #2a2118 0%, #3a2f16 100%);
 }

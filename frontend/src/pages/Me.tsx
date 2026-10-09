@@ -408,15 +408,15 @@ export default function Me() {
     <div>
       <PageHeader title="我的" subtitle={me.email} />
       <div className="px-4 pb-6 space-y-5">
-        {/* 当前会员：按等级流动渐变差异化 */}
-        {/* 免费=银灰流动，标准=蓝色流动，Pro=金色流动 */}
+        {/* 当前会员：按等级 mesh 流动渐变 */}
+        {/* 免费=银灰 mesh，标准=蓝色 mesh，Pro=金色 mesh；速度统一 10s */}
         <div
-          className={`p-5 rise-in rounded-card shadow-card relative overflow-hidden ${
+          className={`p-5 rise-in rounded-card shadow-card relative overflow-hidden tier-mesh ${
             displayTier === 'pro'
-              ? 'tier-flow-gold text-white'
+              ? 'tier-mesh-gold text-white'
               : displayTier === 'standard'
-                ? 'tier-flow-blue text-ink'
-                : 'tier-flow-silver text-ink'
+                ? 'tier-mesh-blue text-ink'
+                : 'tier-mesh-silver text-ink'
           }`}
         >
           {/* Pro 专属：顶部金色流光线 */}
@@ -543,17 +543,17 @@ export default function Me() {
                 const current = p.tier === displayTier;
                 const isProPlan = p.tier === 'pro';
                 const isStdPlan = p.tier === 'standard';
-                const tierFlowCls = isProPlan
-                  ? '!bg-none tier-flow-gold !text-white !border-0'
+                const tierMeshCls = isProPlan
+                  ? 'tier-mesh tier-mesh-gold text-white'
                   : isStdPlan
-                    ? '!bg-none tier-flow-blue !border-0'
-                    : '!bg-none tier-flow-silver !border-0';
+                    ? 'tier-mesh tier-mesh-blue text-ink'
+                    : 'tier-mesh tier-mesh-silver text-ink';
                 return (
-                  <Card
+                  <div
                     key={p.tier}
-                    className={`p-4 rise-in relative overflow-hidden ${
+                    className={`p-4 rise-in relative overflow-hidden rounded-card shadow-card ${
                       current ? 'ring-2 ring-accent' : ''
-                    } ${tierFlowCls}`}
+                    } ${tierMeshCls}`}
                   >
                     {isProPlan && (
                       <div className="absolute top-0 inset-x-0 h-[2px] bg-gradient-to-r from-amber-300 via-yellow-400 to-amber-300 rounded-t-card" />
@@ -583,7 +583,7 @@ export default function Me() {
                           </li>
                         ))}
                     </ul>
-                  </Card>
+                  </div>
                 );
               })}
             </div>
