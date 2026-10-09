@@ -179,12 +179,17 @@ export default function History() {
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <p className="text-[15px] font-medium truncate">{e.title}</p>
-                  <p className="mt-0.5 text-xs text-sub">{e.body}</p>
+                  <p className="mt-0.5 text-xs text-sub whitespace-pre-line">{e.body}</p>
                   <p className="mt-0.5 text-xs text-faint">
-                    <span className="mono">{e.part_number}</span>
-                    {' · '}
-                    {/* R6-I10：复用 NotifyChannels 的 CHANNEL_LABEL 中文映射，不裸显英文 key */}
+                    {/* P1：不裸显 part_number（如 MJYC4CH/A），标题和正文已有完整 SKU 名 */}
                     {CHANNEL_LABEL[e.channel] ?? e.channel}
+                    {' · '}
+                    {new Date(e.created_at).toLocaleString('zh-CN', {
+                      month: '2-digit',
+                      day: '2-digit',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
                   </p>
                 </div>
                 <StockStateBadge state="available" size="sm" />
@@ -223,14 +228,15 @@ export default function History() {
         );
       if (!releases || releases.length === 0)
         return <EmptyState title="近 7 天没有放货" hint="有放货时这里会按天记录" action={null} />;
-      // 后端 GET /history/releases 返回 {day, part_number, events}（按天×机型聚合）
+      // 后端 GET /history/releases 返回 {day, part_number, product_name, events}（按天×机型聚合）
       return (
         <div className="space-y-2.5">
           {releases.map((r, i) => (
             <Card key={i} className="p-3.5 rise-in">
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="text-[15px] font-medium mono truncate">{r.part_number}</p>
+                  {/* P1：显示产品名，不裸显 part_number */}
+                  <p className="text-[15px] font-medium truncate">{r.product_name || r.part_number}</p>
                   <p className="mt-0.5 text-xs text-sub">{r.day}</p>
                 </div>
                 <span className="mono text-sm text-ink font-medium shrink-0">{r.events} 次放货</span>

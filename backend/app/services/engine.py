@@ -700,10 +700,17 @@ class Engine:
         store_name = next(
             (s.get("name", store) for s in (task.stores or []) if s.get("number") == store), store
         )
-        title = f"有货提醒：{task.product_name or task.part_number}"
-        body = f"{store_name}（{store}）现可自提：{task.product_name or part}"
-        if task.color or task.capacity:
-            body += f"（{task.color} {task.capacity}）".strip()
+        # P1：通知文案不用 part number（如 MJYC4CH/A），用完整 SKU 名；
+        # 重点写出检测到有货的精确时间（北京时间）
+        sku_name = task.product_name or ""
+        if task.capacity:
+            sku_name += f" {task.capacity}"
+        if task.color:
+            sku_name += f" {task.color}"
+        sku_name = sku_name.strip() or part
+        now_bj = (utcnow() + timedelta(hours=8)).strftime("%m-%d %H:%M")
+        title = f"有货提醒：{sku_name}"
+        body = f"{store_name}现可自提：{sku_name}\n检测时间：{now_bj}（北京时间）"
         link = build_product_link(task.category, part)
         log.info("stock_event", task_id=task.id, store=store, part=part)
         records = Notifier(db).dispatch(

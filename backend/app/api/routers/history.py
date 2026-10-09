@@ -91,12 +91,15 @@ def releases(
     # R5-B-N2：按快照列聚合——任务删除后 join 不到 MonitorTask，
     # coalesce 保证已删任务的通知仍按原型号归组
     pn_col = func.coalesce(Notification.part_number, MonitorTask.part_number)
+    # P1：同时返回产品名，前端不再裸显 part_number
+    name_col = func.coalesce(MonitorTask.product_name, Notification.part_number)
     # R6-I8："按天"口径统一北京时间（与 admin overview 一致）
     day_col = func.date(Notification.created_at, "+8 hours")
     rows = db.execute(
         select(
             day_col.label("day"),
             pn_col.label("part_number"),
+            name_col.label("product_name"),
             func.count().label("events"),
         )
         .join(MonitorTask, Notification.task_id == MonitorTask.id, isouter=True)
@@ -104,7 +107,15 @@ def releases(
         .where(Notification.kind == "stock_alert")
         .where(Notification.status == "sent")
         .where(Notification.created_at >= _since(days))
-        .group_by(day_col, pn_col)
+        .group_by(day_col, pn_col, name_col)
         .order_by(desc("day"))
     ).all()
-    return [{"day": str(r.day), "part_number": r.part_number, "events": r.events} for r in rows]
+    return [
+        {
+            "day": str(r.day),
+            "part_number": r.part_number,
+            "product_name": r.product_name,
+            "events": r.events,
+        }
+        for r in rows
+    ]

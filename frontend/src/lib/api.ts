@@ -378,6 +378,7 @@ export interface StockEvent {
 export interface ReleaseRecord {
   day: string;
   part_number: string;
+  product_name?: string;
   events: number;
 }
 
