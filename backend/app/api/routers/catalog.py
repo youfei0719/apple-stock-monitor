@@ -232,7 +232,16 @@ def list_products(
 ):
     _seed_if_empty(db)
     products = get_config(db, PRODUCT_CATALOG_KEY, {}).get("products", [])
-    return [p for p in products if p.get("category") == category]
+    # UX：按 part_number 去重并保持首次出现顺序——目录内容相同时渲染永远一致，
+    # 不因数据源顺序抖动让用户觉得"刚才看到的那款去哪了"
+    seen: dict[str, dict] = {}
+    for p in products:
+        if p.get("category") != category:
+            continue
+        pn = str(p.get("part_number") or "")
+        if pn and pn not in seen:
+            seen[pn] = p
+    return list(seen.values())
 
 
 @router.get("/anchors")

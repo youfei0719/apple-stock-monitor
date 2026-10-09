@@ -95,7 +95,7 @@ export default function Login() {
 
   return (
     <div>
-      <PageHeader title="DING" subtitle="Apple 直营店库存监控" />
+      <PageHeader title="监控" subtitle="Apple 直营店自提库存监控" />
       <div className="px-6">
         {flash && (
           <p className="mb-4 text-sm text-ok text-center font-medium">{flash}</p>
@@ -180,7 +180,7 @@ export default function Login() {
           </div>
         </Card>
         <p className="mt-4 text-center text-xs text-faint">
-          注册即开通免费版（匿名体验的任务会自动迁移过来）· 连续 5 次登录失败将锁定 IP 15 分钟
+          注册即开通免费版（匿名体验的任务会自动迁移过来）· 为保护账号安全，连续输错 5 次后将暂时锁定 15 分钟
         </p>
       </div>
     </div>

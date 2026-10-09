@@ -7,7 +7,7 @@ import { Card, EmptyState, LoadingState } from './ui';
  * R18-P3-5：通知渠道配置——仅邮件可用，其余通道暂未开放。任务详情 / 添加监控共用
  * - Bark key、邮箱、企微/钉钉/飞书 webhook URL（platform 下拉）
  * - 每个通道独立「发送测试」按钮（POST /notify/test，测试不扣配额）；匿名未登录时置灰
- * - 文案按档位动态：trial → 体验版仅站内通知（在 App 内查看）
+ * - 文案按档位动态：trial → 免费版仅站内通知（在本站内查看）
  * - 可选：通知历史列表（含失败原因展示）
  * 到货通知附带直达商品页链接。
  */
@@ -238,8 +238,8 @@ export default function NotifyChannels({
   }, [me]);
   const channelNote =
     tier === 'trial'
-      ? // UI-5：trial 档"仅支持站内通知"补充"（在 App 内查看）"
-        '体验版仅支持站内通知（在 App 内查看）；Bark / 群机器人暂未开放（所有档位均不支持）。'
+      ? // UX：档位名全站统一叫「免费版」；本站是网页，没有 App
+        '免费版仅支持站内通知（在本站内查看）；Bark / 群机器人暂未开放（所有档位均不支持）。'
       : '当前档位仅支持邮件推送；Bark / 群机器人暂未开放（所有档位均不支持）。';
 
   const set = (patch: Partial<TaskChannels>) => onChange({ ...value, ...patch });
@@ -265,7 +265,7 @@ export default function NotifyChannels({
         <p className="-mt-1 text-xs text-faint leading-relaxed">
           到货时按这里的渠道发送通知（按实际发送成功的通知条数扣减配额），通知附带直达商品页链接。
         </p>
-        {/* F-2：渠道开放范围按档位动态（trial → 体验版仅站内；付费档 → 仅邮件），不写死。
+        {/* F-2：渠道开放范围按档位动态（trial → 免费版仅站内；付费档 → 仅邮件），不写死。
             R9-I11：tier===null（档位加载中）时不渲染档位文案，避免匿名用户首帧闪烁 */}
         {tier !== null && (
           <p className="-mt-2 text-xs text-bad/90 leading-relaxed bg-bad/5 rounded-card-sm px-2.5 py-2">
@@ -278,15 +278,15 @@ export default function NotifyChannels({
           </p>
         )}
 
-        {/* Bark——R10-I3：后端所有档位直接 400，输入框禁用并注明"暂未开放" */}
+        {/* Bark——R10-I3：后端所有档位直接 400，输入框禁用；下方 helper 注明暂未开放 */}
         <div>
           <div className="flex gap-2">
             <input
               value={value.bark_key ?? ''}
               onChange={(e) => set({ bark_key: e.target.value })}
-              placeholder="Bark Key（暂未开放）"
+              placeholder="Bark Key"
               disabled
-              title="Bark 通知暂未开放（所有档位均不支持），填写后提交会被拒绝"
+              title="Bark 推送暂未开放"
               className={`${inputCls} mono opacity-60`}
             />
             <TestButton
@@ -295,6 +295,7 @@ export default function NotifyChannels({
               onClick={() => run('bark', 'bark', value.bark_key ?? '')}
             />
           </div>
+          <p className="mt-1.5 text-[11px] text-faint">Bark 推送暂未开放</p>
           <TestResult r={results.bark} />
         </div>
 
@@ -306,12 +307,12 @@ export default function NotifyChannels({
               value={value.email ?? ''}
               onChange={(e) => set({ email: e.target.value })}
               placeholder={
-                tier === 'trial' ? '邮箱（体验版仅支持站内通知，暂不可填）' : '邮箱（推送渠道，可选）'
+                tier === 'trial' ? '邮箱（免费版仅支持站内通知，暂不可填）' : '邮箱（推送渠道，可选）'
               }
               disabled={tier === 'trial'}
               title={
                 tier === 'trial'
-                  ? '体验版仅支持站内通知（在 App 内查看），填写后提交会被拒绝'
+                  ? '免费版仅支持站内通知（在本站内查看）'
                   : undefined
               }
               type="email"
@@ -350,7 +351,7 @@ export default function NotifyChannels({
                   onChange={(e) => setWebhook(i, { url: e.target.value })}
                   placeholder="群机器人 webhook URL（暂未开放）"
                   disabled
-                  title="群机器人通知暂未开放（所有档位均不支持），填写后提交会被拒绝"
+                  title="群机器人通知暂未开放（所有档位均不支持）"
                   className={`${inputCls} mono opacity-60`}
                 />
                 <TestButton

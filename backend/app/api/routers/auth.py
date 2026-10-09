@@ -498,6 +498,7 @@ def me(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
         tier=effective_tier(user),
         quota=_quota_for(db, user),
         totp_enabled=user.totp_enabled,
+        is_admin=bool(user.is_admin),
     )
 
 

@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Route, Routes } from 'react-router-dom';
 import App from './components/App';
 import ErrorBoundary from './components/ErrorBoundary';
 import Home from './pages/Home';
@@ -10,6 +10,7 @@ import History from './pages/History';
 import Guide from './pages/Guide';
 import Me from './pages/Me';
 import Login from './pages/Login';
+import NotFound from './pages/NotFound';
 import VerifyEmail from './pages/VerifyEmail';
 import './styles/tokens.css';
 
@@ -33,8 +34,8 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           <Route path="/history" element={<History />} />
           <Route path="/guide" element={<Guide />} />
           <Route path="/me" element={<Me />} />
-          {/* UI-1：未知路径兜底回首页，避免空白 404 死路 */}
-          <Route path="*" element={<Navigate to="/" replace />} />
+          {/* UX：未知路径渲染 404 页（标题+回首页），不再静默回首页导致用户无法察觉输错地址 */}
+          <Route path="*" element={<NotFound />} />
         </Route>
       </Routes>
     </BrowserRouter>

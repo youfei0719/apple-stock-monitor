@@ -8,11 +8,11 @@ import { Card, EmptyState, ErrorState, LoadingState, PageHeader, PrimaryButton }
 /** 持续提醒间隔下限（秒）：后端 ge=3600 */
 const MIN_REPEAT_INTERVAL_SEC = 3600;
 
-const CATEGORIES = [
+const CATEGORIES: { id: string; label: string; soon?: boolean }[] = [
   { id: 'iphone', label: 'iPhone' },
-  { id: 'ipad', label: 'iPad' },
-  { id: 'mac', label: 'Mac' },
-  { id: 'watch', label: 'Watch' },
+  { id: 'ipad', label: 'iPad', soon: true },
+  { id: 'mac', label: 'Mac', soon: true },
+  { id: 'watch', label: 'Watch', soon: true },
 ];
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
@@ -35,6 +35,8 @@ export default function AddMonitor() {
       .catch(() => setAllTaskCount(null));
   }, [me]);
   const isAnon = me === null;
+  // UX：门店目录在线刷新是管理员功能（后端走 TOTP 二次验证），非管理员直接置灰
+  const canRefreshCatalog = me?.is_admin === true;
 
   const [category, setCategory] = useState('iphone');
   const [products, setProducts] = useState<Product[] | null>(null);
@@ -279,11 +281,16 @@ export default function AddMonitor() {
               <button
                 key={c.id}
                 onClick={() => setCategory(c.id)}
-                className={`py-2.5 rounded-card-sm text-sm font-medium transition active:scale-95 ${
+                /* UX：长期无机型的品类直接置灰不可点，标注"即将支持"——
+                   不再让用户点进去看"稍后再试" */
+                disabled={c.soon}
+                title={c.soon ? '即将支持' : undefined}
+                className={`py-2 rounded-card-sm text-sm font-medium transition active:scale-95 flex flex-col items-center justify-center gap-0.5 ${
                   category === c.id ? 'bg-island text-white' : 'bg-white text-sub shadow-card'
-                }`}
+                } ${c.soon ? 'opacity-45' : ''}`}
               >
-                {c.label}
+                <span>{c.label}</span>
+                {c.soon && <span className="text-[10px] font-normal opacity-80">即将支持</span>}
               </button>
             ))}
           </div>
@@ -309,16 +316,22 @@ export default function AddMonitor() {
                 rows={4}
                 className="w-full mono text-sm bg-transparent outline-none resize-none placeholder:text-faint"
               />
-              <p className="mt-2 text-xs text-sub">
-                已识别 <span className="mono text-ink">{partNumbers.length}</span> 个 part number
-              </p>
+              {/* UX：空输入时显示引导文案，有输入后才显示"已识别 N 个"——
+                  避免"已识别 0 个"在输入前就没有意义 */}
+              {expertText.trim() ? (
+                <p className="mt-2 text-xs text-sub">
+                  已识别 <span className="mono text-ink">{partNumbers.length}</span> 个 part number
+                </p>
+              ) : (
+                <p className="mt-2 text-xs text-faint">每行一个 part number，如 MJYC4CH/A</p>
+              )}
             </Card>
           ) : prodErr ? (
             <ErrorState message={prodErr} onRetry={loadProducts} />
           ) : products === null ? (
             <LoadingState rows={2} />
           ) : products.length === 0 ? (
-            <EmptyState title="该品类暂无机型" hint="稍后再试" action={null} />
+            <EmptyState title="该品类暂无机型" hint="换个品类试试" action={null} />
           ) : (
             <div className="space-y-2 max-h-72 overflow-y-auto">
               {products.map((p) => {
@@ -356,12 +369,18 @@ export default function AddMonitor() {
         <section>
           <div className="flex items-center justify-between mb-2">
             <SectionTitle>门店（{pickedStores.size} 家已选）</SectionTitle>
+            {/* UX：非管理员直接置灰标注"管理员功能"——不等用户点了转圈再告知没权限 */}
             <button
               onClick={() => loadStores(1)}
-              disabled={refreshing}
+              disabled={refreshing || !canRefreshCatalog}
+              title={canRefreshCatalog ? undefined : '管理员功能'}
               className="text-xs text-accent font-medium disabled:opacity-40"
             >
-              {refreshing ? '刷新中…' : '在线刷新门店目录'}
+              {refreshing
+                ? '刷新中…'
+                : canRefreshCatalog
+                  ? '在线刷新门店目录'
+                  : '在线刷新门店目录（管理员功能）'}
             </button>
           </div>
           {storeToast && (
@@ -394,7 +413,9 @@ export default function AddMonitor() {
                     <span className="text-[15px] truncate">
                       {s.name}
                       <span className={`text-xs ml-2 ${on ? 'text-white/70' : 'text-faint'}`}>
-                        {s.city} · <span className="mono">{s.number}</span>
+                        {/* UX：门店名已含城市时不再重复拼接（如"Apple 上海环贸 iapm"不再加"上海"） */}
+                        {s.city && !s.name.includes(s.city) ? `${s.city} · ` : ''}
+                        <span className="mono">{s.number}</span>
                       </span>
                     </span>
                     <span
@@ -496,7 +517,7 @@ export default function AddMonitor() {
               : `批量生成 ${partNumbers.length} 机型 × ${pickedStores.size} 门店`}
         </PrimaryButton>
         <p className="text-center text-xs text-faint">
-          共生成 <span className="mono">{partNumbers.length * pickedStores.size}</span> 个监控组合
+          共创建 <span className="mono">{partNumbers.length * pickedStores.size}</span> 个监控任务
         </p>
       </div>
     </div>

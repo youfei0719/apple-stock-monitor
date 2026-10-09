@@ -43,6 +43,8 @@ class MeOut(BaseModel):
     tier: str
     quota: dict
     totp_enabled: bool
+    # UX：前端据此直接置灰"在线刷新门店目录"（管理员功能），不等点了转圈再 403
+    is_admin: bool = False
 
 
 class PasswordChangeIn(BaseModel):

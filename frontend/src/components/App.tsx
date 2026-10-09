@@ -1,13 +1,13 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type MouseEvent } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate, useOutletContext } from 'react-router-dom';
 import { api, ApiError, isTaskExpired, type Me, type Task, type TaskStatusFilter } from '../lib/api';
 import IslandStatus from './IslandStatus';
 
 const TABS = [
-  { to: '/', label: 'DING', icon: '◉' },
+  { to: '/', label: '监控', icon: '◉' },
   { to: '/history', label: '历史', icon: '≡' },
   { to: '/add', label: '', icon: '+', fab: true },
-  { to: '/guide', label: '指南', icon: '?' },
+  { to: '/guide', label: '指南', icon: 'ⓘ' },
   { to: '/me', label: '我的', icon: '○' },
 ];
 
@@ -35,12 +35,17 @@ function writeHadSession(had: boolean) {
 function BottomNav() {
   const location = useLocation();
   if (location.pathname === '/login' || location.pathname === '/verify') return null;
+  // UX：已在当前 tab 时再点一次不做任何事——避免重复导航导致页面重载、
+  // /add 已选的机型/门店/搜索词被清空（操作丢失）
+  const noopIfActive = (to: string) => (e: MouseEvent) => {
+    if (location.pathname === to) e.preventDefault();
+  };
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white/90 backdrop-blur border-t border-line safe-bottom">
       <div className="mx-auto max-w-lg grid grid-cols-5 h-[64px]">
         {TABS.map((t) =>
           t.fab ? (
-            <NavLink key={t.to} to={t.to} className="flex items-center justify-center">
+            <NavLink key={t.to} to={t.to} onClick={noopIfActive(t.to)} className="flex items-center justify-center">
               <span className="w-12 h-12 -mt-6 rounded-full bg-accent text-white text-2xl shadow-card-lg flex items-center justify-center active:scale-95 transition">
                 {t.icon}
               </span>
@@ -50,6 +55,7 @@ function BottomNav() {
               key={t.to}
               to={t.to}
               end={t.to === '/'}
+              onClick={noopIfActive(t.to)}
               className={({ isActive }) =>
                 `flex flex-col items-center justify-center gap-0.5 text-[11px] ${
                   isActive ? 'text-accent font-medium' : 'text-faint'
@@ -223,7 +229,9 @@ export default function App() {
         tasksError === null &&
         location.pathname !== '/login' &&
         location.pathname !== '/verify' && (
-          <div className="mx-auto max-w-lg px-4 pt-3">
+          /* UX：pt-16 给顶部 fixed 灵动岛让位（岛高 40px + mt-12px），避免胶囊条
+             与"暂无监控任务" pill 重叠遮挡；阴影落在浅色背景上不再显脏 */
+          <div className="mx-auto max-w-lg px-4 pt-16">
             {sessionExpired ? (
               <div className="rounded-card-sm bg-island text-white px-4 py-2.5 text-[13px] flex items-center justify-between gap-3 rise-in">
                 <span>登录已过期，请重新登录</span>

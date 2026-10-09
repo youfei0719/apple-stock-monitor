@@ -164,7 +164,7 @@ function TaskCard({
           trialExhausted 提示移到外层 Link 之外，仍在卡片内 */}
       {trialExhausted && (
         <p className="mt-1.5 text-[11px] text-bad font-medium">
-          体验推送已用完，去
+          免费版推送已用完，去
           {/* R6-I11：匿名用户文案"去注册"，已登录用户文案"去升级"
               （被 admin 授予 trial 的已注册用户也会命中横幅） */}
           <Link to={anonymous ? '/login' : '/me'} className="underline">
@@ -306,7 +306,7 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
-  // 体验版配额耗尽 → 任务卡提示"体验推送已用完，去注册/升级"（断裂-9）
+  // 免费版配额耗尽 → 任务卡提示"免费版推送已用完，去注册/升级"（断裂-9）
   // trial 档：仅限未登录匿名体验（后端 tiers.py；匿名推送用量无查询接口，前端无法获知，
   // 匿名页顶有体验横幅代替说明）。登录用户被管理员授予 trial 档时，此横幅仍有效。
   useEffect(() => {
@@ -327,7 +327,7 @@ export default function Home() {
 
   return (
     <div>
-      <PageHeader title="DING" subtitle="Apple 直营店自提库存监控" />
+      <PageHeader title="监控" subtitle="Apple 直营店自提库存监控" />
       <div className="px-4 pb-4">
         {/* R7：匿名任务认领提示横幅（只展示一次，可手动关闭） */}
         {claimNotice && (
@@ -370,7 +370,7 @@ export default function Home() {
         {!loadError && !loading && tasks.length === 0 && (
           <EmptyState
             title={tab === 'expired' ? '没有已过期的任务' : '还没有监控任务'}
-            hint={tab === 'expired' ? '过期的任务会出现在这里，可一键续期' : '添加你想抢的机型和门店，有货立刻 DING 你'}
+            hint={tab === 'expired' ? '过期的任务会出现在这里，可一键续期' : '添加你想抢的机型和门店，有货立刻通知你'}
             action={
               tab === 'active' ? (
                 <Link

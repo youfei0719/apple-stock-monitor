@@ -6,7 +6,7 @@ import { NotificationHistory } from '../components/NotifyChannels';
 import { Card, EmptyState, ErrorState, LoadingState, PageHeader, PrimaryButton } from '../components/ui';
 
 const TIER_LABEL: Record<string, string> = {
-  trial: '体验',
+  trial: '免费',
   free: '免费',
   standard: '标准',
   pro: 'Pro',
@@ -27,7 +27,7 @@ const CHANNEL_LABEL: Record<string, string> = {
 const PAID_TIER_LABEL: Record<string, string> = {
   standard: '标准版',
   pro: 'Pro版',
-  trial: '体验版',
+  trial: '免费版',
   free: '免费版',
 };
 
@@ -367,7 +367,7 @@ export default function Me() {
     return (
       <div>
         <PageHeader title="我的" />
-        <div className="px-4 pb-6">
+        <div className="px-4 pb-6 space-y-5">
           {/* F4：匿名体验中进入"我的"，引导注册/登录而非报错 */}
           <Card className="p-8 text-center rise-in">
             <p className="text-ink font-medium">你正在匿名体验</p>
@@ -381,6 +381,34 @@ export default function Me() {
               去注册 / 登录
             </Link>
           </Card>
+          {/* UX：匿名态也展示两档价格——注册前就能了解付费信息，不错过转化 */}
+          <section>
+            <h2 className="text-[13px] font-semibold text-sub mb-2">会员档位</h2>
+            {plansErr && <ErrorState message={plansErr} onRetry={load} />}
+            {!plansErr && plans === null && <LoadingState rows={1} />}
+            {!plansErr && plans !== null && plans.length > 0 && (
+              <div className="grid grid-cols-2 gap-2.5">
+                {plans.map((p) => (
+                  <Card key={p.tier} className="p-4 rise-in">
+                    <p className="font-semibold">{p.name}</p>
+                    <p className="mt-2 mono text-xl font-semibold">{planPeriodLabel(p)}</p>
+                    <ul className="mt-2 space-y-1">
+                      {planFeatures(p)
+                        .slice(0, 3)
+                        .map((f) => (
+                          <li key={f} className="text-xs text-sub">
+                            · {f}
+                          </li>
+                        ))}
+                    </ul>
+                  </Card>
+                ))}
+              </div>
+            )}
+            <p className="mt-2 text-[11px] text-faint text-center">
+              注册后通过爱发电赞助开通，支付成功自动开通对应档位
+            </p>
+          </section>
         </div>
       </div>
     );
@@ -473,7 +501,7 @@ export default function Me() {
             <div className="grid grid-cols-2 gap-2.5">
               <Card className="p-4 rise-in ring-2 ring-accent">
                 <div className="flex items-center justify-between">
-                  <p className="font-semibold">体验</p>
+                  <p className="font-semibold">免费</p>
                   <span className="text-[11px] px-2 py-0.5 rounded-pill bg-accent text-white">
                     当前
                   </span>
@@ -499,7 +527,7 @@ export default function Me() {
                     ))}
                 </ul>
                 <p className="mt-2 text-[11px] text-faint">
-                  体验版由管理员开通，仅站内通知（在 App 内查看）
+                  免费版由管理员开通，仅支持站内通知（在本站内查看）
                 </p>
               </Card>
             </div>

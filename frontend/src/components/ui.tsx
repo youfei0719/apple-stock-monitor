@@ -27,7 +27,7 @@ export function LoadingState({ rows = 3 }: { rows?: number }) {
   );
 }
 
-/** 空状态 */
+/** 空状态：中性铃铛图标（∅ 有"禁止"语义，像在警告用户） */
 export function EmptyState({
   title,
   hint,
@@ -40,7 +40,21 @@ export function EmptyState({
   return (
     <Card className="p-10 text-center rise-in">
       <div className="mx-auto mb-4 w-14 h-14 rounded-full bg-bg flex items-center justify-center">
-        <span className="text-2xl text-faint">∅</span>
+        <svg
+          width="26"
+          height="26"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.7"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="text-faint"
+          aria-hidden="true"
+        >
+          <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+          <path d="M13.7 21a2 2 0 0 1-3.4 0" />
+        </svg>
       </div>
       <p className="text-ink font-medium title-balanced">{title}</p>
       {hint && <p className="mt-2 text-sm text-sub title-balanced">{hint}</p>}

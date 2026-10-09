@@ -320,9 +320,12 @@ export default function History() {
             <button
               key={t.id}
               onClick={() => setTab(t.id)}
+              /* UX：未登录时页签置灰弱化，点击前就明确需要登录，不再点进去才发现看不了 */
+              disabled={me === null}
+              title={me === null ? '登录后查看' : undefined}
               className={`px-4 py-2 rounded-pill text-sm font-medium whitespace-nowrap transition active:scale-95 ${
                 tab === t.id ? 'bg-island text-white' : 'bg-white text-sub shadow-card'
-              }`}
+              } ${me === null ? 'opacity-40' : ''}`}
             >
               {t.label}
             </button>
