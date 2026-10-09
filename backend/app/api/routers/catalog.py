@@ -84,8 +84,8 @@ SEED_CITY_ANCHORS = [
 # iPhone Duo：星光白色、夜空色 × 256GB/512GB/1TB/2TB
 #   价格：256GB ¥15,999 / 512GB ¥17,999 / 1TB ¥21,499 / 2TB ¥26,499
 #   价格：256GB ¥10,999 / 512GB ¥12,999 / 1TB ¥16,499 / 2TB ¥21,499
-# part_number：仅 "MJY64CH/A" 和 "MJYC4CH/A" 为已验证可用；
-# 其他组合的 part_number 为空，前端选择后会引导用户用"高级：手动输入"填写
+# part_number：iPhone Duo 8 个来自官网购买页嵌入 JSON（2026-10-10 实测）；
+# 18 Pro Max 仅 "MJY64CH/A" 和 "MJYC4CH/A" 为已验证可用，其他组合为空
 SEED_PRODUCTS = [
     {
         "part_number": "",
@@ -216,7 +216,8 @@ SEED_PRODUCTS = [
         "category": "iphone",
     },
     {
-        "part_number": "",
+        # P1：part_number 来自 Apple 中国官网 iPhone Duo 购买页嵌入 JSON（2026-10-10 实测）
+        "part_number": "MK2M4CH/A",
         "name": "iPhone Duo",
         "color": "星光白色",
         "capacity": "256GB",
@@ -224,7 +225,7 @@ SEED_PRODUCTS = [
         "category": "iphone",
     },
     {
-        "part_number": "",
+        "part_number": "MK2N4CH/A",
         "name": "iPhone Duo",
         "color": "夜空色",
         "capacity": "256GB",
@@ -232,7 +233,7 @@ SEED_PRODUCTS = [
         "category": "iphone",
     },
     {
-        "part_number": "",
+        "part_number": "MK2P4CH/A",
         "name": "iPhone Duo",
         "color": "星光白色",
         "capacity": "512GB",
@@ -240,7 +241,7 @@ SEED_PRODUCTS = [
         "category": "iphone",
     },
     {
-        "part_number": "",
+        "part_number": "MK2Q4CH/A",
         "name": "iPhone Duo",
         "color": "夜空色",
         "capacity": "512GB",
@@ -248,7 +249,7 @@ SEED_PRODUCTS = [
         "category": "iphone",
     },
     {
-        "part_number": "",
+        "part_number": "MK2T4CH/A",
         "name": "iPhone Duo",
         "color": "星光白色",
         "capacity": "1TB",
@@ -256,7 +257,7 @@ SEED_PRODUCTS = [
         "category": "iphone",
     },
     {
-        "part_number": "",
+        "part_number": "MK2U4CH/A",
         "name": "iPhone Duo",
         "color": "夜空色",
         "capacity": "1TB",
@@ -264,7 +265,7 @@ SEED_PRODUCTS = [
         "category": "iphone",
     },
     {
-        "part_number": "",
+        "part_number": "MK2V4CH/A",
         "name": "iPhone Duo",
         "color": "星光白色",
         "capacity": "2TB",
@@ -272,7 +273,7 @@ SEED_PRODUCTS = [
         "category": "iphone",
     },
     {
-        "part_number": "",
+        "part_number": "MK2W4CH/A",
         "name": "iPhone Duo",
         "color": "夜空色",
         "capacity": "2TB",
