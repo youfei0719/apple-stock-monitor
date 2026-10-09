@@ -408,15 +408,15 @@ export default function Me() {
     <div>
       <PageHeader title="我的" subtitle={me.email} />
       <div className="px-4 pb-6 space-y-5">
-        {/* 当前会员：按等级差异化设计 */}
-        {/* 免费版=浅灰素卡，标准版=白底蓝边，Pro=深色渐变+金色徽章+流光 */}
+        {/* 当前会员：按等级流动渐变差异化 */}
+        {/* 免费=银灰流动，标准=蓝色流动，Pro=金色流动 */}
         <div
           className={`p-5 rise-in rounded-card shadow-card relative overflow-hidden ${
             displayTier === 'pro'
-              ? 'bg-island text-white'
+              ? 'tier-flow-gold text-white'
               : displayTier === 'standard'
-                ? 'bg-white text-ink border-2 border-blue-500/60'
-                : 'bg-black/[0.03] text-ink border border-black/[0.06]'
+                ? 'tier-flow-blue text-ink'
+                : 'tier-flow-silver text-ink'
           }`}
         >
           {/* Pro 专属：顶部金色流光线 */}
@@ -542,12 +542,18 @@ export default function Me() {
               {plans.map((p) => {
                 const current = p.tier === displayTier;
                 const isProPlan = p.tier === 'pro';
+                const isStdPlan = p.tier === 'standard';
+                const tierFlowCls = isProPlan
+                  ? 'tier-flow-gold !text-white !border-0'
+                  : isStdPlan
+                    ? 'tier-flow-blue !border-0'
+                    : 'tier-flow-silver !border-0';
                 return (
                   <Card
                     key={p.tier}
                     className={`p-4 rise-in relative overflow-hidden ${
                       current ? 'ring-2 ring-accent' : ''
-                    } ${isProPlan ? '!bg-island !text-white !border-0' : ''}`}
+                    } ${tierFlowCls}`}
                   >
                     {isProPlan && (
                       <div className="absolute top-0 inset-x-0 h-[2px] bg-gradient-to-r from-amber-300 via-yellow-400 to-amber-300" />

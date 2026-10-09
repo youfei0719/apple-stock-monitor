@@ -117,3 +117,38 @@ body {
 .safe-bottom {
   padding-bottom: env(safe-area-inset-bottom);
 }
+
+/* ------------------------------------------------------------------
+ * 会员档位流动渐变（参考 glint-vault 流光高亮效果卡）
+ * 免费=银灰流动，标准=蓝色流动，Pro=金色流动
+ * 流动速度：免费最缓（12s），标准中等（8s），Pro 最快（6s）
+ * ------------------------------------------------------------------ */
+@keyframes tier-flow {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.tier-flow-silver {
+  background: linear-gradient(135deg, #f5f5f7, #e8e8ec, #f0f0f3, #e5e5e9);
+  background-size: 300% 300%;
+  animation: tier-flow 12s ease infinite;
+}
+
+.tier-flow-blue {
+  background: linear-gradient(135deg, #dbeafe, #bfdbfe, #e0e7ff, #c7d2fe);
+  background-size: 300% 300%;
+  animation: tier-flow 8s ease infinite;
+}
+
+.tier-flow-gold {
+  background: linear-gradient(135deg, #1a1a2e, #2d2a1a, #1a1a2e, #3a3220);
+  background-size: 300% 300%;
+  animation: tier-flow 6s ease infinite;
+}
