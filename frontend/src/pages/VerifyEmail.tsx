@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
 import { Card, PageHeader, PrimaryButton } from '../components/ui';
@@ -21,6 +21,23 @@ export default function VerifyEmail() {
   // P0：重发按钮独立 loading＋60s 冷却——点了立刻有反馈，防连点刷接口
   const [resending, setResending] = useState(false);
   const [cooldown, setCooldown] = useState(0);
+
+  // 页面加载时如果刚发送过验证码（emailSent=true），启动 60s 冷却防刷
+  useEffect(() => {
+    if (emailSent && initialEmail) {
+      setCooldown(60);
+      const timer = setInterval(() => {
+        setCooldown((c) => {
+          if (c <= 1) {
+            clearInterval(timer);
+            return 0;
+          }
+          return c - 1;
+        });
+      }, 1000);
+      return () => clearInterval(timer);
+    }
+  }, []);
 
   const submit = async () => {
     setError(null);
@@ -120,7 +137,7 @@ export default function VerifyEmail() {
           {error && <p className="mt-3 text-sm text-bad text-center">{error}</p>}
           {resentMsg && <p className="mt-3 text-sm text-ok text-center">{resentMsg}</p>}
           <div className="mt-5">
-            <PrimaryButton onClick={submit} disabled={busy}>
+            <PrimaryButton onClick={submit} disabled={busy || !email.trim() || !/^\d{6}$/.test(code.trim())}>
               {busy ? '验证中…' : '验证'}
             </PrimaryButton>
           </div>
