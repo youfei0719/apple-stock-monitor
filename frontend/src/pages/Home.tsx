@@ -378,7 +378,7 @@ export default function Home() {
         {!loadError && !loading && tasks.length === 0 && (
           <EmptyState
             title={tab === 'expired' ? '没有已过期的任务' : '还没有监控任务'}
-            hint={tab === 'expired' ? '过期的任务会出现在这里，可一键续期' : '添加你想抢的机型和门店，有货立刻通知你'}
+            hint={tab === 'expired' ? '任务过期后会出现在这里' : '添加你想抢的机型和门店，有货立刻通知你'}
             action={
               tab === 'active' ? (
                 <Link
