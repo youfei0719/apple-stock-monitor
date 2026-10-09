@@ -322,6 +322,12 @@ rsync -a --delete \
   "$REPO/backend/" "$APP_DIR/"
 echo "[deploy] 后端已同步 $REPO/backend/ -> $APP_DIR/"
 
+# P0：清目标目录残留的 __pycache__——rsync 的 --exclude 不删 dest 旧 .pyc，
+# Python 会优先加载旧编译文件，导致代码更新不生效
+find "$APP_DIR" -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null
+find "$APP_DIR" -name '*.pyc' -delete 2>/dev/null
+echo "[deploy] 已清除 $APP_DIR 下残留的 __pycache__/*.pyc"
+
 # P2：ruff.toml 在仓库根，rsync 不覆盖它；不拷的话 `ruff check app` 在 $APP_DIR
 # 里按默认规则跑（line-length=100 等配置不生效）。同步一份过去。
 if [ -f "$REPO/ruff.toml" ]; then
