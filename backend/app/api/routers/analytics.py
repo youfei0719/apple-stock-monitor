@@ -72,8 +72,19 @@ def overview(
     for n, t in rows:
         # R6-I7：part_number 取通知快照列（任务删除后 join 不到 MonitorTask，
         # 只有快照能给出型号；与 history.py 同口径）
+        # P1：榜单展示用完整 SKU 名，不裸显 part_number
         pn = n.part_number or (t.part_number if t else "") or "未知"
-        by_part[pn] = by_part.get(pn, 0) + 1
+        label = pn
+        if t and (t.product_name or t.capacity or t.color):
+            sku = (t.product_name or "").strip()
+            if t.capacity:
+                sku += f" {t.capacity}"
+            if t.color:
+                sku += f" {t.color}"
+            sku = sku.strip()
+            if sku:
+                label = sku
+        by_part[label] = by_part.get(label, 0) + 1
         # R6-I8："按天"口径统一北京时间（与 admin overview 一致）
         day = (n.created_at + timedelta(hours=8)).strftime("%Y-%m-%d")
         by_day[day] = by_day.get(day, 0) + 1
