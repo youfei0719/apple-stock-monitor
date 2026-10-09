@@ -259,7 +259,7 @@ class Notifier:
 
     def test_channel(self, channel: str, target: str, user_id=None) -> Notification:
         """通知链路测试：发一条测试消息并写库。测试消息与真实发送一致附带链接。"""
-        title = "StockMon 通知链路测试"
+        title = "监控 通知链路测试"
         body = "这是一条测试通知，说明该渠道配置可用。"
         link = get_settings().BASE_URL
         if channel == "bark":

@@ -379,7 +379,7 @@ export default function AddMonitor() {
                         ¥{(p.price_cny ?? 0).toLocaleString('zh-CN')}
                       </span>
                     </div>
-                    <div className={`mt-1 text-xs ${on ? 'text-white/70' : 'text-faint'}`}>
+                    <div className={`mt-1 text-xs ${on ? 'text-white/70' : 'text-sub'}`}>
                       {p.capacity && <>{p.capacity} · </>}
                       {p.color && <>{p.color} · </>}
                       <span className="mono">{p.part_number}</span>

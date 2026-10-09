@@ -20,9 +20,9 @@ const META: Record<StockState, { label: string; cls: string; dot: string }> = {
     dot: 'bg-faint',
   },
   unknown: {
-    // P2：未知只是"还没开始检测"，不是预警——用灰色，不用琥珀色
+    // P1：未知 ≠ 无货——虚线边框表示"还没开始检测"，与无货的实心灰区分
     label: '未知',
-    cls: 'bg-[#f2f2f4] text-sub border-transparent',
+    cls: 'bg-white text-faint border border-dashed border-line',
     dot: 'bg-faint',
   },
   verifying: {

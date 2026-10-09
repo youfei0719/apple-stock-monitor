@@ -458,7 +458,7 @@ def membership_sweep(db: Session) -> dict:
             None,
             "membership_changed",
             f"会员已到期：{TIERS[old]['name']} → {TIERS[u.tier]['name']}",
-            f"您的{TIERS[old]['name']}会员已到期，{action}{pause_note}。如需恢复请前往「我」页续费。",
+            f"您的{TIERS[old]['name']}会员已到期，{action}{pause_note}。如需恢复请前往「我的」页续费。",
         )
         log.info("membership_downgraded", user_id=u.id, old=old, new=u.tier)
 
@@ -489,7 +489,7 @@ def membership_sweep(db: Session) -> dict:
             f"会员将于 {ms} 天后到期",
             f"您的{TIERS[u.tier]['name']}会员将于 "
             f"{_beijing_date(u.tier_expires_at)}（北京时间）到期，"
-            f"到期后将降为免费版。如需续费请前往「我」页，提前续费不亏天数。",
+            f"到期后将降为免费版。如需续费请前往「我的」页，提前续费不亏天数。",
         )
         stats["renewal_reminders"] += 1
         log.info("membership_expiring", user_id=u.id, days_left=round(days_left, 2))

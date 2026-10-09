@@ -137,7 +137,7 @@ export default function TaskDetail() {
 
   return (
     <div>
-      <PageHeader title="库存状态" subtitle="门店 × 配置 · 实时状态" />
+      <PageHeader title={task?.name ?? '库存状态'} subtitle="门店 × 配置 · 实时状态" />
       <div className="px-4 pb-4">
         <Link to="/" className="inline-block mb-3 text-sm text-accent">
           ← 返回监控列表

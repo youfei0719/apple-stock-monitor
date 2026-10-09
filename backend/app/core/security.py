@@ -36,7 +36,7 @@ def new_totp_secret() -> str:
     return pyotp.random_base32()
 
 
-def totp_provisioning_uri(secret: str, email: str, issuer: str = "StockMon") -> str:
+def totp_provisioning_uri(secret: str, email: str, issuer: str = "监控") -> str:
     return pyotp.totp.TOTP(secret).provisioning_uri(name=email, issuer_name=issuer)
 
 

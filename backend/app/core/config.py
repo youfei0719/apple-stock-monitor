@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     SMTP_PORT: int = 465
     SMTP_USER: str = ""
     SMTP_PASSWORD: str = ""
-    SMTP_FROM: str = "StockMon <noreply@glint.red>"
+    SMTP_FROM: str = "监控 <noreply@glint.red>"
     SMTP_TLS: int = 1
 
     # --- 短信（预留） ---

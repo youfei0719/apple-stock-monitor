@@ -146,7 +146,7 @@ def _send_verification_code(db: Session, user: User) -> bool:
     try:
         send_email(
             user.email,
-            "StockMon 邮箱验证码",
+            "监控 邮箱验证码",
             f"你的邮箱验证码是 {code}，{EMAIL_CODE_TTL_MIN} 分钟内有效。",
         )
         log.info("verify_email_sent", user_id=user.id)
