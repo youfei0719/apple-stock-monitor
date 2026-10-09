@@ -193,7 +193,7 @@ def _count(db, user_id, **kw):
     )
 
 
-def _webhook_grant(db, monkeypatch, user, plan_id="plan_std", amount=1900, order_tag="w"):
+def _webhook_grant(db, monkeypatch, user, plan_id="plan_std", amount=990, order_tag="w"):
     """走真实 afdian_webhook（pay.py:303 路径）：remark 带 user_id 关联用户。"""
     monkeypatch.setattr(pay_router.settings, "AFDIAN_TOKEN", "test-token")
     monkeypatch.setattr(pay_router.settings, "AFDIAN_PLAN_STANDARD", plan_id)

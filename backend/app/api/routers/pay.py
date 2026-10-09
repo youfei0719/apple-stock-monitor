@@ -36,8 +36,8 @@ router = APIRouter(tags=["pay"])
 log = get_logger("pay")
 settings = get_settings()
 
-# 档位期望金额（单位：分）。standard=¥19，pro=¥39。
-EXPECTED_AMOUNT_FEN = {"standard": 1900, "pro": 3900}
+# 档位期望金额（单位：分）。standard=¥9.9，pro=¥19.9。
+EXPECTED_AMOUNT_FEN = {"standard": 990, "pro": 1990}
 
 # 档位高低：用于判断 webhook 是升级还是降级（升级立即生效、降级到期生效）
 TIER_RANK = {"trial": 0, "free": 1, "standard": 2, "pro": 3}

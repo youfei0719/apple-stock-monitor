@@ -542,7 +542,7 @@ export default function Me() {
         <Card className="p-5 rise-in">
           <p className="font-medium">开通 / 续费会员</p>
           <p className="mt-1.5 text-sm text-sub leading-relaxed">
-            通过爱发电赞助开通，支付成功后系统自动开通对应档位（标准 ¥19/30天 · Pro ¥39/30天）。
+            通过爱发电赞助开通，支付成功后系统自动开通对应档位（标准 ¥9.9/30天 · Pro ¥19.9/30天）。
           </p>
           <div className="mt-4">
             <PrimaryButton onClick={() => window.open(afdianUrl, '_blank', 'noopener')}>

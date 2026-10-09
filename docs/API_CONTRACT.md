@@ -60,7 +60,7 @@ state ∈ `available | unavailable | unknown | verifying | cooling | paused | ex
   - 匿名 trial 分支（未登录 + 携带 `X-Device-Id`）：返回 `{tier:"trial", tier_expires_at:null, pending_tier:null, quota_reset_at:null, period:"YYYY-MM"}`。
     配额为**自然月口径**：用量键 `trial_quota:{device_id}:{YYYY-MM}`（月份取北京时间（UTC+8）`now`），每月 1 日（北京时间）自动归零；与登录用户的"购买日+30天滚动"区分。
 - `GET /api/plans` → 三档说明（公开，**不再返回 trial**）：`[{tier, name, price_cny, tasks_limit, push_limit, channels[], history, priority, refresh_interval_sec}]`
-  - free：免费 · standard：标准（¥19/月） · pro：Pro（¥39/月）；trial 只用于未登录匿名体验，不可购买
+  - free：免费 · standard：标准（¥9.9/月） · pro：Pro（¥19.9/月）；trial 只用于未登录匿名体验，不可购买
   - 前端渲染注意：无 `features`/`period`/`id` 字段；档位名用 `name`，价格用 `price_cny`，周期文案前端自拼（`price_cny>0` → "¥X / 月"）；"当前"徽章用 `p.tier === me.tier` 判断。
 - `GET /api/site-config`（公开）→ `{afdian_page_url}`：爱发电自家赞助页 URL（前端付费指引跳转用，`AFDIAN_PAGE_URL` 环境变量配置）
 
