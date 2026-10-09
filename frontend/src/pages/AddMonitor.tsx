@@ -8,11 +8,11 @@ import { Card, EmptyState, ErrorState, LoadingState, PageHeader, PrimaryButton }
 /** 持续提醒间隔下限（秒）：后端 ge=3600 */
 const MIN_REPEAT_INTERVAL_SEC = 3600;
 
-const CATEGORIES: { id: string; label: string; soon?: boolean }[] = [
+const CATEGORIES: { id: string; label: string; soon?: boolean; soonReason?: string }[] = [
   { id: 'iphone', label: 'iPhone' },
-  { id: 'ipad', label: 'iPad', soon: true },
-  { id: 'mac', label: 'Mac', soon: true },
-  { id: 'watch', label: 'Watch', soon: true },
+  { id: 'ipad', label: 'iPad', soon: true, soonReason: 'iPad 产品库正在建设中，暂只支持 iPhone' },
+  { id: 'mac', label: 'Mac', soon: true, soonReason: 'Mac 产品库正在建设中，暂只支持 iPhone' },
+  { id: 'watch', label: 'Watch', soon: true, soonReason: 'Watch 产品库正在建设中，暂只支持 iPhone' },
 ];
 
 /** 向导步骤 */
@@ -396,7 +396,7 @@ export default function AddMonitor() {
                   key={c.id}
                   onClick={() => setCategory(c.id)}
                   disabled={c.soon}
-                  title={c.soon ? '即将支持' : undefined}
+                  title={c.soon ? c.soonReason : undefined}
                   className={`py-2 rounded-card-sm text-sm font-medium transition active:scale-95 flex flex-col items-center justify-center gap-0.5 ${
                     category === c.id ? 'bg-island text-white' : 'bg-white text-sub shadow-card'
                   } ${c.soon ? 'opacity-45' : ''}`}
@@ -406,6 +406,10 @@ export default function AddMonitor() {
                 </button>
               ))}
             </div>
+            {/* P1：品类不可选的原因说清楚，不只写"即将支持"四个字 */}
+            <p className="text-[11px] text-faint mb-4">
+              iPad / Mac / Watch 产品库正在建设中，当前仅支持 iPhone 全系
+            </p>
             {prodErr ? (
               <ErrorState message={prodErr} onRetry={loadProducts} />
             ) : products === null ? (
@@ -534,6 +538,12 @@ export default function AddMonitor() {
                         ))}
                     </div>
                   </Card>
+                )}
+                {/* P1：选了容量+颜色但组合不存在时，说清原因，不让用户困惑"为什么选了没反应" */}
+                {(selectedCaps.size > 0 || selectedColors.size > 0) && selectedParts.length === 0 && (
+                  <p className="mt-3 text-xs text-bad">
+                    所选容量与颜色没有对应配置，请调整选择（或用"高级：手动输入"直接填 part number）
+                  </p>
                 )}
               </>
             )}

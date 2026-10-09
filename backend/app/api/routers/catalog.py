@@ -77,7 +77,9 @@ SEED_CITY_ANCHORS = [
 ]
 
 # 种子产品（part number 为真实查询键；用户也可在专家模式直接输入任意 part number）
+# P1：丰富 iPhone 18 全系——之前只有 Pro Max 2 个配置可选，太少
 SEED_PRODUCTS = [
+    # iPhone 18 Pro Max（已有 2 个，补全 1TB）
     {
         "part_number": "MJYC4CH/A",
         "name": "iPhone 18 Pro Max",
@@ -92,6 +94,72 @@ SEED_PRODUCTS = [
         "color": "黑色",
         "capacity": "256GB",
         "price_cny": 9999,
+        "category": "iphone",
+    },
+    {
+        "part_number": "MJYD4CH/A",
+        "name": "iPhone 18 Pro Max",
+        "color": "银色",
+        "capacity": "1TB",
+        "price_cny": 14999,
+        "category": "iphone",
+    },
+    {
+        "part_number": "MJY74CH/A",
+        "name": "iPhone 18 Pro Max",
+        "color": "黑色",
+        "capacity": "512GB",
+        "price_cny": 11999,
+        "category": "iphone",
+    },
+    # iPhone 18 Pro
+    {
+        "part_number": "MJX64CH/A",
+        "name": "iPhone 18 Pro",
+        "color": "黑色钛金属",
+        "capacity": "256GB",
+        "price_cny": 8999,
+        "category": "iphone",
+    },
+    {
+        "part_number": "MJXC4CH/A",
+        "name": "iPhone 18 Pro",
+        "color": "白色钛金属",
+        "capacity": "512GB",
+        "price_cny": 10999,
+        "category": "iphone",
+    },
+    {
+        "part_number": "MJXD4CH/A",
+        "name": "iPhone 18 Pro",
+        "color": "原色钛金属",
+        "capacity": "1TB",
+        "price_cny": 12999,
+        "category": "iphone",
+    },
+    # iPhone 18（标准版）
+    {
+        "part_number": "MJW24CH/A",
+        "name": "iPhone 18",
+        "color": "黑色",
+        "capacity": "128GB",
+        "price_cny": 5999,
+        "category": "iphone",
+    },
+    {
+        "part_number": "MJW64CH/A",
+        "name": "iPhone 18",
+        "color": "白色",
+        "capacity": "256GB",
+        "price_cny": 6999,
+        "category": "iphone",
+    },
+    {
+        "part_number": "MJWC4CH/A",
+        "name": "iPhone 18",
+        "color": "群青色",
+        "capacity": "512GB",
+        "price_cny": 8999,
         "category": "iphone",
     },
 ]
