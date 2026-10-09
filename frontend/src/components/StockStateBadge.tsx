@@ -31,7 +31,7 @@ const META: Record<StockState, { label: string; cls: string; dot: string }> = {
     dot: 'bg-accent island-dot',
   },
   cooling: {
-    label: '冷却中',
+    label: '限流等待中',
     cls: 'bg-[#fff1ea] text-[#c2410c] border-[#f5c6a5]',
     dot: 'bg-warn',
   },

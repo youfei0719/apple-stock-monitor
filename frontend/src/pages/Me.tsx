@@ -464,7 +464,7 @@ export default function Me() {
               </p>
               <p className="text-[11px] text-white/50">
                 配额按实际发送成功的通知条数扣减 · 付费档以购买日 +30
-                天为一周期滚动重置，匿名体验档按自然月重置
+                天为一周期滚动重置，免费版按自然月重置
               </p>
             </div>
           )}
@@ -593,7 +593,14 @@ export default function Me() {
           ) : !payments ? (
             <LoadingState rows={1} />
           ) : payments.length === 0 ? (
-            <EmptyState title="暂无付费记录" action={null} />
+            // P0：有付费档位但无付费记录（如管理员赠送）时解释清楚，不让用户怀疑付费链路
+            quota && quota.tier !== 'free' && quota.tier !== 'trial' ? (
+              <Card className="p-4">
+                <p className="text-sm text-sub">当前 {TIER_LABEL[quota.tier] ?? quota.tier} 由系统直接开通，无在线支付记录。</p>
+              </Card>
+            ) : (
+              <EmptyState title="暂无付费记录" action={null} />
+            )
           ) : (
             <div className="space-y-2">
               {payments.map((p) => (

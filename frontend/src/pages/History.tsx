@@ -233,7 +233,7 @@ export default function History() {
                   <p className="text-[15px] font-medium mono truncate">{r.part_number}</p>
                   <p className="mt-0.5 text-xs text-sub">{r.day}</p>
                 </div>
-                <span className="mono text-sm text-accent shrink-0">{r.events} 次放货</span>
+                <span className="mono text-sm text-ink font-medium shrink-0">{r.events} 次放货</span>
               </div>
             </Card>
           ))}
@@ -242,7 +242,9 @@ export default function History() {
     }
 
     if (tab === 'ranking') {
-      if (!ranking || ranking.length === 0)
+      // P1：过滤掉城市为"未知"的数据点，无意义不展示
+      const validRanking = (ranking ?? []).filter((r) => r.city && r.city !== '未知');
+      if (validRanking.length === 0)
         return (
           <EmptyState
             title="今天还没有放货"
@@ -251,13 +253,13 @@ export default function History() {
           />
         );
       // 后端 GET /analytics/ranking 返回 {city, events}（scope=personal：只统计你自己的到货通知）；max 兜底 1 防 NaN
-      const max = Math.max(...ranking.map((r) => r.events), 1);
+      const max = Math.max(...validRanking.map((r) => r.events), 1);
       return (
         <Card className="p-4 rise-in">
           <p className="text-sm font-medium mb-1">我的放货分布 · 今日</p>
           <p className="text-xs text-faint mb-3">仅统计你自己的到货通知</p>
           <div className="space-y-3">
-            {ranking.map((r, i) => (
+            {validRanking.map((r, i) => (
               <div key={r.city}>
                 <div className="flex items-center justify-between text-sm mb-1">
                   <span>
