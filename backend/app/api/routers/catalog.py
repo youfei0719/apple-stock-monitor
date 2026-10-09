@@ -81,6 +81,8 @@ SEED_CITY_ANCHORS = [
 # 种子产品（part_number 为真实查询键；用户也可在专家模式直接输入任意 part number）
 # 数据来源：Apple 中国官网 www.apple.com.cn（2026-10-10 抓取），元数据 100% 真实
 # iPhone 18 Pro Max：勃艮第酒红色、冰川蓝色、银色、黑色 × 256GB/512GB/1TB/2TB
+# iPhone Duo：星光白色、夜空色 × 256GB/512GB/1TB/2TB
+#   价格：256GB ¥15,999 / 512GB ¥17,999 / 1TB ¥21,499 / 2TB ¥26,499
 #   价格：256GB ¥10,999 / 512GB ¥12,999 / 1TB ¥16,499 / 2TB ¥21,499
 # part_number：仅 "MJY64CH/A" 和 "MJYC4CH/A" 为已验证可用；
 # 其他组合的 part_number 为空，前端选择后会引导用户用"高级：手动输入"填写
@@ -211,6 +213,70 @@ SEED_PRODUCTS = [
         "color": "黑色",
         "capacity": "2TB",
         "price_cny": 21499,
+        "category": "iphone",
+    },
+    {
+        "part_number": "",
+        "name": "iPhone Duo",
+        "color": "星光白色",
+        "capacity": "256GB",
+        "price_cny": 15999,
+        "category": "iphone",
+    },
+    {
+        "part_number": "",
+        "name": "iPhone Duo",
+        "color": "夜空色",
+        "capacity": "256GB",
+        "price_cny": 15999,
+        "category": "iphone",
+    },
+    {
+        "part_number": "",
+        "name": "iPhone Duo",
+        "color": "星光白色",
+        "capacity": "512GB",
+        "price_cny": 17999,
+        "category": "iphone",
+    },
+    {
+        "part_number": "",
+        "name": "iPhone Duo",
+        "color": "夜空色",
+        "capacity": "512GB",
+        "price_cny": 17999,
+        "category": "iphone",
+    },
+    {
+        "part_number": "",
+        "name": "iPhone Duo",
+        "color": "星光白色",
+        "capacity": "1TB",
+        "price_cny": 21499,
+        "category": "iphone",
+    },
+    {
+        "part_number": "",
+        "name": "iPhone Duo",
+        "color": "夜空色",
+        "capacity": "1TB",
+        "price_cny": 21499,
+        "category": "iphone",
+    },
+    {
+        "part_number": "",
+        "name": "iPhone Duo",
+        "color": "星光白色",
+        "capacity": "2TB",
+        "price_cny": 26499,
+        "category": "iphone",
+    },
+    {
+        "part_number": "",
+        "name": "iPhone Duo",
+        "color": "夜空色",
+        "capacity": "2TB",
+        "price_cny": 26499,
         "category": "iphone",
     },
 ]
