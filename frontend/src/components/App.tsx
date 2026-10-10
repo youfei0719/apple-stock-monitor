@@ -78,6 +78,12 @@ export default function App() {
   const location = useLocation();
   const [me, setMe] = useState<Me | null | undefined>(undefined);
   const [tasks, setTasks] = useState<Task[]>([]);
+  // Splash 最小展示时间：保证 logo 描线动画（1.4s）播完才进站
+  const [splashMinElapsed, setSplashMinElapsed] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setSplashMinElapsed(true), 1500);
+    return () => clearTimeout(t);
+  }, []);
   // R6-D5：App 层维护任务加载错误态（首屏 /me+tasks 加载失败 → 子页面渲染 ErrorState 而非误导成"还没有监控任务"）
   const [tasksError, setTasksError] = useState<string | null>(null);
   // R10-I2：会话页内过期标记（曾经有会话但 /me 401）——渲染"登录已过期"横幅，
@@ -198,7 +204,7 @@ export default function App() {
     monitoringCount === 0 && activeTasks.some((t) => t.paused && !isTaskExpired(t));
   const activeCount = monitoringCount;
 
-  if (me === undefined) {
+  if (me === undefined || !splashMinElapsed) {
     return <LogoSplash />;
   }
 
