@@ -6,8 +6,8 @@ export default {
       colors: {
         ink: '#1d1d1f',
         sub: '#6e6e73',
-        faint: '#aeaeb2',
-        accent: '#0071e3',
+        faint: '#6e6e73',
+        accent: '#0068d1',
         'accent-dark': '#0060c9',
         bg: '#f5f5f7',
         line: '#e5e5ea',

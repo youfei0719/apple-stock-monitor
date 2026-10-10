@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState, type MouseEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate, useOutletContext } from 'react-router-dom';
-import { api, ApiError, isTaskExpired, type Me, type Task, type TaskStatusFilter } from '../lib/api';
+import { api, ApiError, SESSION_EXPIRED_EVENT, isTaskExpired, isResultStale, summarizeTask, type Me, type Task, type TaskStatusFilter } from '../lib/api';
+import { ErrorState } from './ui';
 import IslandStatus from './StatusPill';
 
 const TABS = [
@@ -34,7 +35,7 @@ function writeHadSession(had: boolean) {
 
 function BottomNav() {
   const location = useLocation();
-  if (location.pathname === '/login' || location.pathname === '/verify') return null;
+  if (['/login', '/verify', '/reset-password'].includes(location.pathname)) return null;
   // UX：已在当前 tab 时再点一次不做任何事——避免重复导航导致页面重载、
   // /add 已选的机型/门店/搜索词被清空（操作丢失）
   const noopIfActive = (to: string) => (e: MouseEvent) => {
@@ -45,7 +46,7 @@ function BottomNav() {
       <div className="mx-auto max-w-lg grid grid-cols-5 h-[64px]">
         {TABS.map((t) =>
           t.fab ? (
-            <NavLink key={t.to} to={t.to} onClick={noopIfActive(t.to)} className="flex items-center justify-center">
+            <NavLink key={t.to} to={t.to} aria-label="添加监控" onClick={noopIfActive(t.to)} className="flex items-center justify-center">
               <span className="w-12 h-12 -mt-6 rounded-full bg-accent text-white text-2xl shadow-card-lg flex items-center justify-center active:scale-95 transition">
                 {t.icon}
               </span>
@@ -75,9 +76,17 @@ function BottomNav() {
 export default function App() {
   const navigate = useNavigate();
   const location = useLocation();
+  const isAuthRoute = ['/login', '/verify', '/reset-password'].includes(location.pathname);
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    // 无新请求时也让卡片和顶部提示及时变为陈旧，避免停留页面仍称实时有货。
+    const timer = window.setInterval(() => setNow(Date.now()), 30000);
+    return () => window.clearInterval(timer);
+  }, []);
   const [me, setMe] = useState<Me | null | undefined>(undefined);
   const [tasks, setTasks] = useState<Task[]>([]);
   // R6-D5：App 层维护任务加载错误态（首屏 /me+tasks 加载失败 → 子页面渲染 ErrorState 而非误导成"还没有监控任务"）
+  const [authError, setAuthError] = useState<string | null>(null);
   const [tasksError, setTasksError] = useState<string | null>(null);
   // R10-I2：会话页内过期标记（曾经有会话但 /me 401）——渲染"登录已过期"横幅，
   // 不与"匿名体验"横幅混淆
@@ -85,6 +94,30 @@ export default function App() {
   // R10-P2-2：灵动岛计数专用列表——独立于当前 tab 的过滤列表维护，
   // 否则切到"已过期" tab 时"监控中 · N 个任务"失真
   const [activeTasks, setActiveTasks] = useState<Task[]>([]);
+  const [notice, setNotice] = useState<string | null>(null);
+  const noticePath = useRef('');
+
+  useEffect(() => {
+    const expire = () => {
+      if (!readHadSession()) return;
+      setMe(null); setTasks([]); setActiveTasks([]); setTasksError(null);
+      setSessionExpired(true); setNotice(null);
+    };
+    window.addEventListener(SESSION_EXPIRED_EVENT, expire);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, expire);
+  }, []);
+
+  useEffect(() => {
+    const path = location.pathname + location.search;
+    const state = location.state as { notice?: string | null } | null;
+    if (!isAuthRoute && state?.notice) {
+      setNotice(state.notice);
+      navigate(path, { replace: true, state: { ...state, notice: null } });
+    } else if (noticePath.current !== path) {
+      setNotice(null);
+    }
+    noticePath.current = path;
+  }, [location.state, location.pathname, location.search, isAuthRoute, navigate]);
 
   // R7：登录成功后刷新 /me（代替 window.location.href 全页刷新），
   // 配合 navigate('/', {state:{notice}}) 把认领提示带到首页只展示一次
@@ -95,6 +128,11 @@ export default function App() {
       // R10-I2：拿到身份即记"曾经有会话"
       writeHadSession(true);
       setSessionExpired(false);
+      try {
+        const list = await api.tasks();
+        setTasks(list); setTasksError(null);
+        setActiveTasks(list.filter((task) => !isTaskExpired(task)));
+      } catch (error) { setTasksError(error instanceof Error ? error.message : '任务加载失败'); }
     }
   }, []);
 
@@ -133,6 +171,7 @@ export default function App() {
         if (status === 'active') setActiveTasks(list);
         else await refreshActiveTasks();
       } catch (e) {
+        if (e instanceof ApiError && e.code === 'identity_changed') return;
         setTasksError(e instanceof Error ? e.message : '任务加载失败');
         throw e;
       }
@@ -140,8 +179,8 @@ export default function App() {
     [refreshActiveTasks],
   );
 
-  useEffect(() => {
-    (async () => {
+  const initialize = useCallback(async () => {
+      setAuthError(null);
       try {
         const m = await api.me();
         setMe(m);
@@ -158,6 +197,7 @@ export default function App() {
         // R10-P2-2：首屏即拉一份独立的 active 列表供灵动岛计数
         void refreshActiveTasks();
       } catch (e) {
+        if (e instanceof ApiError && e.code === 'identity_changed') return;
         // F4：未登录不再强制跳 /login——匿名体验可用（localStorage device id + X-Device-Id，
         // 后端 tasks.py 匿名链路支持；登录/注册时后端自动认领同 device 的任务）。
         if (e instanceof ApiError && e.status === 401) {
@@ -168,25 +208,24 @@ export default function App() {
           try {
             setTasks(await api.tasks());
             setTasksError(null);
-          } catch {
-            /* 匿名拉任务也失败则留空列表 */
+          } catch (error) {
+            setTasksError(error instanceof Error ? error.message : '任务加载失败');
           }
           void refreshActiveTasks();
         } else {
           // R6-I13：500/网络抖动 → 错误态+重试，不冒充"匿名体验中"
-          setMe(null);
-          setTasksError(e instanceof Error ? e.message : '登录状态获取失败，请重试');
+          setAuthError(e instanceof Error ? e.message : '登录状态获取失败，请重试');
         }
       }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [refreshActiveTasks]);
+  useEffect(() => { void initialize(); }, [initialize]);
 
   // 有货时点击灵动岛 → 跳到该任务详情页（D9）
   // hotTask 已是第一个有货且未暂停未过期的任务
   // R10-P2-2：hotTask 也走灵动岛专用 active 列表，不随 tab 过滤失真
   const hotTask = activeTasks.find(
-    (t) => !t.paused && !isTaskExpired(t) && (t.latest?.available_count ?? 0) > 0,
+    (t) => !t.paused && !isTaskExpired(t) && t.last_poll_ok !== false &&
+      summarizeTask(t).state === 'available' && !isResultStale(t, summarizeTask(t).updatedAt, now),
   );
   // R7：口径与后端 GET /tasks?status=active 对齐（paused 任务同样出现在"监控中" tab 里）
   // P2：但胶囊文案必须诚实——"监控中"只数真正监控中的（非暂停非过期）；
@@ -198,6 +237,7 @@ export default function App() {
   const activeCount = monitoringCount;
 
   if (me === undefined) {
+    if (authError) return <div className="min-h-screen bg-bg p-5 flex items-center justify-center"><ErrorState message={authError} onRetry={() => void initialize()} /></div>;
     return (
       <div className="min-h-screen bg-bg flex items-center justify-center">
         <div className="w-10 h-10 rounded-full bg-island flex items-center justify-center">
@@ -209,18 +249,14 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-bg text-ink font-sans">
-      {location.pathname !== '/login' && location.pathname !== '/verify' && (
+      {!isAuthRoute && (
         <IslandStatus
           taskCount={hasPausedOnly ? activeTasks.filter((t) => !isTaskExpired(t)).length : activeCount}
           hasStock={!!hotTask}
           allPaused={hasPausedOnly}
           // R6-D5：refreshTasks 会抛异常，灵动岛点开只做静默刷新（失败不打断页面），
           // 页面内错误态走 Home 的 ErrorState + 重试
-          onTap={() => {
-            refreshTasks().catch(() => {
-              /* 静默刷新失败：Home 已通过 tasksError 渲染错误态 */
-            });
-          }}
+          onTap={() => navigate('/')}
           onStockTap={hotTask ? () => navigate(`/tasks/${hotTask.id}`) : undefined}
         />
       )}
@@ -230,23 +266,22 @@ export default function App() {
           R10-I2：曾经有会话但页内过期（sessionExpired）→ 渲染"登录已过期"横幅，
           不混淆成"匿名体验中"（如别处改密被登出） */}
       {me === null &&
-        tasksError === null &&
-        location.pathname !== '/login' &&
-        location.pathname !== '/verify' && (
+        (tasksError === null || sessionExpired) &&
+        !isAuthRoute && (
           /* UX：pt-16 给顶部 fixed 灵动岛让位（岛高 40px + mt-12px），避免胶囊条
              与"暂无监控任务" pill 重叠遮挡；阴影落在浅色背景上不再显脏 */
           <div className="mx-auto max-w-lg px-4 pt-16">
             {sessionExpired ? (
               <div className="rounded-card-sm bg-island text-white px-4 py-2.5 text-[13px] flex items-center justify-between gap-3 rise-in">
                 <span>登录已过期，请重新登录</span>
-                <Link to="/login" className="shrink-0 underline font-medium">
+                <Link to="/login" state={{ returnTo: location.pathname + location.search }} className="shrink-0 underline font-medium">
                   重新登录
                 </Link>
               </div>
             ) : (
               <div className="rounded-card-sm bg-island text-white px-4 py-2.5 text-[13px] flex items-center justify-between gap-3 rise-in">
-                <span>匿名体验中：可创建 1 个任务 · 每月 1 次推送</span>
-                <Link to="/login" className="shrink-0 underline font-medium">
+                <span>免登录体验 · 可建 1 个任务</span>
+                <Link to="/login" state={{ returnTo: location.pathname + location.search }} className="shrink-0 underline font-medium">
                   注册 / 登录
                 </Link>
               </div>
@@ -254,13 +289,11 @@ export default function App() {
           </div>
         )}
       <main className="mx-auto max-w-lg pb-24">
-        <Outlet context={{ me, tasks, refreshTasks, tasksError, refreshMe, logout, sessionExpired }} />
-        {location.pathname !== '/login' && location.pathname !== '/verify' && (
-          <footer className="px-4 pt-2 pb-6 text-center text-[11px] text-faint">
-            {/* R9-I7：全站显式按北京时间渲染（UTC+8），不走设备本地时区 */}
-            页面内所有时间为北京时间（UTC+8）
-          </footer>
-        )}
+        {notice && !isAuthRoute && <div role="status" className="mx-4 mb-3 p-4 rounded-card-sm bg-white shadow-card flex gap-3 items-start">
+          <p className="text-sm text-ink flex-1">{notice}</p><button className="text-sm text-accent shrink-0" onClick={() => setNotice(null)} aria-label="关闭操作提示">关闭</button>
+        </div>}
+        <Outlet key={isAuthRoute ? 'auth' : me?.id ?? 'anonymous'} context={{ me, tasks, refreshTasks, tasksError, refreshMe, logout, sessionExpired }} />
+
       </main>
       <BottomNav />
     </div>

@@ -2,7 +2,7 @@
 
 Base URL: `https://stock.glint.red/api`（开发环境 `http://localhost:8000/api`）
 认证：HttpOnly + Secure + SameSite=Lax Cookie（session token），JSON 接口。
-所有时间：UTC ISO8601。错误格式：`{"detail": "...", "code": "..."}`。
+所有时间：UTC ISO8601。错误格式：`{"detail": "...", "code": "..."}`。全局 60 次/分钟/IP 限流的 429 响应带 `Retry-After` 秒数；专项限流以错误文案为准。
 
 ## 健康检查
 - `GET /healthz` → 200 `{"status":"ok","db":true,"engine":"running","engine_in_api":false,"version":"..."}`（无需认证）；**DB 挂时返回 503** `{"status":"degraded","db":false,"engine":"<state>","engine_in_api":false,"version":"..."}`（deploy 健康检查据此判失败）
@@ -14,19 +14,29 @@ Base URL: `https://stock.glint.red/api`（开发环境 `http://localhost:8000/ap
 - `POST /api/auth/logout` → 204
 - `GET /api/me` → `{id, email, tier（有效档位）, quota:{push_used, push_limit, tasks_used, tasks_limit}, totp_enabled}`
 - `PATCH /api/auth/me` `{old_password, password}` → 200 `{ok:true}`（改密；注意后端没有 PATCH /api/me，me_router 只有 GET 别名，调错路径 405）
+- `POST /api/auth/password-reset/request` `{email}` → `{ok:true, message}`；仅给已验证账户邮箱发 6 位重置码，未知邮箱／未验证邮箱同样返回通用提示。与注册验证码隔离；每邮箱 3 次/小时，每 IP 20 次/小时；10 分钟有效，重发替换旧码，数据库只存服务端密钥 HMAC。
+- `POST /api/auth/password-reset/confirm` `{email, code, password}` → `{ok:true}`；密码至少 8 位且含字母、数字；错误码持久化尝试锁定，验证码原子消费，一次有效；成功注销全部会话，保留 TOTP 配置，随后重新登录。不会创建登录会话。
 - `POST /api/auth/totp/setup` / `POST /api/auth/totp/verify`（管理员强制，普通用户可选）
 
 ## 监控任务
-Task: `{id, name, group, category, part_number, product_name, color, capacity, stores:[{number,name,city}], mode:"instant"|"confirmed", repeat_interval_sec|null, channels:{bark_key?, webhooks?[], email?}, paused, expires_at, created_at, latest}`
+Task: `{id, config_revision, name, group, category, part_number, product_name, color, capacity, stores:[{number,name,city}], mode:"instant"|"confirmed", repeat_interval_sec|null, channels:{bark_key?, webhooks?[], email?}, paused, paused_reason|null, expires_at, created_at, last_polled_at|null, last_poll_ok|null, refresh_interval_sec, creation_status:null|"created"|"existing", latest}`
 
 其中 `latest` 为后端聚合的最新状态摘要（snake_case）：
 `{stores:{<store_number>:{<part_number>:{state, pickup_display, store_pick_eligible, pickup_search_quote, updated_at}}}, available_count, total}`
+- `last_polled_at` 为最近实际查询尝试，`last_poll_ok` 为该次是否成功，`refresh_interval_sec` 按有效档位配置返回目标周期，不承诺查询一定准时。库存记录 `updated_at` 在相同结果及失败检查时也推进；前端依据各门店记录年龄判断是否陈旧。
+- `config_revision` 是用户可编辑设置的 SHA256 摘要，库存轮询和检查时间变化不改变它。前端编辑草稿保留读取时的摘要；刷新库存不会更新草稿摘要。
+- 创建响应的 `creation_status` 区分新建与幂等返回的现有任务；现有任务保留原设置，不会因重复提交覆盖配置。普通查询返回 null。
 - state ∈ 展示七态（后端已按 paused/verifying/cooling/expired 换算），不是 Apple 原始字段。
 
 - `GET /api/tasks` → 列表（含每任务最新状态摘要）
 - `POST /api/tasks` → 201（按 tier 校验任务数上限）。支持 `Idempotency-Key` 请求头：重复 key 直接返回首次创建的任务（网络重试/重复提交不建重复任务）；同 key 首个请求仍在创建中时返回 409 `idempotency_in_progress`。R24 起同内容重复提交（不同 key，如双 Tab/网络重试）不再 409 `task_conflict`，而是幂等返回已建任务（服务端按归属+型号+门店组合派生内容键串行化并发创建；并发创建中返回 409 `idempotency_in_progress`）。
-- `POST /api/tasks/batch` `{part_numbers[], store_numbers[], name_template}` → 门店×型号批量生成。同样支持 `Idempotency-Key`（语义同上：重复 key 返回首次创建结果，创建中返回 409 `idempotency_in_progress`）；同内容重复批量提交同样幂等返回首次创建的任务（R24）。
-- `PATCH /api/tasks/{id}`（改名/分组/暂停/有效期/渠道）
+- `POST /api/tasks/batch` `{part_numbers[], store_numbers[], name_template, category?, group?, mode?, repeat_interval_sec?, channels?}` → 门店×型号批量生成。同样支持 `Idempotency-Key`（语义同上：重复 key 返回首次创建结果，创建中返回 409 `idempotency_in_progress`）；同内容重复批量提交同样幂等返回首次创建的任务（R24）。
+- 单建和批量创建的 `repeat_interval_sec` 最小 60 秒整数。显式 null 表示关闭；省略字段时兼容历史 Pro 默认 300 秒，其余默认关闭。新前端始终明确提交开关值，重复提醒与首次确认模式独立。
+- `PATCH /api/tasks/{id}` 可带 `config_revision`；服务端加写锁后读取最新设置，摘要不一致返回 409 `config_conflict`，不覆盖新设置；省略字段兼容旧客户端。
+- `PATCH /api/tasks/{id}`（改名/分组/暂停/有效期/渠道/门店/首次确认模式/重复间隔）。`stores` 为完整替换列表，1–20 家，不可重复或为空；归一化门店编号，冲突拒绝；移除门店的旧状态、通知基线和过期幂等映射随本次事务清理。省略重复间隔保留原值，显式 null 关闭。
+- `POST /api/tasks/group-action` `{group, paused}` → `Task[]`；仅登录用户本人目标下的所有任务，单次事务一起暂停／恢复，包含过期任务；恢复不延长有效期，暂停仍占名额。
+- `GET /api/tasks/group-settings?group=` → 当前用户该购买目标的全部 Task，包含已暂停和已过期任务；不存在返回 404 `group_not_found`。
+- `PATCH /api/tasks/group-settings` `{group, expected:[{id,config_revision}], patch:{group?,mode?,repeat_interval_sec?,email?}}` → 更新后的 Task 数组。受影响成员必须与当前账号该组的成员完全一致，设置摘要也必须一致，否则 409 `config_conflict`；写锁后校验并一次提交。只修改勾选字段；repeat 显式 null 关闭，email 显式 null 使用已验证注册邮箱并保留其他渠道。重复间隔 ≥60；group 去空白后不能为空，不合并现有同名组（409 `group_exists`）；空 patch 返回 400。机型、门店、暂停、有效期保持原值。此接口只允许登录账号编辑本人任务，不能按匿名设备或外部任务 ID 批量更新。
 - `DELETE /api/tasks/{id}`
 
 ## 目录（公开）
@@ -49,9 +59,10 @@ state ∈ `available | unavailable | unknown | verifying | cooling | paused | ex
 ## 历史与数据（全部 snake_case）
 - `GET /api/history/events?part_number=&store=&days=30` → 有货事件（活动日志）：`[{id, task_id, part_number, title, body, link, channel, created_at}]`
 - `GET /api/history/releases?days=7` → 放货记录（按天×机型聚合）：`[{day, part_number, events}]`（standard 及以上可用）
-- `GET /api/analytics/ranking?days=1` → 个人城市放货排行：`{scope: "personal", ranking: [{city, events}]}`（按当前用户自己的有货通知聚合，非全站榜单）
+- `GET /api/analytics/ranking?days=1` → 个人城市放货排行：`{scope: "personal", ranking: [{city, events}]}`（按当前用户自己的有货通知聚合，非全站榜单；days=1 是滚动近 24 小时，不是北京时间今日零点起）
 - `GET /api/analytics/overview` → 数据分析摘要：`{days, total_events, by_part:[[part_number,count]...], by_day:[[day,count]...]}`
 - `GET /api/guide/purchase` → 到货购买指南（静态内容）：`{title, steps[]}`
+- `GET /api/stats/poll` 的 `polled_tasks` 表示有过检查尝试的任务数（含旧记录／失败），不是本轮完成数。历史页另用 `GET /api/tasks` 展示全部现存任务的创建时间、最近尝试、已存结果及当前有效门店覆盖；没有逐轮检查日志，不声称能还原完整历史覆盖率。
 - `GET /api/stats/poll` → 上次查询/成功率/平均响应（按用户任务聚合）：`{tasks, polled_tasks, success_rate, avg_response_ms, last_poll_at, engine}`
 
 ## 配额与会员
@@ -95,6 +106,8 @@ state ∈ `available | unavailable | unknown | verifying | cooling | paused | ex
 - `POST /api/admin/system/peak-mode` `{"enabled": bool}` → 高峰模式开关（开启后 trial/free 刷新间隔 ×4；记审计）
 - `POST /api/admin/catalog/refresh` → 门店目录在线刷新（重操作：在线打 Apple 接口；管理后台系统页"刷新门店目录"卡片调用）：成功立即返回当前目录数组 `[{number, name, city, province}]`（刷新走后台异步任务，前端稍后重拉即可）；全局限流 1 次/小时，超限 429 `{code:"refresh_limited"}`；TOTP 未验证时 403 `{code:"totp_required"}`
 - `GET /api/admin/audit` → 数组元素 `{id, admin_id, action, target_type, target_id, detail, ip, created_at}`
+- `POST /api/auth/password-reset/request` `{email}` → `{ok:true, message}`；仅给已验证账户邮箱发 6 位重置码，未知邮箱／未验证邮箱同样返回通用提示。与注册验证码隔离；每邮箱 3 次/小时，每 IP 20 次/小时；10 分钟有效，重发替换旧码，数据库只存服务端密钥 HMAC。
+- `POST /api/auth/password-reset/confirm` `{email, code, password}` → `{ok:true}`；密码至少 8 位且含字母、数字；错误码持久化尝试锁定，验证码原子消费，一次有效；成功注销全部会话，保留 TOTP 配置，随后重新登录。不会创建登录会话。
 - `POST /api/auth/totp/setup` → `{secret, uri, enabled}`；`POST /api/auth/totp/verify {code}` → `{ok, totp_enabled}`（verify 后当前 session 标 totp_verified）
 - 所有写操作记 audit log。
 
@@ -115,3 +128,5 @@ state ∈ `available | unavailable | unknown | verifying | cooling | paused | ex
   - 一键续期：`expires_at = max(now, 原 expires_at) + 30 天`。只延长时间，不改 `paused`/配额状态。
   - 匿名 trial 任务受 24h 上限钳制（`expires_at` 会被 clamp 到 now+24h）。
   - 注意：提前续期**保留**剩余天数（实现语义 `max(now, expires_at)+30天`；R4-P2：此前一律 now+30d，剩 20 天时续期反而亏，已修正）。
+
+- 到货提醒：`instant` 首次查到有货或无货转有货时发送；`confirmed` 需连续两次有货。持续有货仅在开启重复提醒时再次发送，失败查询不计入连续确认。

@@ -149,6 +149,8 @@ def channels_health(
         .all()
     )
 
+    if user.email_verified:
+        task_channels.add("email")
     channels = []
     for key, name in CHANNEL_META:
         sent = counts_7d.get((key, "sent"), 0)

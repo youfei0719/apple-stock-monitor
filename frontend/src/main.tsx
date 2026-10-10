@@ -11,7 +11,9 @@ import Guide from './pages/Guide';
 import Me from './pages/Me';
 import Login from './pages/Login';
 import NotFound from './pages/NotFound';
+import ResetPassword from './pages/ResetPassword';
 import VerifyEmail from './pages/VerifyEmail';
+import GroupSettings from './pages/GroupSettings';
 import './styles/tokens.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
@@ -27,9 +29,11 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           }
         >
           <Route path="/login" element={<Login />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/verify" element={<VerifyEmail />} />
           <Route path="/" element={<Home />} />
           <Route path="/tasks/:id" element={<TaskDetail />} />
+          <Route path="/group" element={<GroupSettings />} />
           <Route path="/add" element={<AddMonitor />} />
           <Route path="/history" element={<History />} />
           <Route path="/guide" element={<Guide />} />

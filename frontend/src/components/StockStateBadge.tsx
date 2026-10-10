@@ -50,10 +50,12 @@ const META: Record<StockState, { label: string; cls: string; dot: string }> = {
 export default function StockStateBadge({
   state,
   size = 'md',
+  historical = false,
 }: {
   state: StockState;
   // R10-死代码1：withDot prop 零调用方，已删除
   size?: 'sm' | 'md';
+  historical?: boolean;
 }) {
   const m = META[state] ?? META.unknown;
   // P1：cooling 状态给小白解释——查询太频繁被 Apple 暂时限制，稍后自动恢复，无需操作
@@ -67,7 +69,7 @@ export default function StockStateBadge({
     >
       <span className={`w-1.5 h-1.5 rounded-full ${m.dot}`} />
       <span className={state === 'available' || state === 'verifying' ? 'mono' : ''}>
-        {m.label}
+        {historical && (state === 'available' || state === 'unavailable') ? `上次${m.label}` : m.label}
       </span>
     </span>
   );

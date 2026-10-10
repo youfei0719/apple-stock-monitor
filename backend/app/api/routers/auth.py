@@ -571,3 +571,91 @@ def totp_verify(
     db.commit()
     log.info("totp_verified", user_id=user.id)
     return {"ok": True, "totp_enabled": True}
+
+
+class PasswordResetIn(RegisterIn):
+    # 此流程以邮箱验证码替代旧密码，密码强度沿用账户规则。
+    code: str = Field(pattern=r"^\d{6}$")
+
+
+def _reset_code_digest(email: str, code: str) -> str:
+    return hmac.new(
+        settings.APP_SECRET_KEY.encode(), f"password_reset:{email}:{code}".encode(), hashlib.sha256
+    ).hexdigest()
+
+
+@router.post("/password-reset/request")
+def request_password_reset(data: ResendCodeIn, request: Request, db: Session = Depends(get_db)):
+    """独立于注册验证码；只给已验证邮箱发信，对不存在的账户统一响应。"""
+    start = time.monotonic()
+    email = data.email.strip().lower()
+    if not check_rate_limit(f"reset_email:{email}", limit=3, window_sec=3600):
+        raise APIError(429, "重置邮件发送过于频繁，请一小时后再试", "reset_limited")
+    if not check_rate_limit(f"reset_ip:{_client_ip(request)}", limit=20, window_sec=3600):
+        raise APIError(429, "重置邮件发送过于频繁，请一小时后再试", "reset_limited")
+    user = db.scalar(select(User).where(User.email == email, User.email_verified.is_(True)))
+    if user:
+        code = f"{secrets.randbelow(900000) + 100000:06d}"
+        key = f"password_reset:{email}"
+        row = db.scalar(select(SystemConfig).where(SystemConfig.key == key))
+        value = {"digest": _reset_code_digest(email, code),
+                 "expires_at": (utcnow() + timedelta(minutes=10)).isoformat()}
+        if row:
+            row.value = value
+        else:
+            db.add(SystemConfig(key=key, value=value))
+        try:
+            db.commit()
+            send_email(
+                email, "监控 密码重置验证码",
+                f"密码重置验证码：{code}，10 分钟内有效。若非本人操作，请忽略。",
+            )
+        except Exception:
+            db.rollback()
+            log.warning("password_reset_mail_failed", user_id=user.id)
+    _pad_resend_timing(start)
+    return {
+        "ok": True,
+        "message": "若该邮箱已注册且验证，我们会发送重置验证码，请查收邮箱及垃圾邮件。",
+    }
+
+
+@router.post("/password-reset/confirm")
+def confirm_password_reset(data: PasswordResetIn, db: Session = Depends(get_db)):
+    from sqlalchemy import delete
+
+    email = data.email.strip().lower()
+    _check_attempt_lock(db, "password_reset_fail", email, "密码重置验证码")
+    key = f"password_reset:{email}"
+    row = db.scalar(select(SystemConfig).where(SystemConfig.key == key))
+    value = dict(row.value or {}) if row else {}
+    user = db.scalar(select(User).where(User.email == email, User.email_verified.is_(True)))
+    try:
+        expires = datetime.fromisoformat(value.get("expires_at", ""))
+    except (TypeError, ValueError):
+        expires = utcnow() - timedelta(seconds=1)
+    valid = (
+        user is not None and row is not None and expires > utcnow()
+        and hmac.compare_digest(
+            str(value.get("digest", "")), _reset_code_digest(email, data.code)
+        )
+    )
+    if not valid:
+        _record_attempt_fail(db, "password_reset_fail", email)
+        raise APIError(400, "验证码错误或已过期，请重新获取", "bad_reset_code")
+    password_hash = hash_password(data.password)
+    # 比较并消费同一版本验证码，避免重发或并发确认使用旧码修改密码。
+    consumed = db.execute(
+        delete(SystemConfig).where(SystemConfig.key == key, SystemConfig.value == value)
+    )
+    if consumed.rowcount != 1:
+        db.rollback()
+        raise APIError(400, "验证码已使用或被更新，请重新获取", "bad_reset_code")
+    user.password_hash = password_hash
+    db.execute(delete(DbSession).where(DbSession.user_id == user.id))
+    db.execute(delete(SystemConfig).where(
+        SystemConfig.key == _attempt_key("password_reset_fail", email)
+    ))
+    db.commit()
+    log.info("password_reset_completed", user_id=user.id)
+    return {"ok": True}

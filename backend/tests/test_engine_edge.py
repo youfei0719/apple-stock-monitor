@@ -39,10 +39,11 @@ def test_unknown_does_not_fake_available_edge():
     assert prev2 == "available"
 
 
-def test_first_seen_available_is_silent_baseline():
+def test_first_seen_available_notifies_once():
     prev, notify, cc = evaluate_transition(None, "available", 0, "instant")
-    assert notify is False
+    assert notify is True
     assert prev == "available"
+    assert evaluate_transition(prev, "available", cc, "instant")[1] is False
 
 
 def test_confirmed_mode_needs_two_rounds():
@@ -74,3 +75,21 @@ def test_available_to_unavailable_resets():
     assert notify is False
     assert prev == "unavailable"
     assert cc == 0
+
+
+def test_first_check_failure_does_not_lose_initial_arrival():
+    prev, notify, cc = evaluate_transition(None, "unknown", 0, "instant")
+    assert notify is False
+    assert evaluate_transition(prev, "available", cc, "instant")[1] is True
+
+
+def test_initial_confirmed_arrival_requires_consecutive_checks():
+    prev, notify, cc = evaluate_transition(None, "available", 0, "confirmed")
+    assert notify is False
+    prev, notify, cc = evaluate_transition(prev, "unknown", cc, "confirmed")
+    assert notify is False
+    prev, notify, cc = evaluate_transition(prev, "available", cc, "confirmed")
+    assert notify is False
+    prev, notify, cc = evaluate_transition(prev, "available", cc, "confirmed")
+    assert notify is True
+    assert evaluate_transition(prev, "available", cc, "confirmed")[1] is False

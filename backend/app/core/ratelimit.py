@@ -1,5 +1,6 @@
 """内存限流：登录失败锁 IP、公开接口 60 req/min/IP。"""
 
+import math
 import time
 from collections import defaultdict
 
@@ -59,3 +60,9 @@ def check_rate_limit(ip: str, limit: int = 60, window_sec: int = 60) -> bool:
         for k in [k for k, v in _hit_windows.items() if not v or v[-1] < cutoff]:
             _hit_windows.pop(k, None)
     return True
+
+
+def rate_limit_retry_after(ip: str, window_sec: int = 60) -> int:
+    """首次请求退出滑动窗口的等待时间，不写入新的命中。"""
+    win = _hit_windows.get(ip, [])
+    return max(1, math.ceil(win[0] + window_sec - _now())) if win else 1

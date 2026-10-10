@@ -106,8 +106,6 @@ def evaluate_transition(
         if mode == "confirmed" and cc < CONFIRMED_ROUNDS:
             # 未达连续确认数：不推进 prev_known，保持"边沿待确认"
             return prev_known, False, cc
-        if prev_known is None and mode == "instant":
-            return "available", False, cc  # instant 首轮静默基线
         return "available", True, cc
     # new_state == "unavailable"
     return "unavailable", False, 0
@@ -445,6 +443,9 @@ class Engine:
                     notify = True
 
                 row.state = new_state
+                # 即使库存和说明没有变化，也记录本轮实际检查时间。
+                # SQLAlchemy onupdate 只在列有变化时触发，不能代表轮询时间。
+                row.updated_at = now
                 row.prev_known = new_prev
                 row.confirmed_count = cc
                 if r:
@@ -513,6 +514,7 @@ class Engine:
                 row = self._get_state(db, task.id, store, part)
                 # 失败只标 unknown，不改 prev_known（evaluate_transition 同理）
                 row.state = "unknown"
+                row.updated_at = utcnow()
                 row.confirmed_count = 0
                 db.add(row)
 

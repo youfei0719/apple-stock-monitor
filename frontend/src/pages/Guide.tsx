@@ -23,7 +23,7 @@ export default function Guide() {
 
   return (
     <div>
-      <PageHeader title={guide?.title ?? '到货购买指南'} subtitle="抢到有货之后，这样最快下单" />
+      <PageHeader title={guide?.title ?? '到货购买指南'} subtitle="收到到货提醒后" />
       <div className="px-4 pb-4">
         {error && <ErrorState message={error} onRetry={load} />}
         {!error && guide === null && <LoadingState rows={3} />}
@@ -47,9 +47,9 @@ export default function Guide() {
           </div>
         )}
         <div className="mt-4 p-4 rounded-card bg-neutral-900 text-white rise-in shadow-card">
-          <p className="text-[15px] font-medium">关键提醒</p>
+          <p className="text-[15px] font-medium">确认取货门店</p>
           <p className="mt-2 text-sm text-neutral-300 leading-relaxed">
-            店内取货名额按门店实时释放，看到「有货」请在 5 分钟内完成下单；下单时选择「店内取货」并确认取货门店与监控的门店一致。
+            在 Apple 选择“店内取货”，核对门店后下单。库存随时变化，以 Apple 结账页为准。
           </p>
         </div>
       </div>

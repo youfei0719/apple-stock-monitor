@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { api, ApiError, type NotificationRecord, type TaskChannels, type WebhookChannel } from '../lib/api';
+import { useEffect, useId, useState } from 'react';
+import { api, ApiError, type NotificationRecord, type TaskChannels } from '../lib/api';
 import { useApp } from './App';
 import { Card, EmptyState, LoadingState } from './ui';
 
@@ -12,13 +12,6 @@ import { Card, EmptyState, LoadingState } from './ui';
  * 到货通知附带直达商品页链接。
  */
 
-const PLATFORMS = [
-  { id: 'wecom', label: '企业微信' },
-  { id: 'dingtalk', label: '钉钉' },
-  { id: 'feishu', label: '飞书' },
-];
-
-/** R6-I10：History 活动日志复用该中文映射，不再裸显英文 channel key */
 export const CHANNEL_LABEL: Record<string, string> = {
   bark: 'Bark',
   email: '邮件',
@@ -195,7 +188,7 @@ export function NotificationHistory({ taskId }: { taskId?: string | number }) {
                     </span>
                   ) : (
                     <span className="shrink-0 text-[11px] px-2 py-0.5 rounded-pill bg-ok/10 text-ok font-medium">
-                      已送达
+                      {n.channel === 'page' || n.channel === 'system' ? '已记录' : '已发送'}
                     </span>
                   )}
                 </div>
@@ -233,48 +226,26 @@ export default function NotifyChannels({
   // R10-I3（用户已拍板按档位校验直接 400）：后端对所有档位配 bark/webhook 直接 400，
   // tiers.py 无任何档位含 bark——"可配置""测试通过 ≠ 到货会发"是假话。Bark / 群机器人
   // 输入框直接禁用并注明"暂未开放"。
-  const [tier, setTier] = useState<string | null>(null);
-  useEffect(() => {
-    if (me === null) {
-      setTier('trial');
-      return;
-    }
-    api
-      .quota()
-      .then((q) => setTier(q.tier))
-      .catch(() => setTier(null));
-  }, [me]);
+  const tier = me === null ? 'trial' : me?.tier ?? null;
   const channelNote =
     tier === 'trial'
       ? // UX：档位名全站统一叫「免费版」；本站是网页，没有 App
         // P2：后端真相 trial=["page"]、free/standard/pro=["email"]，无任何档位含
         // bark/webhook——"暂未开放"与"所有档位均不支持"自相矛盾，统一为"当前未开放"
-        '免费版仅支持站内通知（在本站内查看）；Bark / 群机器人当前未开放。'
-      : '当前档位仅支持邮件推送；Bark / 群机器人当前未开放。';
+        '体验任务仅在本站显示到货提醒。'
+      : '到货后发送邮件，附商品链接。';
 
   const set = (patch: Partial<TaskChannels>) => onChange({ ...value, ...patch });
 
-  const setWebhook = (idx: number, patch: Partial<WebhookChannel>) => {
-    const list = [...(value.webhooks ?? [])];
-    list[idx] = { ...list[idx], ...patch };
-    set({ webhooks: list });
-  };
-
-  const addWebhook = () => {
-    set({ webhooks: [...(value.webhooks ?? []), { url: '', platform: 'wecom' }] });
-  };
-
-  const removeWebhook = (idx: number) => {
-    set({ webhooks: (value.webhooks ?? []).filter((_, i) => i !== idx) });
-  };
+  const emailId = useId();
+  const effectiveEmail = (value.email ?? '').trim() || (me?.email_verified ? me.email : '');
+  const customEmail = !!me && effectiveEmail.toLowerCase() !== me.email.toLowerCase();
 
   return (
     <div>
-      <h3 className="text-[13px] font-semibold text-sub mb-2">通知渠道</h3>
+      <h3 className="text-[13px] font-semibold text-sub mb-2">接收通知</h3>
       <Card className="p-4 space-y-4">
-        <p className="-mt-1 text-xs text-faint leading-relaxed">
-          到货时按这里的渠道发送通知（按实际发送成功的通知条数扣减配额；「发送测试」不扣配额），通知附带直达商品页链接。
-        </p>
+
         {/* F-2：渠道开放范围按档位动态（trial → 免费版仅站内；付费档 → 仅邮件），不写死。
             R9-I11：tier===null（档位加载中）时不渲染档位文案，避免匿名用户首帧闪烁 */}
         {tier !== null && (
@@ -285,31 +256,26 @@ export default function NotifyChannels({
         )}
         {anonymous && (
           <p className="-mt-1 text-xs text-faint leading-relaxed">
-            登录后可测试通知渠道（测试不扣配额）。
+            登录后可接收邮件。
           </p>
         )}
-
-        {/* Bark——P2：纯展示文本，不做成可点击的样子（输入框+灰色按钮易误导）；
-            后端所有档位直接 400，当前未开放 */}
-        <div className="flex items-center justify-between py-1">
-          <p className="text-sm text-sub">Bark 推送</p>
-          <p className="text-xs text-faint">当前未开放</p>
-        </div>
 
         {/* 邮箱——R11-P1-3：trial 档后端 _require_channels 对 email 直接 400，
             与 bark/webhook 禁用对称：trial 时禁用输入框并注明仅支持站内 */}
         <div>
+          <label htmlFor={emailId} className="block text-sm font-medium mb-2">接收邮箱</label>
           <div className="flex gap-2">
             <input
+              id={emailId}
               value={value.email ?? ''}
               onChange={(e) => set({ email: e.target.value })}
               placeholder={
-                tier === 'trial' ? '邮箱（免费版仅支持站内通知，暂不可填）' : '邮箱（推送渠道，可选）'
+                tier === 'trial' ? '登录后可使用邮件' : me?.email ?? '接收邮箱'
               }
               disabled={tier === 'trial'}
               title={
                 tier === 'trial'
-                  ? '免费版仅支持站内通知（在本站内查看）'
+                  ? '体验任务仅支持站内通知（在本站内查看）'
                   : undefined
               }
               type="email"
@@ -317,11 +283,11 @@ export default function NotifyChannels({
             />
             <TestButton
               busy={busy === 'email'}
-              disabled={anonymous || tier === 'trial'}
+              disabled={anonymous || tier === 'trial' || customEmail}
               // P1：测试用"有效邮箱"——输入框为空但有已验证注册邮箱时，测注册邮箱；
               // 与下方"未填写时将使用你的注册邮箱"文案一致，不再自相矛盾
               onClick={() =>
-                run('email', 'email', (value.email ?? '').trim() || (me?.email_verified ? me.email : ''))
+                run('email', 'email', me?.email_verified ? me.email : '')
               }
             />
           </div>
@@ -329,70 +295,23 @@ export default function NotifyChannels({
               避免"我没填邮箱，通知去哪了"的困惑 */}
           {!(value.email ?? '').trim() && me?.email_verified && tier !== 'trial' && (
             <p className="mt-1.5 text-[11px] text-faint">
-              未填写时将使用你的注册邮箱（{me.email}）接收通知
+              默认发往 {me.email}
             </p>
           )}
           {/* P1：测试邮箱限制事前说明，不让用户靠试错发现 */}
-          {tier !== 'trial' && (
+          {tier !== 'trial' && customEmail && (
             <p className="mt-1.5 text-[11px] text-faint">
-              发送测试只能发到你账号绑定的邮箱
+              其他邮箱可保存；测试邮件仅能发到注册邮箱。
             </p>
           )}
+          {!anonymous && !customEmail && <p className="mt-1 text-xs text-sub">测试邮件不占提醒额度。</p>}
           <TestResult r={results.email} />
         </div>
 
-        {/* 群机器人 webhook——R10-I3：后端所有档位直接 400，禁用并注明"暂未开放"；
-            已保存的旧行保留删除按钮以便清理（保存时仍会被后端拒绝） */}
-        <div>
-          {(value.webhooks ?? []).map((w, i) => (
-            <div key={i} className="mb-2.5">
-              <div className="flex gap-2">
-                <select
-                  value={w.platform}
-                  onChange={(e) => setWebhook(i, { platform: e.target.value })}
-                  disabled
-                  title="群机器人通知当前未开放"
-                  className="shrink-0 px-2.5 py-2.5 rounded-card-sm bg-bg text-sm outline-none opacity-60"
-                >
-                  {PLATFORMS.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.label}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  value={w.url}
-                  onChange={(e) => setWebhook(i, { url: e.target.value })}
-                  placeholder="群机器人 webhook URL（暂未开放）"
-                  disabled
-                  title="群机器人通知当前未开放"
-                  className={`${inputCls} mono opacity-60`}
-                />
-                <TestButton
-                  busy={busy === `wh${i}`}
-                  disabled
-                  onClick={() => run(`wh${i}`, w.platform, w.url)}
-                />
-                <button
-                  onClick={() => removeWebhook(i)}
-                  className="shrink-0 px-3 py-2.5 rounded-card-sm bg-bg text-bad text-[13px] active:scale-95 transition"
-                  aria-label="删除该 webhook"
-                >
-                  ✕
-                </button>
-              </div>
-              <TestResult r={results[`wh${i}`]} />
-            </div>
-          ))}
-          <button
-            onClick={addWebhook}
-            disabled
-            title="群机器人通知当前未开放"
-            className="w-full py-2.5 rounded-card-sm border border-dashed border-line text-[13px] text-faint transition disabled:opacity-50"
-          >
-            ＋ 添加群机器人（企业微信 / 钉钉 / 飞书）· 暂未开放
-          </button>
-        </div>
+        {(value.bark_key || (value.webhooks ?? []).length > 0) && <div className="text-xs text-sub">
+          <p>请先移除已停用的通知渠道。</p>
+          <button onClick={() => onChange({ email: value.email })} className="mt-2 text-accent">移除旧渠道</button>
+        </div>}
       </Card>
 
       {showHistoryFor !== undefined && <NotificationHistory taskId={showHistoryFor} />}

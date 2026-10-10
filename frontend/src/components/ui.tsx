@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 
 /** 大圆角白卡片（A·零售式明亮克制） */
 export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
@@ -71,19 +71,29 @@ export function ErrorState({
   message: string;
   onRetry?: () => void;
 }) {
+  const [remaining, setRemaining] = useState(0);
+  useEffect(() => {
+    const seconds = Number(message.match(/请在 (\d+) 秒后重试/)?.[1] ?? 0);
+    const until = Date.now() + seconds * 1000;
+    setRemaining(seconds);
+    if (!seconds) return;
+    const timer = window.setInterval(() => setRemaining(Math.max(0, Math.ceil((until - Date.now()) / 1000))), 1000);
+    return () => window.clearInterval(timer);
+  }, [message]);
   return (
     <Card className="p-8 text-center rise-in">
       <div className="mx-auto mb-4 w-14 h-14 rounded-full bg-bg flex items-center justify-center">
         <span className="text-2xl text-bad">!</span>
       </div>
-      <p className="text-ink font-medium">出错了</p>
+      <p role="alert" className="text-ink font-medium">{remaining > 0 ? '请求暂时受限' : '加载未完成'}</p>
       <p className="mt-2 text-sm text-sub break-all">{message}</p>
       {onRetry && (
         <button
           onClick={onRetry}
-          className="mt-5 px-6 py-2.5 rounded-pill bg-accent text-white text-sm font-medium active:scale-95 transition"
+          disabled={remaining > 0}
+          className="disabled:opacity-40 mt-5 px-6 py-2.5 rounded-pill bg-accent text-white text-sm font-medium active:scale-95 transition"
         >
-          再试一次
+          {remaining > 0 ? `${remaining} 秒后可重试` : '再试一次'}
         </button>
       )}
     </Card>
@@ -114,6 +124,7 @@ export function PrimaryButton({
 }) {
   return (
     <button
+      type={onClick ? 'button' : 'submit'}
       onClick={onClick}
       disabled={disabled}
       className={`w-full py-3.5 rounded-card-sm bg-accent text-white font-medium text-[15px] active:scale-[0.98] transition disabled:opacity-40 ${className}`}
@@ -121,4 +132,34 @@ export function PrimaryButton({
       {children}
     </button>
   );
+}
+
+
+/** 取消优先获取焦点，Esc 取消，Tab 保持在弹窗内。 */
+export function ConfirmDialog({ title, children, busy, onCancel }: {
+  title: string; children: ReactNode; busy: boolean; onCancel: () => void;
+}) {
+  const titleId = useId();
+  const dialog = useRef<HTMLDivElement>(null);
+  const cancel = useRef(onCancel);
+  cancel.current = onCancel;
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    dialog.current?.querySelector<HTMLButtonElement>('button')?.focus();
+    return () => { if (previous?.isConnected) previous.focus(); };
+  }, []);
+  return <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 px-4 pb-10" onClick={() => !busy && cancel.current()}>
+    <div ref={dialog} role="dialog" aria-modal="true" aria-labelledby={titleId} className="w-full max-w-lg bg-white rounded-card shadow-card-lg p-5 rise-in" tabIndex={-1} onClick={(event) => event.stopPropagation()} onKeyDown={(event) => {
+      if (event.key === 'Escape') { event.preventDefault(); if (!busy) cancel.current(); }
+      if (event.key !== 'Tab') return;
+      const controls = [...(dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], input:not(:disabled), [tabindex="0"]') ?? [])];
+      const first = controls[0], last = controls[controls.length - 1];
+      if (!first) { event.preventDefault(); dialog.current?.focus(); }
+      else if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    }}>
+      <h2 id={titleId} className="font-medium">{title}</h2>
+      {children}
+    </div>
+  </div>;
 }

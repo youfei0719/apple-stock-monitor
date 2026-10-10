@@ -1,19 +1,15 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { api, summarizeTask, type Quota, type Task, type TaskStatusFilter } from '../lib/api';
+import { api, isResultStale, summarizeTask, type Quota, type Task, type TaskStatusFilter } from '../lib/api';
 import { useApp } from '../components/App';
+import CheckHealth from '../components/CheckHealth';
 import StockStateBadge from '../components/StockStateBadge';
-import { Card, EmptyState, ErrorState, LoadingState, PageHeader } from '../components/ui';
+import { Card, ConfirmDialog, EmptyState, ErrorState, LoadingState, PageHeader } from '../components/ui';
 
 // R9-I7：全站显式北京时间（与页脚承诺一致），不走设备本地时区
 function fmtTime(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-}
-
-function fmtHM(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit' });
 }
 
 function daysLeft(iso: string | null): number | null {
@@ -47,8 +43,8 @@ function TaskCard({
   // R8-U-8：删除确认用应用内弹窗（A·零售式明亮克制风格），不再用 window.confirm
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const { state, availableCount, total, updatedAt, partialUnknown } = summarizeTask(task);
-  const expired = state === 'expired';
   const remaining = daysLeft(task.expires_at);
+  const expired = state === 'expired' || (remaining !== null && remaining <= 0);
   const expiringSoon = !expired && remaining !== null && remaining <= 3;
 
   const togglePause = async () => {
@@ -107,10 +103,10 @@ function TaskCard({
           <div className="min-w-0">
             <p className="font-medium truncate">
               {task.name}
-              {/* P2：连续确认模式加标识，用户能区分两种任务 */}
+              {/* P2：确认后提醒模式加标识，用户能区分两种任务 */}
               {task.mode === 'confirmed' && (
                 <span className="ml-2 text-[11px] px-1.5 py-0.5 rounded-pill bg-accent/10 text-accent font-medium align-middle">
-                  连续确认
+                  确认后提醒
                 </span>
               )}
             </p>
@@ -130,7 +126,8 @@ function TaskCard({
             </p>
           </div>
           <div className="flex flex-col items-end gap-1.5 shrink-0">
-            <StockStateBadge state={state} />
+            {task.paused && expired && <StockStateBadge state="expired" size="sm" />}
+            <StockStateBadge state={state} historical={task.last_poll_ok === false || isResultStale(task, updatedAt)} />
             {partialUnknown && (
               <span className="inline-flex items-center gap-1.5 rounded-pill border border-dashed border-[#f0c36d] bg-[#fff7e8] px-2 py-0.5 text-[11px] font-medium text-[#b25e09]">
                 <span className="w-1.5 h-1.5 rounded-full bg-warn" />
@@ -142,30 +139,20 @@ function TaskCard({
         {(total > 0 || updatedAt) && (
           <div className="mt-3 flex items-center justify-between text-xs text-sub">
             <span>
-              有货 <span className="mono text-ink">{availableCount}</span>
-              {' / '}
-              <span className="mono">{total}</span> 家门店
+              {state === 'paused' || state === 'expired' ? '已停止检查' : state === 'unknown' ? '库存尚未确认' : <>
+                {task.last_poll_ok === false || isResultStale(task, updatedAt) ? '上次有货' : '有货'} <span className="mono text-ink">{availableCount}</span>{' / '}
+                <span className="mono">{total}</span> 家门店
+              </>}
             </span>
             {updatedAt && (
               <span>
-                更新于 <span className="mono">{fmtTime(updatedAt)}</span>
+                记录于 <span className="mono">{fmtTime(updatedAt)}</span>
               </span>
             )}
           </div>
         )}
-        {state === 'cooling' && (
-          <p className="mt-1.5 text-[11px] text-warn">
-            数据可能过期
-            {updatedAt && (
-              <>
-                {' '}· 更新于 <span className="mono">{fmtHM(updatedAt)}</span>
-              </>
-            )}
-          </p>
-        )}
-        {task.paused && !expired && (
-          <p className="mt-1.5 text-[11px] text-faint">暂停仍占用任务名额</p>
-        )}
+        <CheckHealth task={task} />
+
       </Link>
       {/* R11-P1-4：Link 嵌套 Link 是非法 HTML（内层点击可能冒泡触发外层导航）——
           trialExhausted 提示移到外层 Link 之外，仍在卡片内 */}
@@ -189,7 +176,7 @@ function TaskCard({
             disabled={busy}
             className="w-full mb-2 py-2 rounded-card-sm bg-accent text-white text-[13px] font-medium active:scale-[0.98] transition disabled:opacity-40"
           >
-            {busy ? '续期中…' : `一键续期（${anonymous ? '+24 小时' : '+30 天'}）· 剩余 ${remaining} 天`}
+            {busy ? '续期中…' : `续期（${anonymous ? '+24 小时' : '+30 天'}）· 剩余 ${remaining} 天`}
           </button>
         )}
         <div className="flex gap-2">
@@ -199,7 +186,7 @@ function TaskCard({
               disabled={busy}
               className="flex-1 py-2 rounded-card-sm bg-accent text-white text-[13px] font-medium active:scale-[0.98] transition disabled:opacity-40"
             >
-              {busy ? '续期中…' : `一键续期（${anonymous ? '+24 小时' : '+30 天'}）`}
+              {busy ? '续期中…' : `续期（${anonymous ? '+24 小时' : '+30 天'}）`}
             </button>
           ) : (
             <button
@@ -228,23 +215,13 @@ function TaskCard({
           <p className="mt-1.5 text-[11px] text-center text-bad">{actionMsg}</p>
         )}
         {/* P2：暂停前就明示占用名额，不让用户事后才发现 */}
-        {!task.paused && !expired && (
-          <p className="mt-1.5 text-[10px] text-faint text-center">暂停后仍占用任务名额</p>
-        )}
+
       </div>
       {/* R8-U-8：应用内删除确认（底部弹出卡片），替代 window.confirm */}
       {confirmingDelete && (
-        <div
-          className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 px-4 pb-10"
-          onClick={() => !busy && setConfirmingDelete(false)}
-        >
-          <div
-            className="w-full max-w-lg bg-white rounded-card shadow-card-lg p-5 rise-in"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <p className="font-medium">删除监控任务</p>
+        <ConfirmDialog title="删除监控任务" busy={busy} onCancel={() => setConfirmingDelete(false)}>
             <p className="mt-2 text-sm text-sub leading-relaxed">
-              确定删除「{task.name}」？删除后不再监控，有货也不会再通知，该操作不可恢复。
+              删除“{task.name}”？停止监控且无法恢复。
             </p>
             <div className="mt-4 flex gap-2">
               <button
@@ -262,43 +239,41 @@ function TaskCard({
                 {busy ? '删除中…' : '确认删除'}
               </button>
             </div>
-          </div>
-        </div>
+        </ConfirmDialog>
       )}
     </Card>
   );
 }
 
 const TABS: { id: TaskStatusFilter; label: string }[] = [
-  { id: 'active', label: '监控中' },
+  { id: 'active', label: '任务' },
   { id: 'expired', label: '已过期' },
 ];
 
 export default function Home() {
-  const { me, tasks, refreshTasks, tasksError, sessionExpired } = useApp();
+  const { me, tasks, refreshTasks, tasksError } = useApp();
   const location = useLocation();
   const navigate = useNavigate();
   const [tab, setTab] = useState<TaskStatusFilter>('active');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [quota, setQuota] = useState<Quota | null>(null);
-  // R7：登录/注册时认领了匿名 device 任务的提示文案（后端 auth.py _claim_notice，
-  // 登录页经 location.state 带过来）。读进本地 state 后立即 replace 掉路由 state，
-  // 只展示一次：刷新/后退不再重复弹
-  const [claimNotice, setClaimNotice] = useState<string | null>(
-    () => (location.state as { notice?: string | null } | null)?.notice ?? null,
-  );
-  // R10-P2-3：TaskCard"已过期" tab 一键续期成功后也经 location.state.notice 带横幅——
-  // 监听 state 变化（不只首屏），读到即展示并 replace 清掉
-  useEffect(() => {
-    const n = (location.state as { notice?: string | null } | null)?.notice;
-    if (n) {
-      setClaimNotice(n);
-      navigate(location.pathname, { replace: true });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location.state]);
-
+  const [groupBusy, setGroupBusy] = useState<string | null>(null);
+  const [groupMessage, setGroupMessage] = useState<string | null>(null);
+  const groups = tasks.reduce<Map<string, Task[]>>((map, task) => {
+    const key = task.group ? `group:${task.group}` : `task:${task.id}`;
+    map.set(key, [...(map.get(key) ?? []), task]);
+    return map;
+  }, new Map());
+  const toggleGroup = async (group: string, paused: boolean) => {
+    setGroupBusy(group); setGroupMessage(null);
+    try {
+      const result = await api.groupAction(group, paused);
+      setGroupMessage(`已${paused ? '暂停' : '恢复'} ${result.length} 个任务`);
+      await reload();
+    } catch (e) { setGroupMessage(e instanceof Error ? e.message : '操作失败，请重试'); }
+    finally { setGroupBusy(null); }
+  };
   const reload = async (t: TaskStatusFilter = tab) => {
     setLoading(true);
     setError(null);
@@ -338,25 +313,14 @@ export default function Home() {
 
   return (
     <div>
-      <PageHeader title="监控" subtitle="Apple 直营店库存监控" />
+      <PageHeader title="监控" subtitle="Apple 直营店库存 · 北京时间" />
       <div className="px-4 pb-4">
-        {/* R7：匿名任务认领提示横幅（只展示一次，可手动关闭） */}
-        {claimNotice && (
-          <div className="mb-3 rounded-card-sm bg-white shadow-card px-4 py-3 flex items-start justify-between gap-3 rise-in">
-            <p className="text-[13px] text-ink">{claimNotice}</p>
-            <button
-              onClick={() => setClaimNotice(null)}
-              className="shrink-0 text-xs text-faint active:scale-95 transition"
-            >
-              关闭
-            </button>
-          </div>
-        )}
         <div className="flex gap-2 mb-4">
           {TABS.map((t) => (
             <button
               key={t.id}
               onClick={() => setTab(t.id)}
+              aria-pressed={tab === t.id}
               className={`px-4 py-2 rounded-pill text-sm font-medium whitespace-nowrap transition active:scale-95 ${
                 tab === t.id ? 'bg-island text-white' : 'bg-white text-sub shadow-card'
               }`}
@@ -364,24 +328,14 @@ export default function Home() {
               {t.label}
             </button>
           ))}
+          <button onClick={() => reload()} disabled={loading} className="ml-auto text-sm text-accent disabled:opacity-40">{loading ? '刷新中…' : '刷新'}</button>
         </div>
-        {/* R10-I2：页内接口 401（会话页内过期）→ 明确给"重新登录"引导，
-            不只显示"请求失败（401）"；App 顶栏横幅在 tasksError 非空时隐藏，
-            这里补上 */}
-        {sessionExpired && (
-          <div className="mb-3 rounded-card-sm bg-island text-white px-4 py-2.5 text-[13px] flex items-center justify-between gap-3 rise-in">
-            <span>登录已过期，请重新登录</span>
-            <Link to="/login" className="shrink-0 underline font-medium">
-              重新登录
-            </Link>
-          </div>
-        )}
         {loadError && <ErrorState message={loadError} onRetry={() => reload()} />}
         {!loadError && loading && tasks.length === 0 && <LoadingState rows={3} />}
         {!loadError && !loading && tasks.length === 0 && (
           <EmptyState
             title={tab === 'expired' ? '没有已过期的任务' : '还没有监控任务'}
-            hint={tab === 'expired' ? '任务过期后会出现在这里' : '添加你想抢的机型和门店，有货立刻通知你'}
+            hint={tab === 'expired' ? '任务过期后会出现在这里' : '选择机型和门店，收到到货提醒。'}
             action={
               tab === 'active' ? (
                 <Link
@@ -396,7 +350,19 @@ export default function Home() {
         )}
         {!loadError && tasks.length > 0 && (
           <div className="space-y-3">
-            {tasks.map((t) => (
+            {groupMessage && <p role="status" className="text-sm text-sub">{groupMessage}</p>}
+            {[...groups.entries()].map(([key, members]) => <section key={key} className="space-y-3">
+              {members[0].group && <Card className="p-3">
+                <h2 className="text-sm font-semibold break-words">{members[0].group}</h2>
+                <p className="mt-1 text-xs text-sub">当前显示 {members.length} 个任务</p>
+                {me !== null && <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2">
+                <button disabled={groupBusy !== null} onClick={() => void toggleGroup(members[0].group!, true)} className="text-sm text-accent disabled:opacity-40">暂停整组</button>
+                <button disabled={groupBusy !== null} onClick={() => void toggleGroup(members[0].group!, false)} className="text-sm text-accent disabled:opacity-40">恢复整组</button>
+                <Link to={`/group?name=${encodeURIComponent(members[0].group)}`} className="text-sm text-accent">分组设置</Link>
+                </div>}
+                <details className="mt-2 text-xs text-sub"><summary className="cursor-pointer">操作范围</summary><p className="mt-1">作用于组内全部任务。暂停仍占名额，已到期任务需单独续期。</p></details>
+              </Card>}
+              {members.map((t) => (
               <TaskCard
                 key={t.id}
                 task={t}
@@ -408,6 +374,7 @@ export default function Home() {
                 }
               />
             ))}
+            </section>)}
           </div>
         )}
       </div>

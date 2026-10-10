@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api, fmtCny, type ChannelHealth, type Payment, type Plan, type Quota } from '../lib/api';
 import { useApp } from '../components/App';
@@ -6,7 +6,7 @@ import { NotificationHistory } from '../components/NotifyChannels';
 import { Card, EmptyState, ErrorState, LoadingState, PageHeader } from '../components/ui';
 
 const TIER_LABEL: Record<string, string> = {
-  trial: '免费版',
+  trial: '体验版',
   free: '免费版',
   standard: '标准版',
   pro: 'Pro 版',
@@ -27,7 +27,7 @@ const CHANNEL_LABEL: Record<string, string> = {
 const PAID_TIER_LABEL: Record<string, string> = {
   standard: '标准版',
   pro: 'Pro 版',
-  trial: '免费版',
+  trial: '体验版',
   free: '免费版',
 };
 
@@ -53,12 +53,12 @@ const PAY_STATUS_CLS: Record<string, string> = {
 function planFeatures(p: Plan): string[] {
   const channels = p.channels.map((c) => CHANNEL_LABEL[c] ?? c).join('、');
   const feats = [
-    `推送渠道：${channels}`,
+    `通知方式：${channels}`,
     `监控任务 ${p.tasks_limit} 个`,
-    `每周期推送 ${p.push_limit} 次`,
-    `刷新间隔 ${p.refresh_interval_sec} 秒`,
+    `每 30 天 ${p.push_limit} 次提醒`,
+    `检查间隔 ${p.refresh_interval_sec} 秒`,
   ];
-  if (p.history) feats.push('完整历史数据');
+  if (p.history) feats.push('通知汇总');
   if (p.priority) feats.push('高峰期优先查询');
   return feats;
 }
@@ -119,13 +119,14 @@ function QuotaBar({ label, used, limit, dark }: { label: string; used: number; l
 }
 
 function ChannelHealthCard() {
+  const { me } = useApp();
   const [channels, setChannels] = useState<ChannelHealth[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     api
       .channelHealth()
-      .then((r) => setChannels(r.channels))
+      .then((r) => setChannels(r.channels.filter((c) => c.key === "email")))
       .catch((e) => {
         setChannels([]);
         setError(e instanceof Error ? e.message : '加载失败');
@@ -134,8 +135,9 @@ function ChannelHealthCard() {
 
   return (
     <section>
-      <h2 className="text-[13px] font-semibold text-sub mb-2">通道健康</h2>
+      <h2 className="text-[13px] font-semibold text-sub mb-2">邮件状态</h2>
       <Card className="p-4 rise-in">
+        {me && <p className="mb-3 text-sm text-sub break-all">默认邮箱：{me.email}</p>}
         {error && <p className="text-xs text-bad">{error}</p>}
         {channels === null && <LoadingState rows={2} />}
         {channels !== null && channels.length === 0 && !error && (
@@ -187,7 +189,7 @@ function ChannelHealthCard() {
           </div>
         )}
         <p className="mt-3 text-[11px] text-faint">
-          通道挂掉时请检查配置或换通道重试；通知历史里可查看每次发送的失败原因。
+          未收到邮件？到任务详情核对邮箱、发送测试，并检查垃圾邮件。
         </p>
       </Card>
     </section>
@@ -256,30 +258,36 @@ function ChangePasswordCard() {
           </button>
         ) : (
           <div className="space-y-3">
+            <label className="block text-sm">当前密码
             <input
               type="password"
               value={oldPw}
               onChange={(e) => setOldPw(e.target.value)}
-              placeholder="当前密码"
+              aria-label="当前密码" placeholder="当前密码"
               autoComplete="current-password"
-              className="w-full px-3 py-2.5 rounded-card-sm bg-bg text-sm outline-none placeholder:text-faint"
+              className="mt-1 w-full px-3 py-2.5 rounded-card-sm bg-bg text-sm outline-none placeholder:text-faint"
             />
+            </label>
+            <label className="block text-sm">新密码
             <input
               type="password"
               value={newPw}
               onChange={(e) => setNewPw(e.target.value)}
-              placeholder="新密码"
+              aria-label="新密码" placeholder="至少 8 位，含字母和数字"
               autoComplete="new-password"
-              className="w-full px-3 py-2.5 rounded-card-sm bg-bg text-sm outline-none placeholder:text-faint"
+              className="mt-1 w-full px-3 py-2.5 rounded-card-sm bg-bg text-sm outline-none placeholder:text-faint"
             />
+            </label>
+            <label className="block text-sm">确认新密码
             <input
               type="password"
               value={confirmPw}
               onChange={(e) => setConfirmPw(e.target.value)}
-              placeholder="再次输入新密码"
+              aria-label="确认新密码" placeholder="再次输入新密码"
               autoComplete="new-password"
-              className="w-full px-3 py-2.5 rounded-card-sm bg-bg text-sm outline-none placeholder:text-faint"
+              className="mt-1 w-full px-3 py-2.5 rounded-card-sm bg-bg text-sm outline-none placeholder:text-faint"
             />
+            </label>
             {msg && (
               <p className={`text-xs text-center ${ok ? 'text-ok' : 'text-bad'}`}>{msg}</p>
             )}
@@ -313,7 +321,39 @@ export default function Me() {
   const navigate = useNavigate();
   // R8-B0-4：退出登录走 App 层的 logout（先清 me/tasks state 再调后端），
   // 避免后退回 /me 看到旧用户数据
-  const { me, logout } = useApp();
+  const { me, logout, refreshMe } = useApp();
+  const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null);
+  const confirmRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!selectedPlan) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const dialog = confirmRef.current;
+    const trap = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab' || !dialog) return;
+      const items = dialog.querySelectorAll<HTMLElement>('button, a[href]');
+      const first = items[0], last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    };
+    dialog?.querySelector<HTMLElement>('button')?.focus();
+    document.addEventListener('keydown', trap);
+    return () => { document.removeEventListener('keydown', trap); previous?.focus(); };
+  }, [selectedPlan]);
+  const [checkingEntitlement, setCheckingEntitlement] = useState(false);
+  const [purchaseMessage, setPurchaseMessage] = useState<string | null>(null);
+  const copyId = async () => {
+    try { await navigator.clipboard.writeText(String(me?.id ?? '')); setPurchaseMessage('用户 ID 已复制，赞助时请填写到备注'); }
+    catch { setPurchaseMessage(`无法自动复制，请手动复制用户 ID：${me?.id ?? ''}`); }
+  };
+  const checkEntitlement = async () => {
+    setCheckingEntitlement(true); setPurchaseMessage(null);
+    try {
+      const [currentQuota, records] = await Promise.all([api.quota(), api.payments(), refreshMe()]);
+      setQuota(currentQuota); setPayments(records);
+      setPurchaseMessage(`当前会员：${TIER_LABEL[currentQuota.tier] ?? currentQuota.tier}。未生效请稍后重试。`);
+    } catch (e) { setPurchaseMessage(e instanceof Error ? e.message : '检查失败，请重试'); }
+    finally { setCheckingEntitlement(false); }
+  };
   const [plans, setPlans] = useState<Plan[] | null>(null);
   const [quota, setQuota] = useState<Quota | null>(null);
   const [payments, setPayments] = useState<Payment[] | null>(null);
@@ -378,7 +418,7 @@ export default function Me() {
           <Card className="p-8 text-center rise-in">
             <p className="text-ink font-medium">你正在匿名体验</p>
             <p className="mt-2 text-sm text-sub">
-              注册 / 登录后可管理会员档位、查看配额与付费记录，匿名创建的任务会自动迁移过来。
+              登录后，体验任务会转入账号。
             </p>
             <Link
               to="/login"
@@ -400,8 +440,8 @@ export default function Me() {
   const expiry = quota ? fmtBeijingDate(quota.tier_expires_at) : null;
   // 会员卡配色：Pro=深色，其余=浅色
   const isProCard = displayTier === 'pro';
-  const cardMuted = isProCard ? 'text-white/60' : 'text-sub';
-  const cardFaint = isProCard ? 'text-white/50' : 'text-faint';
+  const cardMuted = isProCard ? 'text-white/80' : 'text-sub';
+  const cardFaint = isProCard ? 'text-white/70' : 'text-faint';
   const cardStrong = isProCard ? 'text-white' : 'text-ink';
 
   return (
@@ -447,27 +487,26 @@ export default function Me() {
                 </p>
               )}
             </div>
-            <span className={`mono text-xs ${cardMuted}`}>用户 ID #{String(me.id)}</span>
+            <button onClick={copyId} aria-label="复制用户 ID" className={`mono text-xs underline ${cardMuted}`}>用户 ID #{String(me.id)} · 复制</button>
           </div>
           {quota && (
             <div className="mt-4 space-y-3">
-              <QuotaBar label="推送配额" used={quota.push_used} limit={quota.push_limit} dark={isProCard} />
+              <QuotaBar label="提醒额度" used={quota.push_used} limit={quota.push_limit} dark={isProCard} />
               <QuotaBar label="监控任务" used={quota.tasks_used} limit={quota.tasks_limit} dark={isProCard} />
               <div className="mt-1 space-y-1">
                 <p className={`text-xs ${cardMuted}`}>
-                  刷新间隔 <span className={`mono ${cardStrong}`}>{quota.refresh_interval_sec} 秒</span>
+                  检查间隔 <span className={`mono ${cardStrong}`}>{quota.refresh_interval_sec} 秒</span>
                 </p>
                 <p className={`text-xs ${cardMuted}`}>
                   {/* F-N2：quota_period_key 实际是下次重置日（购买日 +30 天锚点），不是"周期起始" */}
-                  配额下次重置{' '}
+                  额度重置{' '}
                   <span className={`mono ${cardStrong}`}>
                     {fmtBeijingDate(quota.quota_reset_at) ?? quota.period}
                   </span>
                 </p>
               </div>
               <p className={`text-[11px] ${cardFaint}`}>
-                配额按实际发送成功的通知条数扣减 · 付费档以购买日 +30
-                天为一周期滚动重置，免费版按自然月重置
+                成功发送 1 条通知占用 1 次额度，每 30 天重置。
               </p>
             </div>
           )}
@@ -485,7 +524,7 @@ export default function Me() {
             ))}
         </div>
 
-        {/* 通道健康 */}
+        {/* 邮件状态 */}
         <ChannelHealthCard />
 
         {/* 通知历史（标题由 NotificationHistory 组件渲染，这里不重复） */}
@@ -495,7 +534,7 @@ export default function Me() {
 
         {/* 会员档位 */}
         <section>
-          <h2 className="text-[13px] font-semibold text-sub mb-2">会员档位</h2>
+          <h2 className="text-[13px] font-semibold text-sub mb-2">会员方案</h2>
           {plansErr && <ErrorState message={plansErr} onRetry={load} />}
           {!plansErr && plans === null && <LoadingState rows={2} />}
           {!plansErr && plans !== null && plans.length === 0 && (
@@ -506,7 +545,7 @@ export default function Me() {
             <div className="grid grid-cols-2 gap-2.5">
               <Card className="p-4 rise-in ring-2 ring-accent">
                 <div className="flex items-center justify-between">
-                  <p className="font-semibold">免费</p>
+                  <p className="font-semibold">体验</p>
                   <span className="text-[11px] px-2 py-0.5 rounded-pill bg-accent text-white">
                     当前
                   </span>
@@ -532,7 +571,7 @@ export default function Me() {
                     ))}
                 </ul>
                 <p className="mt-2 text-[11px] text-faint">
-                  免费版由管理员开通，仅支持站内通知（在本站内查看）
+                  体验版仅显示站内提醒。
                 </p>
               </Card>
             </div>
@@ -555,11 +594,16 @@ export default function Me() {
                     ? 'tier-mesh tier-mesh-blue text-ink'
                     : 'tier-mesh tier-mesh-silver text-ink';
                 const isPaid = isProPlan || isStdPlan;
+                const PlanCard = isPaid ? 'a' : 'div';
                 return (
-                  <div
+                  <PlanCard
                     key={p.tier}
-                    onClick={isPaid ? () => window.open(afdianUrl, '_blank', 'noopener') : undefined}
-                    className={`p-4 rise-in relative overflow-hidden rounded-card shadow-card ${
+                    href={isPaid ? afdianUrl : undefined}
+                    onClick={isPaid ? (e: React.MouseEvent) => { e.preventDefault(); setSelectedPlan(p); } : undefined}
+                    target={isPaid ? '_blank' : undefined}
+                    rel={isPaid ? 'noopener noreferrer' : undefined}
+                    aria-label={isPaid ? `在爱发电开通${TIER_LABEL[p.tier] ?? p.name}` : undefined}
+                    className={`block p-4 rise-in relative overflow-hidden rounded-card shadow-card ${
                       current ? 'ring-2 ring-accent' : ''
                     } ${tierMeshCls} ${isPaid ? 'cursor-pointer active:scale-[0.98] transition' : ''}`}
                   >
@@ -584,7 +628,6 @@ export default function Me() {
                     <p className="mt-2 mono text-xl font-semibold">{planPeriodLabel(p)}</p>
                     <ul className="mt-2 space-y-1">
                       {planFeatures(p)
-                        .slice(0, 4)
                         .map((f) => (
                           <li key={f} className={`text-xs ${isProPlan ? 'text-white/70' : 'text-sub'}`}>
                             · {f}
@@ -596,17 +639,37 @@ export default function Me() {
                         点击前往开通 →
                       </p>
                     )}
-                  </div>
+                  </PlanCard>
                 );
               })}
             </div>
           )}
-          {/* 点击档位卡直接跳转爱发电对应档位；赞助时备注用户 ID 以便自动开通 */}
+          {/* 爱发电统一赞助页，需在那里选择对应档位并备注用户 ID。 */}
           <p className="mt-2 text-[11px] text-faint text-center">
-            点击档位卡前往爱发电赞助开通 · 赞助时在备注填写用户 ID #{me.id} 以便自动开通
+            付款时需备注用户 ID #{me.id}
           </p>
         </section>
 
+        <Card className="p-4 mb-5">
+          <p className="text-sm font-semibold">已付款？</p>
+          <p className="mt-1 text-xs text-sub">返回后刷新权益，开通可能需要几分钟。</p>
+          <button onClick={checkEntitlement} disabled={checkingEntitlement} className="mt-3 text-sm text-accent disabled:opacity-40">{checkingEntitlement ? '检查中…' : '检查开通结果'}</button>
+          {purchaseMessage && <p role="status" className="mt-2 text-sm text-sub">{purchaseMessage}</p>}
+        </Card>
+        {selectedPlan && <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-5" onKeyDown={(e) => { if (e.key === 'Escape') setSelectedPlan(null); }}>
+          <Card className="p-5 w-full max-w-sm">
+            <div ref={confirmRef} role="dialog" aria-modal="true" aria-labelledby="plan-confirm-title">
+              <h2 id="plan-confirm-title" className="text-lg font-semibold">核对开通信息</h2>
+              <p className="mt-3 text-sm">{selectedPlan.name} · {planPeriodLabel(selectedPlan)}</p>
+              <p className="mt-2 text-sm">请在爱发电选择该档位，并在备注填写用户 ID：{me.id}。</p>
+              <button onClick={copyId} className="mt-3 text-accent text-sm">复制用户 ID</button>
+              <div className="flex gap-4 mt-5">
+                <button onClick={() => setSelectedPlan(null)} className="text-sm text-sub">取消</button>
+                <a href={afdianUrl} target="_blank" rel="noopener noreferrer" onClick={() => setSelectedPlan(null)} className="text-sm text-accent">前往爱发电</a>
+              </div>
+            </div>
+          </Card>
+        </div>}
         {/* 付费记录 */}
         <section>
           <h2 className="text-[13px] font-semibold text-sub mb-2">付费记录</h2>
@@ -656,9 +719,7 @@ export default function Me() {
           )}
           {/* R8-U-9：退款指引——退款走爱发电平台操作，本站不收钱。
               R13-P2-6：对账 job 未落地前不承诺"退款成功后自动收回档位" */}
-          <p className="mt-2 text-[11px] text-faint leading-relaxed">
-            付款通过爱发电完成；如需退款，请在爱发电的赞助订单中申请。退款成功后请联系客服处理，管理员确认后收回档位。
-          </p>
+          <details className="mt-2 text-xs text-sub"><summary className="cursor-pointer">退款说明</summary><p className="mt-2">在爱发电订单中申请退款，成功后请联系客服处理会员权益。</p></details>
         </section>
 
         {/* R8-I-15 / R18-P1-1：账号安全——修改密码（后端 PATCH /api/auth/me，body: old_password + password） */}

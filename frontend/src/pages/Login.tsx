@@ -11,7 +11,9 @@ export default function Login() {
   // F-3：邮箱验证成功后跳到这里，带 {email, message:'验证成功，请登录'}；
   // R7：注册页链过来的 notice（匿名任务认领提示）也从 state 里接住，登录后优先用
   // 登录接口自己的 notice，没有再用这个兜底
-  const locState = (location.state as { email?: string; message?: string; notice?: string | null } | null);
+  const locState = (location.state as { email?: string; message?: string; notice?: string | null; returnTo?: string } | null);
+  const requestedReturn = locState?.returnTo ?? '/';
+  const returnTo = requestedReturn.startsWith('/') && !requestedReturn.startsWith('//') && !/^\/(login|verify)(?:[/?#]|$)/.test(requestedReturn) ? requestedReturn : '/';
   const flash = locState?.message ?? null;
   const initialEmail = locState?.email ?? '';
   const chainedNotice = locState?.notice ?? null;
@@ -26,6 +28,7 @@ export default function Login() {
   const [resending, setResending] = useState(false);
 
   const submit = async () => {
+    if (busy) return;
     setError(null);
     setUnverified(false);
     setTotpRequired(false);
@@ -62,17 +65,15 @@ export default function Login() {
         // R7：登录/注册认领了匿名 device 任务时后端返回 notice 文案，
         // 经 location.state 带到首页展示一次（Home 读完即清，不重复弹）。
         // 不用 window.location.href 全页刷新——refreshMe 刷新身份即可
-        await refreshMe().catch(() => {
-          /* /me 失败则首页按匿名态渲染，由 App 的任务错误态兜底 */
-        });
-        navigate('/', { state: { notice: res.notice ?? chainedNotice ?? null } });
+        await refreshMe();
+        navigate(returnTo, { state: { notice: res.notice ?? chainedNotice ?? null } });
       } else {
         const res = await api.register(email.trim(), password);
         // 注册成功 → 跳邮箱验证页（6 位验证码）；认领提示先带给验证页，
         // 验证成功后链到登录页，最终由登录成功统一带到首页；
         // R9-I15：email_sent 透传给验证页（SMTP 瞬断首发失败时前端明确提示重发）
         navigate('/verify', {
-          state: { email: email.trim(), notice: res.notice ?? null, emailSent: res.email_sent ?? true },
+          state: { email: email.trim(), returnTo, notice: res.notice ?? null, emailSent: res.email_sent ?? true },
           replace: true,
         });
       }
@@ -93,7 +94,7 @@ export default function Login() {
     setError(null);
     try {
       await api.resendCode(email.trim());
-      navigate('/verify', { state: { email: email.trim() } });
+      navigate('/verify', { state: { email: email.trim(), returnTo } });
     } catch (e) {
       // 后端 POST /auth/resend-code 已实现（契约回归通过），404 分支为死代码已删除
       setError(e instanceof Error ? e.message : '重发失败');
@@ -137,6 +138,7 @@ export default function Login() {
           <div className="space-y-3">
             <input
               type="email"
+              aria-label="邮箱"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="邮箱"
@@ -147,6 +149,7 @@ export default function Login() {
             />
             <input
               type="password"
+              aria-label="密码"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="密码"
@@ -161,7 +164,7 @@ export default function Login() {
               </p>
             )}
           </div>
-          {error && <p className="mt-3 text-sm text-bad text-center">{error}</p>}
+          {error && <p role="alert" className="mt-3 text-sm text-bad text-center">{error}</p>}
           {/* R8-U-2：totp_required 时给"前往后台登录"按钮（后台是独立应用，/admin 不在前端路由里，
               用整页跳转而不是 react-router Link，避免被 catch-all 劫持到首页） */}
           {totpRequired && (
@@ -186,7 +189,7 @@ export default function Login() {
                   {resending ? '发送中…' : '重新发送验证码'}
                 </button>
                 <button
-                  onClick={() => navigate('/verify', { state: { email: email.trim() } })}
+                  onClick={() => navigate('/verify', { state: { email: email.trim(), returnTo } })}
                   className="flex-1 py-2.5 rounded-card-sm bg-white text-sm font-medium text-accent shadow-card active:scale-[0.98] transition"
                 >
                   去验证
@@ -200,8 +203,9 @@ export default function Login() {
             </PrimaryButton>
           </div>
         </Card>
+        {mode === 'login' && <button onClick={() => navigate('/reset-password', { state: { email: email.trim() } })} className="mt-4 w-full text-sm text-accent">忘记密码？</button>}
         <p className="mt-4 text-center text-xs text-faint">
-          注册即开通免费版（匿名体验的任务会自动迁移过来）
+          注册可使用免费版，体验任务会转入账号。
         </p>
       </div>
     </div>

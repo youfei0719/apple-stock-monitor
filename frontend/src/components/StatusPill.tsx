@@ -54,9 +54,9 @@ export default function StatusPill({
           </>
         ) : (
           <>
-            <span className={`w-1.5 h-1.5 rounded-full ${allPaused ? 'bg-faint' : 'bg-ok'}`} />
+            <span className={`w-1.5 h-1.5 rounded-full ${allPaused ? 'bg-faint' : 'bg-accent'}`} />
             <span>
-              {allPaused ? '已暂停' : '监控中'} · <span className="mono font-medium">{taskCount}</span> 个任务
+              {allPaused ? '已暂停' : '已开启'} · <span className="mono font-medium">{taskCount}</span> 个任务
             </span>
           </>
         )}

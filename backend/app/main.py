@@ -30,7 +30,7 @@ from app.api.routers import (
 from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.logging import configure_logging, get_logger
-from app.core.ratelimit import check_rate_limit
+from app.core.ratelimit import check_rate_limit, rate_limit_retry_after
 from app.core.security import hash_password
 from app.core.timeutil import utcnow
 from app.models.models import ApiHit, User
@@ -175,7 +175,8 @@ async def rate_limit_and_track(request: Request, call_next):
         ip = _client_ip(request)
         if not check_rate_limit(ip):
             return JSONResponse(
-                status_code=429, content={"detail": "请求过于频繁", "code": "rate_limited"}
+                status_code=429, content={"detail": "请求过于频繁", "code": "rate_limited"},
+                headers={"Retry-After": str(rate_limit_retry_after(ip))}
             )
         # 轻量访问统计（后台流量看板用）；失败不影响主流程。
         # R6-P2-15：内存批量刷盘——每请求一次 INSERT+commit 写放大太大；

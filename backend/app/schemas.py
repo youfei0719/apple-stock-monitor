@@ -128,7 +128,7 @@ class ChannelsIn(BaseModel):
 
 class TaskCreateIn(BaseModel):
     name: str = Field(min_length=1, max_length=255)
-    group: str = ""
+    group: str = Field(default="", max_length=128)
     category: str = "iphone"
     part_number: str = Field(min_length=3, max_length=64)
     product_name: str = ""
@@ -150,13 +150,17 @@ class TaskBatchIn(BaseModel):
     store_numbers: list[str] = Field(min_length=1, max_length=30)
     name_template: str = "{part_name} × {store_name}"
     category: str = "iphone"
+    group: str = Field(default="", max_length=128)
     mode: str = "instant"
+    repeat_interval_sec: int | None = Field(default=None, ge=60)
     channels: ChannelsIn = Field(default_factory=ChannelsIn)
 
 
 class TaskPatchIn(BaseModel):
-    name: str | None = None
-    group: str | None = None
+    config_revision: str | None = Field(default=None, min_length=64, max_length=64)
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    stores: list[StoreIn] | None = Field(default=None, min_length=1, max_length=20)
+    group: str | None = Field(default=None, max_length=128)
     paused: bool | None = None
     expires_at: datetime | None = None
     channels: ChannelsIn | None = None
@@ -165,7 +169,34 @@ class TaskPatchIn(BaseModel):
     auto_retire: bool | None = None
 
 
+class TaskGroupActionIn(BaseModel):
+    group: str = Field(min_length=1, max_length=128)
+    paused: bool
+
+
+class TaskConfigSnapshotIn(BaseModel):
+    id: int = Field(ge=1)
+    config_revision: str = Field(min_length=64, max_length=64)
+
+
+class TaskGroupSettingsPatchIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    group: str | None = Field(default=None, min_length=1, max_length=128)
+    mode: Literal["instant", "confirmed"] | None = None
+    repeat_interval_sec: int | None = Field(default=None, ge=60)
+    # 只改邮件地址，保留每个任务原有的其他渠道配置。
+    email: EmailStr | None = None
+
+
+class TaskGroupSettingsIn(BaseModel):
+    group: str = Field(min_length=1, max_length=128)
+    expected: list[TaskConfigSnapshotIn] = Field(min_length=1, max_length=200)
+    patch: TaskGroupSettingsPatchIn
+
+
 class TaskOut(BaseModel):
+    config_revision: str = ""
+    creation_status: Literal["created", "existing"] | None = None
     id: int
     name: str
     group: str
@@ -182,9 +213,13 @@ class TaskOut(BaseModel):
     expires_at: datetime | None
     auto_retire: bool = True  # DB 列缺失时按 True 处理（见 tasks.py）
     created_at: datetime
+    last_polled_at: datetime | None = None
+    last_poll_ok: bool | None = None
+    refresh_interval_sec: int = 300
+    paused_reason: str | None = None
     latest: dict = Field(default_factory=dict)  # 最新状态摘要
 
-    @field_serializer("expires_at", "created_at")
+    @field_serializer("expires_at", "created_at", "last_polled_at")
     def _ser_naive_dt_z(self, v: datetime | None) -> str | None:
         """R6-P2-13：naive UTC 时间统一带 Z 后缀，与手写端口
         .isoformat()+"Z" 惯例一致。"""

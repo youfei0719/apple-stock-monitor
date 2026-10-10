@@ -74,7 +74,39 @@ export class ApiError extends Error {
   }
 }
 
+// 合并同一时刻的 GET；只缓存不含账号数据的目录与公开档位。
+const pendingGets = new Map<string, Promise<unknown>>();
+const publicCache = new Map<string, { value: unknown; until: number }>();
+export const SESSION_EXPIRED_EVENT = 'stockmon:session-expired';
+let identityEpoch = 0;
+function resetAccountRequests() {
+  identityEpoch++;
+  pendingGets.clear();
+}
+let rateLimitUntil = 0;
 async function req<T>(path: string, init: RequestInit = {}, absolute = false): Promise<T> {
+  const key = `${absolute ? 'root' : API_BASE}:${path}`;
+  if ((init.method ?? 'GET') !== 'GET') return performRequest<T>(path, init, absolute);
+  const cacheable = path.startsWith('/catalog/products?') || path === '/catalog/stores?refresh=0' || path === '/plans';
+  const cached = publicCache.get(key);
+  if (cacheable && cached && cached.until > Date.now()) return cached.value as T;
+  const pending = pendingGets.get(key);
+  if (pending) return pending as Promise<T>;
+  const epoch = identityEpoch;
+  const request = performRequest<T>(path, init, absolute).then((value) => {
+    if (!cacheable && epoch !== identityEpoch) throw new ApiError(409, '账号状态已变化，请刷新重试', 'identity_changed');
+    if (cacheable) publicCache.set(key, { value, until: Date.now() + 120000 });
+    return value;
+  }).finally(() => { if (pendingGets.get(key) === request) pendingGets.delete(key); });
+  pendingGets.set(key, request);
+  return request;
+}
+
+async function performRequest<T>(path: string, init: RequestInit = {}, absolute = false): Promise<T> {
+  const requestEpoch = identityEpoch;
+  if (rateLimitUntil > Date.now()) {
+    throw new ApiError(429, `请求过于频繁（请在 ${Math.ceil((rateLimitUntil - Date.now()) / 1000)} 秒后重试）`, 'rate_limited');
+  }
   let res: Response;
   try {
     // absolute=true 时跳过 API_BASE（如 /healthz 挂在站点根，不在 /api 下）
@@ -90,8 +122,8 @@ async function req<T>(path: string, init: RequestInit = {}, absolute = false): P
       },
       body: init.body,
     });
-  } catch (e) {
-    throw new ApiError(0, e instanceof Error ? `网络异常：${e.message}` : '网络异常');
+  } catch {
+    throw new ApiError(0, '连接失败，请检查网络后重试');
   }
   if (res.status === 204) return undefined as T;
   const text = await res.text();
@@ -102,10 +134,30 @@ async function req<T>(path: string, init: RequestInit = {}, absolute = false): P
     data = null;
   }
   if (!res.ok) {
+    if ((res.status === 401 || res.status === 403) && requestEpoch !== identityEpoch) {
+      throw new ApiError(409, '账号状态已变化，请刷新重试', 'identity_changed');
+    }
     const d = (data ?? {}) as { detail?: unknown; code?: string };
     // P0：后端 detail 可能是非字符串（FastAPI 422 校验错误的 detail 是数组，
     // 直接 new Error(obj) 会渲染成 "[object Object]"）。防御式转成可读文案。
-    throw new ApiError(res.status, toErrorMessage(d.detail, res.status), d.code);
+    let detail = toErrorMessage(d.detail, res.status);
+    if (res.status === 401 && d.code === 'unauthorized') {
+      resetAccountRequests();
+      window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+    }
+    if (res.status === 403 && d.code === 'forbidden' && !path.startsWith('/auth/')) {
+      // Cookie 过期时任务会退到匿名权限而返回 403；确认身份再区分真实权限不足。
+      try { await req('/me'); } catch (error) {
+        if (error instanceof ApiError && error.status === 401) detail = '登录已过期，请重新登录后继续';
+      }
+    }
+    if (res.status === 429 && d.code === 'rate_limited' && res.headers.has('Retry-After')) {
+      const seconds = Number(res.headers.get('Retry-After'));
+      const wait = Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds) : 60;
+      rateLimitUntil = Date.now() + wait * 1000;
+      detail += `（请在 ${wait} 秒后重试）`;
+    }
+    throw new ApiError(res.status, detail, d.code);
   }
   return data as T;
 }
@@ -114,32 +166,23 @@ async function req<T>(path: string, init: RequestInit = {}, absolute = false): P
 function toErrorMessage(detail: unknown, status: number): string {
   if (typeof detail === 'string' && detail.trim()) return detail;
   if (Array.isArray(detail)) {
-    const msgs = detail
-      .map((e) => {
-        if (typeof e === 'string') return e;
-        if (e && typeof e === 'object') {
-          const o = e as { msg?: unknown; message?: unknown; loc?: unknown };
-          const loc = Array.isArray(o.loc) ? o.loc.slice(1).join('.') : '';
-          const msg =
-            typeof o.msg === 'string'
-              ? o.msg
-              : typeof o.message === 'string'
-                ? o.message
-                : '';
-          if (loc && msg) return `${loc}: ${msg}`;
-          if (msg) return msg;
-          try {
-            return JSON.stringify(e);
-          } catch {
-            return '';
-          }
-        }
-        return '';
-      })
-      .filter(Boolean);
-    if (msgs.length > 0) return msgs.join('；');
+    const fields: Record<string, string> = {
+      email: '邮箱', password: '密码', old_password: '当前密码', code: '验证码',
+      part_number: '商品编号', part_numbers: '商品编号', stores: '门店', store_numbers: '门店',
+      repeat_interval_sec: '提醒间隔', name: '任务名', name_template: '任务名', group: '分组名称',
+    };
+    const messages = detail.flatMap((item) => {
+      if (!item || typeof item !== 'object') return [];
+      const loc = (item as { loc?: unknown }).loc;
+      const field = Array.isArray(loc) ? loc.find((value) => typeof value === 'string' && fields[value]) : undefined;
+      if (field === 'repeat_interval_sec') return ['提醒间隔需为整数，至少 60 秒'];
+      if (field === 'email') return ['请填写有效的邮箱地址'];
+      return field ? [`请检查${fields[field]}`] : [];
+    });
+    return [...new Set(messages)].join('；') || '填写的信息不符合要求，请检查后重试';
   }
-  return `请求失败（${status}）`;
+  if (status >= 500) return '服务暂时不可用，请稍后重试';
+  return '操作未完成，请重试';
 }
 
 /* ---------------- 类型 ---------------- */
@@ -207,6 +250,8 @@ export interface TaskLatest {
 }
 
 export interface Task {
+  config_revision?: string;
+  creation_status?: 'created' | 'existing' | null;
   id: number;
   name: string;
   group?: string;
@@ -222,8 +267,18 @@ export interface Task {
   paused: boolean;
   expires_at: string | null;
   created_at: string;
+  last_polled_at?: string | null;
+  last_poll_ok?: boolean | null;
+  refresh_interval_sec?: number;
+  paused_reason?: string | null;
   /** 每任务最新状态摘要（后端聚合，snake_case） */
   latest?: TaskLatest;
+}
+
+export function isResultStale(task: Task, at?: string | null, now = Date.now()): boolean {
+  if (!at) return false;
+  const age = now - Date.parse(at);
+  return !Number.isFinite(age) || age > (task.refresh_interval_sec ?? 300) * 2000;
 }
 
 /** 任务是否已过期（expires_at 在过去）——expired 展示态的判定依据。
@@ -248,39 +303,23 @@ export function summarizeTask(task: Task): {
   updatedAt?: string;
   partialUnknown: boolean;
 } {
-  const latest = task.latest;
-  const rows: TaskLatestRow[] = [];
-  const stores = latest?.stores ?? {};
-  for (const parts of Object.values(stores)) {
-    for (const row of Object.values(parts ?? {})) rows.push(row);
-  }
-  let updatedAt: string | undefined;
-  for (const r of rows) {
-    if (r.updated_at && (!updatedAt || r.updated_at > updatedAt)) updatedAt = r.updated_at;
-  }
-  const states = rows.map((r) => r.state);
-  const hasUnknown = states.includes('unknown');
+  // 只统计当前配置的门店与商品，缺失结果必须保持未知。
+  const rows = task.stores.map((store) => task.latest?.stores?.[store.number]?.[task.part_number]);
+  const states = rows.map((row) => row?.state ?? 'unknown');
+  const timestamps = rows.flatMap((row) => row?.updated_at ? [row.updated_at] : []).sort();
   let state: StockState = 'unknown';
-  // 与后端 _display_state 一致：paused 优先于 expired
   if (task.paused) state = 'paused';
   else if (isTaskExpired(task)) state = 'expired';
   else if (states.includes('available')) state = 'available';
   else if (states.includes('verifying')) state = 'verifying';
   else if (states.includes('cooling')) state = 'cooling';
-  else if (states.length > 0 && !states.every((s) => s === 'unknown')) state = 'unavailable';
-  // 混合 unknown：有 unknown 但不全是 unknown，且展示态不是 available/verifying/expired
-  const partialUnknown =
-    state !== 'expired' &&
-    state !== 'available' &&
-    state !== 'verifying' &&
-    hasUnknown &&
-    states.some((s) => s !== 'unknown');
+  else if (states.length > 0 && states.every((value) => value === 'unavailable')) state = 'unavailable';
   return {
     state,
-    availableCount: latest?.available_count ?? 0,
-    total: latest?.total ?? states.length,
-    updatedAt,
-    partialUnknown,
+    availableCount: states.filter((value) => value === 'available').length,
+    total: task.stores.length,
+    updatedAt: timestamps[0],
+    partialUnknown: !task.paused && !isTaskExpired(task) && states.includes('unknown') && states.some((value) => value !== 'unknown'),
   };
 }
 
@@ -444,7 +483,7 @@ export const api = {
     req<{ ok: boolean; totp_required: boolean; notice?: string | null }>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
-    }),
+    }).then((result) => { resetAccountRequests(); return result; }),
   verifyEmail: (email: string, code: string) =>
     req<{ ok: boolean }>('/auth/verify-email', {
       method: 'POST',
@@ -456,7 +495,9 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ email }),
     }),
-  logout: () => req<void>('/auth/logout', { method: 'POST' }),
+  requestPasswordReset: (email: string) => req<{ ok: boolean; message: string }>('/auth/password-reset/request', { method: 'POST', body: JSON.stringify({ email }) }),
+  confirmPasswordReset: (email: string, code: string, password: string) => req<{ ok: boolean }>('/auth/password-reset/confirm', { method: 'POST', body: JSON.stringify({ email, code, password }) }),
+  logout: () => { resetAccountRequests(); return req<void>('/auth/logout', { method: 'POST' }); },
   /** R9-I10 / R18-P1-1：修改密码——PATCH /auth/me {old_password, password}，
    * 走统一 req()；注意不是 PATCH /api/me（后端 me_router 只有 GET 别名，
    * PATCH 调 /api/me 会 405）。后端删除该用户其他会话（当前会话保留），
@@ -478,13 +519,15 @@ export const api = {
   // （如"已自动恢复 N 个任务"），前端在成功提示里一并展示
   renewTask: (id: string | number) =>
     req<Task & { notices?: string[] }>(`/tasks/${id}/renew`, { method: 'POST' }),
-  // POST /tasks/batch 直接支持 category/mode/channels；group/repeat_interval_sec 仍走 PATCH 补齐
+  // 批量创建一次保存全部配置，避免创建成功后再 PATCH 丢失提醒设置。
   batchTasks: (payload: {
     part_numbers: string[];
     store_numbers: string[];
     name_template: string;
     category?: string;
+    group?: string;
     mode?: 'instant' | 'confirmed';
+    repeat_interval_sec?: number | null;
     channels?: TaskChannels;
   }) =>
     // R23-P3-1：batch_create 同样支持幂等键（R6-P2-10），带上 Idempotency-Key，
@@ -517,6 +560,11 @@ export const api = {
     headers: { 'Idempotency-Key': newUuid() },
     body: JSON.stringify(payload),
   }),
+  groupAction: (group: string, paused: boolean) => req<Task[]>('/tasks/group-action', { method: 'POST', body: JSON.stringify({ group, paused }) }),
+  groupSettings: (group: string) => req<Task[]>(`/tasks/group-settings?group=${encodeURIComponent(group)}`),
+  updateGroupSettings: (group: string, expected: { id: number; config_revision: string }[], patch: {
+    group?: string; mode?: 'instant' | 'confirmed'; repeat_interval_sec?: number | null; email?: string | null;
+  }) => req<Task[]>('/tasks/group-settings', { method: 'PATCH', body: JSON.stringify({ group, expected, patch }) }),
   updateTask: (id: string | number, payload: Partial<Task>) =>
     req<Task>(`/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   deleteTask: (id: string | number) => req<void>(`/tasks/${id}`, { method: 'DELETE' }),

@@ -118,6 +118,12 @@ body {
   padding-bottom: env(safe-area-inset-bottom);
 }
 
+/* 输入框和卡片入口也需要可见的键盘焦点，覆盖局部 outline-none。 */
+:is(button, a, input, textarea, select):focus-visible {
+  outline: 2px solid #007aff;
+  outline-offset: 3px;
+}
+
 /* ------------------------------------------------------------------
  * 会员档位 mesh 流动渐变（参考 glint-vault Paper Shaders 的 mesh gradient）
  * 多层径向渐变叠加，丝滑流动；三档速度统一 10s，只用颜色区分等级
@@ -172,3 +178,8 @@ body {
     radial-gradient(ellipse 70% 80% at 80% 30%, #5a4a1f 0%, transparent 70%),
     radial-gradient(ellipse 90% 70% at 50% 80%, #2a2118 0%, #3a2f16 100%);
 }
+
+/* 语义色作为小字号文本时使用更深的色值。 */
+.text-ok { color: #16803a; }
+.text-bad { color: #c62828; }
+.text-warn { color: #9a5000; }

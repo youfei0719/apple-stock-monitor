@@ -4,15 +4,17 @@
 """
 
 import hashlib
+import json
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Header, Query, Request
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import _client_ip, get_current_user, get_optional_user
 from app.api.errors import APIError
+from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.logging import get_logger
 from app.core.ratelimit import check_rate_limit
@@ -20,7 +22,14 @@ from app.core.tiers import effective_tier, effective_tier_of, tier_of
 from app.core.timeutil import as_naive_utc as _as_naive_utc
 from app.core.timeutil import utcnow
 from app.models.models import IdempotencyRecord, MonitorTask, StockState, User
-from app.schemas import TaskBatchIn, TaskCreateIn, TaskOut, TaskPatchIn
+from app.schemas import (
+    TaskBatchIn,
+    TaskCreateIn,
+    TaskGroupActionIn,
+    TaskGroupSettingsIn,
+    TaskOut,
+    TaskPatchIn,
+)
 from app.services.lifecycle import null_notification_task_ids, purge_task_idempotency_records
 
 
@@ -125,7 +134,16 @@ def _display_state(task: MonitorTask, row: StockState | None) -> str:
     return row.state if row.state in DISPLAY_STATE_ORDER else "unknown"
 
 
-def _task_out(task: MonitorTask, db: Session) -> TaskOut:
+def _config_revision(task: MonitorTask) -> str:
+    # 检查时间由引擎不断推进，不能充当用户设置版本。
+    value = {field: getattr(task, field) for field in (
+        "name", "group", "part_number", "stores", "mode", "repeat_interval_sec", "channels",
+    )}
+    encoded = json.dumps(value, sort_keys=True, ensure_ascii=False).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _task_out(task: MonitorTask, db: Session, creation_status=None) -> TaskOut:
     # R4-P1-B5：list_tasks 用 selectinload 预加载 states，这里直接读关系，
     # 其他入口（create/get）走懒加载，不再每任务一次 StockState 查询
     # P1：只统计当前配置的门店——任务改过门店后，旧门店的历史行不计入，
@@ -143,6 +161,8 @@ def _task_out(task: MonitorTask, db: Session) -> TaskOut:
         }
     available_n = sum(1 for r in rows if _display_state(task, r) == "available")
     return TaskOut(
+        config_revision=_config_revision(task),
+        creation_status=creation_status,
         id=task.id,
         name=task.name,
         group=task.group,
@@ -159,6 +179,10 @@ def _task_out(task: MonitorTask, db: Session) -> TaskOut:
         expires_at=task.expires_at,
         auto_retire=getattr(task, "auto_retire", True),
         created_at=task.created_at,
+        last_polled_at=task.last_polled_at,
+        last_poll_ok=task.last_poll_ok,
+        refresh_interval_sec=get_settings().tier_intervals.get(effective_tier(task.user), 300),
+        paused_reason=task.paused_reason,
         latest={"stores": by_store, "available_count": available_n, "total": len(rows)},
     )
 
@@ -420,7 +444,7 @@ def _idempotent_replay(
     tasks = (
         db.execute(
             select(MonitorTask)
-            .options(selectinload(MonitorTask.states))
+            .options(selectinload(MonitorTask.states), selectinload(MonitorTask.user))
             .where(MonitorTask.id.in_(rec.task_ids))
         )
         .scalars()
@@ -441,7 +465,7 @@ def _idempotent_replay(
             return None
         if not user and not (task.user_id is None and task.device_id == device_id):
             return None
-        out.append(_task_out(task, db))
+        out.append(_task_out(task, db, "existing"))
     return out
 
 
@@ -486,7 +510,7 @@ def list_tasks(
     # R4-P1-B5：selectinload 预加载 states，_task_out 不再每任务查一次 StockState
     q = (
         select(MonitorTask)
-        .options(selectinload(MonitorTask.states))
+        .options(selectinload(MonitorTask.states), selectinload(MonitorTask.user))
         .order_by(MonitorTask.created_at.desc())
     )
     if user:
@@ -566,7 +590,7 @@ def create_task(
         db.add(content_rec)
         db.commit()
         log.info("task_create_content_replay", task_id=conflict.id)
-        return _task_out(conflict, db)
+        return _task_out(conflict, db, "existing")
     idem_rec = None
     if idem_key:
         idem_rec, owned = _claim_idempotency_key(db, scope, idem_key)
@@ -579,7 +603,7 @@ def create_task(
     # Pro 默认 5 分钟重复提醒（持续有货不断推，对齐实时监控体验）；
     # 非 Pro 保持 None（仅状态变化时通知）
     _repeat = data.repeat_interval_sec
-    if _repeat is None and user:
+    if _repeat is None and "repeat_interval_sec" not in data.model_fields_set and user:
         _tier = effective_tier_of(user)
         if _tier.get("name") == "pro":
             _repeat = 300
@@ -614,7 +638,7 @@ def create_task(
         db.add(idem_rec)
     db.commit()
     log.info("task_created", task_id=task.id, user_id=user.id if user else None)
-    return _task_out(task, db)
+    return _task_out(task, db, "created")
 
 
 @router.post("/batch", response_model=list[TaskOut], status_code=201)
@@ -633,9 +657,7 @@ def batch_create(
     ):
         raise APIError(429, "批量创建过于频繁，请稍后再试", "rate_limited")
     # R6-P2-10：幂等键——重复 key 直接返回首次批量创建的任务
-    idem_key = (request.headers.get(IDEMPOTENCY_KEY_HEADER) or "").strip()[
-        :IDEMPOTENCY_KEY_MAXLEN
-    ]
+    idem_key = (request.headers.get(IDEMPOTENCY_KEY_HEADER) or "").strip()[:IDEMPOTENCY_KEY_MAXLEN]
     scope = _idempotency_scope(user, None)
     if idem_key:
         replayed = _idempotent_replay(db, user, None, scope, idem_key)
@@ -645,6 +667,24 @@ def batch_create(
     # category 非法会直接入库）
     _validate_task_in(data)
     tier = effective_tier_of(user)
+    # 使用用户实际看到的当前目录保存购买目标，不能只留下内部编号。
+    from app.api.routers.catalog import (
+        PRODUCT_CATALOG_KEY,
+        SEED_PRODUCTS,
+        SEED_STORES,
+        STORE_CATALOG_KEY,
+    )
+    from app.services.engine import get_config
+
+    product_catalog = {
+        str(p.get("part_number") or "").strip().upper(): p
+        for p in (get_config(db, PRODUCT_CATALOG_KEY, {}).get("products") or SEED_PRODUCTS)
+        if p.get("part_number") and p.get("category") == data.category
+    }
+    store_catalog = {
+        str(s.get("number") or "").strip().upper(): s
+        for s in (get_config(db, STORE_CATALOG_KEY, {}).get("stores") or SEED_STORES)
+    }
     existing = db.execute(
         select(func.count()).select_from(MonitorTask).where(MonitorTask.user_id == user.id)
     ).scalar()
@@ -672,9 +712,7 @@ def batch_create(
     # 断裂-8：批量内去重 + 与已有任务查重（409）；N7：门店号归一化后再查重
     # R10-P1-2：用户已有任务单次查询后内存比对（此前每 combo 一次 _find_conflict，
     # 每次全表拉回逐条比对，最多几百次查询）
-    owned = (
-        db.execute(select(MonitorTask).where(MonitorTask.user_id == user.id)).scalars().all()
-    )
+    owned = db.execute(select(MonitorTask).where(MonitorTask.user_id == user.id)).scalars().all()
     seen: set[tuple[str, frozenset]] = set()
     for pn, sn in combos_norm:
         key = (pn, frozenset([sn]))
@@ -703,16 +741,32 @@ def batch_create(
                 return replayed
             raise APIError(409, "相同的幂等键正在处理中，请稍后重试", "idempotency_in_progress")
     created = []
+    repeat_interval = data.repeat_interval_sec
+    if (
+        repeat_interval is None
+        and "repeat_interval_sec" not in data.model_fields_set
+        and effective_tier(user) == "pro"
+    ):
+        repeat_interval = 300
     for pn, sn in combos_norm:
         name = _render_task_name(data.name_template, pn, sn)
+        product = product_catalog.get(pn, {})
+        store = store_catalog.get(sn, {})
         task = MonitorTask(
             user_id=user.id,
             name=name,
+            group=data.group,
             category=data.category,
             part_number=pn,
+            product_name=product.get("name") or pn,
+            color=product.get("color") or "",
+            capacity=product.get("capacity") or "",
             store_numbers=[sn],
-            stores=[{"number": sn, "name": "", "city": ""}],
+            stores=[
+                {"number": sn, "name": store.get("name") or sn, "city": store.get("city") or ""}
+            ],
             mode=data.mode,
+            repeat_interval_sec=repeat_interval,
             channels=channels,
         )
         db.add(task)
@@ -722,12 +776,18 @@ def batch_create(
     # db.refresh（N 次查询）+ _task_out 逐任务懒加载 states（又是 N 次）。
     db.flush()
     created_ids = [t.id for t in created]
+    # 创建配置和幂等结果同一次提交，避免任务已提交但重试记录尚未写回。
+    batch_content_rec.task_ids = created_ids
+    db.add(batch_content_rec)
+    if idem_rec is not None:
+        idem_rec.task_ids = created_ids
+        db.add(idem_rec)
     db.commit()
     if created_ids:
         created = (
             db.execute(
                 select(MonitorTask)
-                .options(selectinload(MonitorTask.states))
+                .options(selectinload(MonitorTask.states), selectinload(MonitorTask.user))
                 .where(MonitorTask.id.in_(created_ids))
                 # id 按插入顺序递增，排序后即创建时间顺序（与此前 created 顺序一致）
                 .order_by(MonitorTask.id)
@@ -735,16 +795,8 @@ def batch_create(
             .scalars()
             .all()
         )
-    # R24-P2-1：内容键回写 task_ids（后续同内容批量请求直接 replay）；
-    # 用户幂等键回写保持不变
-    batch_content_rec.task_ids = [t.id for t in created]
-    db.add(batch_content_rec)
-    if idem_rec is not None:
-        idem_rec.task_ids = [t.id for t in created]
-        db.add(idem_rec)
-    db.commit()
     log.info("task_batch_created", user_id=user.id, count=len(created))
-    return [_task_out(t, db) for t in created]
+    return [_task_out(t, db, "created") for t in created]
 
 
 def _get_owned(task_id: int, user: User | None, device_id: str | None, db: Session) -> MonitorTask:
@@ -758,6 +810,89 @@ def _get_owned(task_id: int, user: User | None, device_id: str | None, db: Sessi
     raise APIError(403, "无权操作该任务", "forbidden")
 
 
+@router.post("/group-action", response_model=list[TaskOut])
+def group_action(
+    data: TaskGroupActionIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    tasks = db.scalars(select(MonitorTask).where(
+        MonitorTask.user_id == user.id, MonitorTask.group == data.group,
+    )).all()
+    if not tasks:
+        raise APIError(404, "该购买目标没有任务", "group_not_found")
+    for task in tasks:
+        task.paused = data.paused
+        task.paused_reason = "manual" if data.paused else None
+    db.commit()
+    log.info("task_group_paused_changed", user_id=user.id, count=len(tasks), paused=data.paused)
+    return [_task_out(task, db) for task in tasks]
+
+
+@router.get("/group-settings", response_model=list[TaskOut])
+def get_group_settings(
+    group: str = Query(min_length=1, max_length=128),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    tasks = db.scalars(select(MonitorTask).where(
+        MonitorTask.user_id == user.id, MonitorTask.group == group,
+    ).order_by(MonitorTask.id).options(selectinload(MonitorTask.states))).all()
+    if not tasks:
+        raise APIError(404, "该购买目标没有任务", "group_not_found")
+    return [_task_out(task, db) for task in tasks]
+
+
+@router.patch("/group-settings", response_model=list[TaskOut])
+def patch_group_settings(
+    data: TaskGroupSettingsIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    predicate = (MonitorTask.user_id == user.id, MonitorTask.group == data.group)
+    # 写锁后重新读取设置；与单任务编辑串行，校验后一次提交，避免部分成功。
+    db.execute(update(MonitorTask).where(*predicate).values(updated_at=MonitorTask.updated_at))
+    tasks = db.scalars(select(MonitorTask).where(*predicate).order_by(MonitorTask.id)
+                       .execution_options(populate_existing=True)).all()
+    if not tasks:
+        raise APIError(404, "该购买目标没有任务", "group_not_found")
+    expected = {item.id: item.config_revision for item in data.expected}
+    if len(expected) != len(data.expected) or set(expected) != {task.id for task in tasks} or any(
+        expected[task.id] != _config_revision(task) for task in tasks
+    ):
+        raise APIError(409, "购买目标的成员或设置已变化，请重新载入后核对再保存", "config_conflict")
+    patch = data.patch
+    fields = patch.model_fields_set
+    if not fields or any(getattr(patch, field) is None for field in fields & {"group", "mode"}):
+        raise APIError(400, "请选择需要修改的设置", "empty_patch")
+    new_group = patch.group.strip() if patch.group is not None else data.group
+    if not new_group:
+        raise APIError(400, "购买目标名称不能为空", "bad_group")
+    if new_group != data.group and db.scalar(select(MonitorTask.id).where(
+        MonitorTask.user_id == user.id, MonitorTask.group == new_group,
+    ).limit(1)):
+        raise APIError(409, "已有同名购买目标，请使用其他名称", "group_exists")
+    for task in tasks:
+        if "email" in fields:
+            channels = dict(task.channels or {})
+            channels.pop("email", None)
+            if patch.email is not None:
+                channels["email"] = str(patch.email)
+            channels = _fill_verified_email(channels, user)
+            _require_channels(channels, user)
+            task.channels = channels
+        if "group" in fields:
+            task.group = new_group
+        if "mode" in fields:
+            task.mode = patch.mode
+        if "repeat_interval_sec" in fields:
+            task.repeat_interval_sec = patch.repeat_interval_sec
+    db.commit()
+    log.info("task_group_settings_changed", user_id=user.id,
+             count=len(tasks), fields=sorted(fields))
+    return [_task_out(task, db) for task in tasks]
+
+
 @router.patch("/{task_id}", response_model=TaskOut)
 def patch_task(
     task_id: int,
@@ -767,6 +902,12 @@ def patch_task(
     x_device_id: str | None = Header(default=None),
 ):
     task = _get_owned(task_id, user, x_device_id, db)
+    # 所属权先确认，再加锁并读新值，避免覆盖另一页面刚保存的设置。
+    db.execute(update(MonitorTask).where(MonitorTask.id == task.id)
+               .values(updated_at=MonitorTask.updated_at))
+    db.refresh(task)
+    if data.config_revision is not None and data.config_revision != _config_revision(task):
+        raise APIError(409, "任务设置已在其他页面变化，请重新载入后核对再保存", "config_conflict")
     # R4-P2：先校验后 setattr（此前 mode 非法时已 setattr，commit 前才 400，
     # 虽未落库但对象状态已脏）
     if data.mode is not None and data.mode not in ("instant", "confirmed"):
@@ -774,6 +915,18 @@ def patch_task(
     if data.expires_at is not None:
         # R6-P2-12：拒绝过去时间
         _validate_expires_at(data.expires_at)
+    if data.stores is not None:
+        numbers = [s.number.strip().upper() for s in data.stores]
+        if any(not n for n in numbers) or len(set(numbers)) != len(numbers):
+            raise APIError(400, "门店编号不能为空或重复", "bad_stores")
+        candidates = db.scalars(select(MonitorTask).where(
+            MonitorTask.id != task.id,
+            MonitorTask.user_id == task.user_id,
+            *([] if task.user_id is not None else [MonitorTask.device_id == task.device_id]),
+        )).all()
+        conflict = _find_conflict_in(candidates, task.part_number, numbers)
+        if conflict:
+            raise _conflict_error(conflict)
     if data.channels is not None:
         # R6-D4：非 trial 档任务不允许把渠道清空（空渠道的到货边沿会被静默消费）
         # P0：已验证邮箱自动算作邮件渠道，语义与创建一致（清掉显式邮箱后仍有
@@ -781,10 +934,25 @@ def patch_task(
         data_channels = _fill_verified_email(data.channels.model_dump(exclude_none=True), user)
         _require_channels(data_channels, user)
         task.channels = data_channels
+    if data.stores is not None:
+        new_stores = [dict(s.model_dump(), number=s.number.strip().upper()) for s in data.stores]
+        new_numbers = [s["number"] for s in new_stores]
+        if set(new_numbers) != set(task.store_numbers or []):
+            purge_task_idempotency_records(db, _idempotency_scope(user, x_device_id), task.id)
+            # 移除旧结果，重新加入的门店不能沿用以前的库存或通知基线。
+            for row in list(task.states):
+                if row.store_number not in new_numbers:
+                    db.delete(row)
+            task.last_polled_at = None
+            task.last_poll_ok = None
+        task.stores = new_stores
+        task.store_numbers = new_numbers
     if data.paused is not None:
         # R6-I9：手动暂停/恢复同步暂停原因——恢复时清空原因，避免脏原因残留
         task.paused_reason = "manual" if data.paused else None
-    fields = ("name", "group", "paused", "mode", "repeat_interval_sec")
+    if "repeat_interval_sec" in data.model_fields_set:
+        task.repeat_interval_sec = data.repeat_interval_sec
+    fields = ("name", "group", "paused", "mode")
     for field in fields:
         v = getattr(data, field)
         if v is not None:
@@ -880,7 +1048,10 @@ def task_states(
 ):
     """按门店 × 配置的状态列表（六态 + 原始字段）。"""
     task = _get_owned(task_id, user, x_device_id, db)
-    rows = db.execute(select(StockState).where(StockState.task_id == task.id)).scalars().all()
+    query = select(StockState).where(StockState.task_id == task.id)
+    if task.store_numbers:
+        query = query.where(StockState.store_number.in_(task.store_numbers))
+    rows = db.scalars(query).all()
     return [
         {
             "store_number": r.store_number,
