@@ -183,3 +183,34 @@ body {
 .text-ok { color: #16803a; }
 .text-bad { color: #c62828; }
 .text-warn { color: #9a5000; }
+
+/* Logo 启动页动画 — 描线 + 圆点弹簧（参考 Generative Loaders「克制、内容逐步出现」） */
+.logo-splash {
+  color: #000;
+}
+.logo-splash-ring {
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  animation: logo-draw 1.2s ease-out forwards;
+}
+.logo-splash-dot {
+  transform-origin: 128px 128px;
+  transform: scale(0);
+  animation: logo-dot-pop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) 0.9s forwards;
+}
+@keyframes logo-draw {
+  to { stroke-dashoffset: 0; }
+}
+@keyframes logo-dot-pop {
+  0% { transform: scale(0); }
+  60% { transform: scale(1.15); }
+  100% { transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .logo-splash-ring,
+  .logo-splash-dot {
+    animation: none;
+  }
+  .logo-splash-ring { stroke-dashoffset: 0; }
+  .logo-splash-dot { transform: scale(1); }
+}

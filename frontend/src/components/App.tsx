@@ -3,6 +3,7 @@ import { Link, NavLink, Outlet, useLocation, useNavigate, useOutletContext } fro
 import { api, ApiError, SESSION_EXPIRED_EVENT, isTaskExpired, isResultStale, summarizeTask, type Me, type Task, type TaskStatusFilter } from '../lib/api';
 import { ErrorState } from './ui';
 import IslandStatus from './StatusPill';
+import { LogoMark, LogoSplash } from './Logo';
 
 const TABS = [
   { to: '/', label: '监控', icon: '◉' },
@@ -85,6 +86,12 @@ export default function App() {
   }, []);
   const [me, setMe] = useState<Me | null | undefined>(undefined);
   const [tasks, setTasks] = useState<Task[]>([]);
+  // Splash 最小展示时间：保证 logo 描线动画（1.4s）播完才进站
+  const [splashMinElapsed, setSplashMinElapsed] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setSplashMinElapsed(true), 1500);
+    return () => clearTimeout(t);
+  }, []);
   // R6-D5：App 层维护任务加载错误态（首屏 /me+tasks 加载失败 → 子页面渲染 ErrorState 而非误导成"还没有监控任务"）
   const [authError, setAuthError] = useState<string | null>(null);
   const [tasksError, setTasksError] = useState<string | null>(null);
@@ -236,19 +243,21 @@ export default function App() {
     monitoringCount === 0 && activeTasks.some((t) => t.paused && !isTaskExpired(t));
   const activeCount = monitoringCount;
 
-  if (me === undefined) {
+  if (me === undefined || !splashMinElapsed) {
     if (authError) return <div className="min-h-screen bg-bg p-5 flex items-center justify-center"><ErrorState message={authError} onRetry={() => void initialize()} /></div>;
-    return (
-      <div className="min-h-screen bg-bg flex items-center justify-center">
-        <div className="w-10 h-10 rounded-full bg-island flex items-center justify-center">
-          <span className="w-3 h-3 rounded-full bg-ok island-dot" />
-        </div>
-      </div>
-    );
+    return <LogoSplash />;
   }
 
   return (
     <div className="min-h-screen bg-bg text-ink font-sans">
+      {/* 品牌 header：左上角透明底 logo，桌面/移动端自适应 */}
+      {!isAuthRoute && (
+        <header className="mx-auto max-w-lg px-4 pt-4 pb-2 flex items-center">
+          <Link to="/" aria-label="监控首页" className="text-ink hover:opacity-70 transition-opacity">
+            <LogoMark className="w-7 h-7 sm:w-8 sm:h-8" />
+          </Link>
+        </header>
+      )}
       {!isAuthRoute && (
         <IslandStatus
           taskCount={hasPausedOnly ? activeTasks.filter((t) => !isTaskExpired(t)).length : activeCount}
