@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type MouseEvent } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate, useOutletContext } from 'react-router-dom';
 import { api, ApiError, isTaskExpired, type Me, type Task, type TaskStatusFilter } from '../lib/api';
 import IslandStatus from './StatusPill';
+import { LogoMark, LogoSplash } from './Logo';
 
 const TABS = [
   { to: '/', label: '监控', icon: '◉' },
@@ -198,17 +199,19 @@ export default function App() {
   const activeCount = monitoringCount;
 
   if (me === undefined) {
-    return (
-      <div className="min-h-screen bg-bg flex items-center justify-center">
-        <div className="w-10 h-10 rounded-full bg-island flex items-center justify-center">
-          <span className="w-3 h-3 rounded-full bg-ok island-dot" />
-        </div>
-      </div>
-    );
+    return <LogoSplash />;
   }
 
   return (
     <div className="min-h-screen bg-bg text-ink font-sans">
+      {/* 品牌 header：左上角透明底 logo，桌面/移动端自适应 */}
+      {location.pathname !== '/login' && location.pathname !== '/verify' && (
+        <header className="mx-auto max-w-lg px-4 pt-4 pb-2 flex items-center">
+          <Link to="/" aria-label="监控首页" className="text-ink hover:opacity-70 transition-opacity">
+            <LogoMark className="w-7 h-7 sm:w-8 sm:h-8" />
+          </Link>
+        </header>
+      )}
       {location.pathname !== '/login' && location.pathname !== '/verify' && (
         <IslandStatus
           taskCount={hasPausedOnly ? activeTasks.filter((t) => !isTaskExpired(t)).length : activeCount}
