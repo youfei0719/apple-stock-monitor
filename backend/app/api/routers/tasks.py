@@ -17,6 +17,7 @@ from app.api.errors import APIError
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.logging import get_logger
+from app.core.product_launch import launch_for_part, waiting_for_launch
 from app.core.ratelimit import check_rate_limit
 from app.core.tiers import effective_tier, effective_tier_of, tier_of
 from app.core.timeutil import as_naive_utc as _as_naive_utc
@@ -30,7 +31,9 @@ from app.schemas import (
     TaskOut,
     TaskPatchIn,
 )
+from app.services.apple_client import unknown_reason
 from app.services.lifecycle import null_notification_task_ids, purge_task_idempotency_records
+from app.services.notifier import build_product_link
 
 
 # P1：任务默认命名人类可读——{part_name}（如 iPhone 18 Pro Max 512GB 银色）、
@@ -45,7 +48,9 @@ def _build_name_maps():
         pn = p.get("part_number", "").strip().upper()
         if pn:
             # "iPhone 18 Pro Max 512GB 银色"
-            part_map[pn] = f"{p.get('name','')} {p.get('capacity','')} {p.get('color','')}".strip()
+            from app.core.product_catalog import product_configuration
+
+            part_map[pn] = f"{p.get('name', '')} {product_configuration(p)}".strip()
     store_map = {}
     for s in SEED_STORES:
         sn = s.get("number", "").strip().upper()
@@ -125,6 +130,8 @@ def _display_state(task: MonitorTask, row: StockState | None) -> str:
         return "paused"
     if _is_expired(task):
         return "expired"
+    if waiting_for_launch(task.part_number):
+        return "scheduled"
     if row is None:
         return "unknown"
     if row.state == "cooling":
@@ -157,6 +164,7 @@ def _task_out(task: MonitorTask, db: Session, creation_status=None) -> TaskOut:
             "pickup_display": r.pickup_display,
             "store_pick_eligible": r.store_pick_eligible,
             "pickup_search_quote": r.pickup_search_quote,
+            "unknown_reason": unknown_reason(r.state, r.pickup_display, r.store_pick_eligible),
             "updated_at": r.updated_at.isoformat() + "Z" if r.updated_at else None,
         }
     available_n = sum(1 for r in rows if _display_state(task, r) == "available")
@@ -169,6 +177,9 @@ def _task_out(task: MonitorTask, db: Session, creation_status=None) -> TaskOut:
         category=task.category,
         part_number=task.part_number,
         product_name=task.product_name,
+        product_url=build_product_link(task.category, task.part_number),
+        launch=launch_for_part(task.part_number),
+        waiting_for_launch=waiting_for_launch(task.part_number),
         color=task.color,
         capacity=task.capacity,
         stores=task.stores or [],
@@ -262,7 +273,9 @@ def _conflict_error(task: MonitorTask) -> APIError:
 def _validate_task_in(data: TaskCreateIn) -> None:
     if data.mode not in ("instant", "confirmed"):
         raise APIError(400, "mode 必须为 instant 或 confirmed", "bad_mode")
-    if data.category not in ("iphone", "ipad", "mac", "watch"):
+    from app.core.product_catalog import PRODUCT_CATEGORIES
+
+    if data.category not in PRODUCT_CATEGORIES:
         raise APIError(400, "category 非法", "bad_category")
 
 
@@ -552,6 +565,10 @@ def create_task(
         replayed = _idempotent_replay(db, user, x_device_id, scope, idem_key)
         if replayed:
             return replayed[0]
+    if waiting_for_launch(data.part_number) and user is None:
+        raise APIError(
+            403, "请登录后保存预约监控，匿名体验会在开售前过期", "prelaunch_login_required"
+        )
     _validate_task_in(data)
     _validate_expires_at(data.expires_at)
     _check_task_limit(db, user, x_device_id)
@@ -669,16 +686,16 @@ def batch_create(
     tier = effective_tier_of(user)
     # 使用用户实际看到的当前目录保存购买目标，不能只留下内部编号。
     from app.api.routers.catalog import (
-        PRODUCT_CATALOG_KEY,
-        SEED_PRODUCTS,
         SEED_STORES,
         STORE_CATALOG_KEY,
+        current_products,
     )
+    from app.core.product_catalog import product_title
     from app.services.engine import get_config
 
     product_catalog = {
         str(p.get("part_number") or "").strip().upper(): p
-        for p in (get_config(db, PRODUCT_CATALOG_KEY, {}).get("products") or SEED_PRODUCTS)
+        for p in current_products(db)
         if p.get("part_number") and p.get("category") == data.category
     }
     store_catalog = {
@@ -758,7 +775,7 @@ def batch_create(
             group=data.group,
             category=data.category,
             part_number=pn,
-            product_name=product.get("name") or pn,
+            product_name=product_title(product) or pn,
             color=product.get("color") or "",
             capacity=product.get("capacity") or "",
             store_numbers=[sn],
@@ -1060,6 +1077,7 @@ def task_states(
             "pickup_display": r.pickup_display,
             "store_pick_eligible": r.store_pick_eligible,
             "pickup_search_quote": r.pickup_search_quote,
+            "unknown_reason": unknown_reason(r.state, r.pickup_display, r.store_pick_eligible),
             "confirmed_count": r.confirmed_count,
             "last_event_at": r.last_event_at.isoformat() + "Z" if r.last_event_at else None,
             "updated_at": r.updated_at.isoformat() + "Z" if r.updated_at else None,

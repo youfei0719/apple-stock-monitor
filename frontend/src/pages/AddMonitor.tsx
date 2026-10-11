@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { api, ApiError, cleanChannels, type Product, type Quota, type StoreRef, type TaskChannels } from '../lib/api';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { api, ApiError, cleanChannels, isWaitingForLaunch, launchTimeLabel, type Product, type Quota, type StoreRef, type TaskChannels } from '../lib/api';
+import { configurationLabel, productTitle, selectCatalogParts } from '../lib/catalog';
 import { useApp } from '../components/App';
 import NotifyChannels from '../components/NotifyChannels';
 import { Card, EmptyState, ErrorState, LoadingState, PageHeader, PrimaryButton } from '../components/ui';
@@ -8,12 +9,10 @@ import { Card, EmptyState, ErrorState, LoadingState, PageHeader, PrimaryButton }
 /** 与 TaskCreateIn / TaskBatchIn 的 ge=60 对齐。 */
 const MIN_REPEAT_INTERVAL_SEC = 60;
 
-const CATEGORIES: { id: string; label: string; soon?: boolean; soonReason?: string }[] = [
-  { id: 'iphone', label: 'iPhone' },
-  { id: 'ipad', label: 'iPad', soon: true, soonReason: 'iPad 产品库正在建设中，暂只支持 iPhone' },
-  { id: 'mac', label: 'Mac', soon: true, soonReason: 'Mac 产品库正在建设中，暂只支持 iPhone' },
-  { id: 'watch', label: 'Watch', soon: true, soonReason: 'Watch 产品库正在建设中，暂只支持 iPhone' },
-];
+const CATEGORY_LABELS: Record<string, string> = {
+  iphone: 'iPhone', ipad: 'iPad', mac: 'Mac', watch: 'Apple Watch',
+  airpods: 'AirPods', homepod: 'HomePod', airtag: 'AirTag', display: '显示器', vision: 'Vision Pro',
+};
 
 /** 向导步骤 */
 const STEPS = ['选机型', '选配置', '选门店', '确认创建'] as const;
@@ -51,6 +50,9 @@ function SectionHint({ children }: { children: React.ReactNode }) {
 
 export default function AddMonitor() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const initialModel = searchParams.get('model');
+  const previousCategory = useRef<string | null>(null);
   const { refreshTasks, me, tasks } = useApp();
   const [quota, setQuota] = useState<Quota | null>(null);
   const [quotaError, setQuotaError] = useState<string | null>(null);
@@ -81,15 +83,25 @@ export default function AddMonitor() {
     stepPanel.current?.focus({ preventScroll: true });
   }, [step]);
   const [category, setCategory] = useState('iphone');
+  const [categories, setCategories] = useState<{ id: string; label: string; sku_count: number }[]>([]);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const productLoadRef = useRef(0);
+  const loadCategories = async () => {
+    setCatalogError(null);
+    try { setCategories((await api.catalogCategories()).categories.filter((c) => c.sku_count > 0)); }
+    catch (error) { setCatalogError(error instanceof Error ? error.message : '品类载入失败'); }
+  };
+  useEffect(() => { void loadCategories(); }, []);
   const [products, setProducts] = useState<Product[] | null>(null);
   const [prodErr, setProdErr] = useState<string | null>(null);
 
   // Step 1: 选机型（按产品名分组）
-  const [selectedModel, setSelectedModel] = useState<string | null>(null);
+  const [selectedModel, setSelectedModel] = useState<string | null>(initialModel);
 
   // Step 2: 选配置（容量/颜色多选）
   const [selectedCaps, setSelectedCaps] = useState<Set<string>>(new Set());
   const [selectedColors, setSelectedColors] = useState<Set<string>>(new Set());
+  const [selectedDetails, setSelectedDetails] = useState<Record<string, Set<string>>>({});
   const [expert, setExpert] = useState(false);
   const [expertText, setExpertText] = useState('');
 
@@ -114,12 +126,14 @@ export default function AddMonitor() {
   const [showUpgradeLink, setShowUpgradeLink] = useState(false);
 
   const loadProducts = async () => {
+    const generation = ++productLoadRef.current;
     setProdErr(null);
+    setProducts(null);
     try {
-      setProducts(await api.products(category));
+      const result = await api.products(category);
+      if (generation === productLoadRef.current) setProducts(result.filter((p) => p.monitorable !== false));
     } catch (e) {
-      setProducts(null);
-      setProdErr(e instanceof Error ? e.message : '加载失败');
+      if (generation === productLoadRef.current) setProdErr(e instanceof Error ? e.message : '加载失败');
     }
   };
 
@@ -150,12 +164,17 @@ export default function AddMonitor() {
   };
 
   useEffect(() => {
-    setSelectedModel(null);
-    setSelectedCaps(new Set());
-    setSelectedColors(new Set());
-    setExpert(false);
-    setExpertText('');
-    loadProducts();
+    if (previousCategory.current !== null && previousCategory.current !== category) {
+      setSelectedModel(null);
+      setSelectedCaps(new Set());
+      setSelectedColors(new Set());
+      setSelectedDetails({});
+      setExpert(false);
+      setExpertText('');
+    }
+    previousCategory.current = category;
+    void loadProducts();
+    return () => { productLoadRef.current++; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [category]);
   useEffect(() => {
@@ -174,6 +193,7 @@ export default function AddMonitor() {
       name,
       count: items.filter((p) => p.part_number).length,
       unavailable: items.filter((p) => !p.part_number).length,
+      launch: items.find((p) => isWaitingForLaunch(p))?.launch,
       minPrice: Math.min(...items.map((i) => i.price_cny ?? 0)),
     }));
   }, [products]);
@@ -184,10 +204,18 @@ export default function AddMonitor() {
     return (products ?? []).filter((p) => p.name === selectedModel);
   }, [products, selectedModel]);
 
+  const selectedLaunch = modelProducts.find((p) => isWaitingForLaunch(p))?.launch;
+  const needsPrelaunchLogin = isAnon && Boolean(selectedLaunch);
+  const loginForLaunch = () => navigate('/login', { state: { returnTo: `/add?model=${encodeURIComponent(selectedModel ?? '')}` } });
+
   const capacities = useMemo(() => {
     const set = new Set<string>();
     modelProducts.forEach((p) => p.capacity && set.add(p.capacity));
-    return [...set];
+    const size = (value: string) => {
+      const match = value.match(/^([\d.]+)\s*(GB|TB)$/i);
+      return match ? Number(match[1]) * (match[2].toUpperCase() === 'TB' ? 1024 : 1) : 0;
+    };
+    return [...set].sort((a, b) => size(a) - size(b));
   }, [modelProducts]);
 
   const colors = useMemo(() => {
@@ -196,37 +224,29 @@ export default function AddMonitor() {
     return [...set];
   }, [modelProducts]);
 
-  // 容量和颜色需要显式选择，空选择不能悄悄变成全选。
-  const selectedParts = useMemo(() => {
-    if (expert) {
-      return [...new Set(expertText
-        .split(/[\s,，;；\n]+/)
-        .map((s) => s.trim().toUpperCase())
-        .filter(Boolean))];
+  // Only axes present in actual Apple rows are exposed; fixed details remain visible.
+  const detailDimensions = useMemo(() => {
+    const map = new Map<string, Set<string>>();
+    for (const product of modelProducts) {
+      for (const [key, value] of Object.entries(product.attributes ?? {})) {
+        if (['存储容量', '颜色', '屏幕尺寸'].includes(key) || !value) continue;
+        if (!map.has(key)) map.set(key, new Set());
+        map.get(key)!.add(value);
+      }
     }
-    if ((capacities.length > 0 && selectedCaps.size === 0) ||
-        (colors.length > 0 && selectedColors.size === 0)) return [];
-    return modelProducts
-      .filter(
-        (p) =>
-          p.part_number && // 空 part_number 表示未验证，不可直接选
-          (selectedCaps.size === 0 || (p.capacity && selectedCaps.has(p.capacity))) &&
-          (selectedColors.size === 0 || (p.color && selectedColors.has(p.color))),
-      )
-      .map((p) => p.part_number);
-  }, [expert, expertText, modelProducts, selectedCaps, selectedColors, capacities, colors]);
+    return [...map].map(([key, values]) => ({ key, values: [...values] }));
+  }, [modelProducts]);
 
-  // 用户选了容量/颜色，但对应 SKU 的 part_number 尚未验证（需手动输入）
-  const needsManualPn = useMemo(() => {
-    if (expert) return false;
-    if (selectedCaps.size === 0 && selectedColors.size === 0) return false;
-    const matched = modelProducts.filter(
-      (p) =>
-        (selectedCaps.size === 0 || (p.capacity && selectedCaps.has(p.capacity))) &&
-        (selectedColors.size === 0 || (p.color && selectedColors.has(p.color))),
-    );
-    return matched.length > 0 && matched.every((p) => !p.part_number);
-  }, [expert, modelProducts, selectedCaps, selectedColors]);
+  const selectedParts = useMemo(() => {
+    if (expert) return [...new Set(expertText.split(/[\s,，;；\n]+/).map((s) => s.trim().toUpperCase()).filter(Boolean))];
+    const filters: Record<string, Set<string>> = {};
+    if (capacities.length) filters['存储容量'] = selectedCaps;
+    if (colors.length) filters['颜色'] = selectedColors;
+    for (const dimension of detailDimensions) {
+      if (dimension.values.length > 1) filters[dimension.key] = selectedDetails[dimension.key] ?? new Set();
+    }
+    return selectCatalogParts(modelProducts, filters);
+  }, [expert, expertText, modelProducts, selectedCaps, selectedColors, capacities, colors, detailDimensions, selectedDetails]);
 
   const filteredStores = useMemo(() => {
     const q = storeQuery.trim().toLowerCase();
@@ -287,7 +307,7 @@ export default function AddMonitor() {
 
   const nextHint = () => {
     if (step === 0 && !selectedModel) return '先选一款机型';
-    if (step === 1 && selectedParts.length === 0) return '请选择容量和颜色';
+    if (step === 1 && selectedParts.length === 0) return '请选择具体配置';
     if (step === 1 && selectionOverQuota) return '请减少配置或增加任务名额';
     if (step === 2 && overQuota) return '请减少门店或增加任务名额';
     if (step === 2 && pickedStores.size === 0) return '选至少一家门店';
@@ -296,6 +316,10 @@ export default function AddMonitor() {
 
   const submit = async () => {
     setSubmitErr(null);
+    if (isAnon && (needsPrelaunchLogin || (products ?? []).some((p) => selectedParts.includes(p.part_number) && isWaitingForLaunch(p)))) {
+      loginForLaunch();
+      return;
+    }
     const store_numbers = [...pickedStores];
     if (selectedParts.length === 0) {
       setSubmitErr('请先选择机型配置');
@@ -336,7 +360,7 @@ export default function AddMonitor() {
             for (const sn of store_numbers) {
               const prod = productByPn.get(pn);
               const info = storeByNumber.get(sn);
-              const partName = prod ? `${prod.name} ${prod.capacity ?? ''} ${prod.color ?? ''}`.trim() : pn;
+              const partName = prod ? productTitle(prod) : pn;
               const storeName = info ? (info.name?.replace('Apple ', '') || sn) : sn;
               const taskName = nameTpl
                 .replace('{part_number}', pn)
@@ -348,7 +372,7 @@ export default function AddMonitor() {
                 group: groupName.trim(),
                 category,
                 part_number: pn,
-                product_name: prod?.name ?? '',
+                product_name: prod ? productTitle(prod) : '',
                 color: prod?.color ?? '',
                 capacity: prod?.capacity ?? '',
                 stores: [{ number: sn, name: info?.name ?? '', city: info?.city ?? '' }],
@@ -387,7 +411,7 @@ export default function AddMonitor() {
       navigate('/', {
         state: { notice: existingCount > 0
           ? `新建 ${doneCount - existingCount} 个任务，找到 ${existingCount} 个现有任务。现有任务保留原设置，请到详情核对或修改。`
-          : `已创建 ${doneCount} 个监控任务` },
+          : selectedLaunch ? `已预约 ${doneCount} 个监控任务，开售后自动检查所选门店` : `已创建 ${doneCount} 个监控任务` },
       });
     } catch (e) {
       setSubmitErr(e instanceof Error ? e.message : '创建失败');
@@ -407,7 +431,7 @@ export default function AddMonitor() {
 
   return (
     <div>
-      <PageHeader title="添加监控" subtitle={`第 ${step + 1} 步，共 ${STEPS.length} 步`} />
+      <PageHeader title="添加监控" />
       <div ref={stepPanel} tabIndex={-1} aria-label={STEPS[step]} className="px-4 pb-28 outline-none">
         <Stepper step={step} />
         {quotaError && <div role="alert" className="mb-3 text-sm text-bad">额度载入失败，创建时会再次校验。<button onClick={() => void loadQuota()} className="ml-2 text-accent">重试</button></div>}
@@ -415,26 +439,24 @@ export default function AddMonitor() {
         {/* Step 0: 选机型 */}
         {step === 0 && (
           <section>
-            <SectionQ>你要监控哪款 iPhone？</SectionQ>
-            <SectionHint>可选择多个容量、颜色和门店。</SectionHint>
-            <div className="grid grid-cols-4 gap-2 mb-4">
-              {CATEGORIES.map((c) => (
+            <SectionQ>你要等哪款 {CATEGORY_LABELS[category] ?? '产品'} 补货？</SectionQ>
+            <SectionHint>收录需要等补货的重点款，也支持提前预约新品监控。</SectionHint>
+            <div className="flex flex-wrap gap-2 mb-4">
+              {categories.map((c) => (
                 <button
                   key={c.id}
                   onClick={() => setCategory(c.id)}
-                  disabled={c.soon}
-                  title={c.soon ? c.soonReason : undefined}
-                  className={`py-2 rounded-card-sm text-sm font-medium transition active:scale-95 flex flex-col items-center justify-center gap-0.5 ${
+                  className={`px-3 py-2 rounded-card-sm text-sm font-medium transition active:scale-95 flex flex-col items-center justify-center gap-0.5 ${
                     category === c.id ? 'bg-island text-white' : 'bg-white text-sub shadow-card'
-                  } ${c.soon ? 'opacity-45' : ''}`}
+                  }`}
                 >
                   <span>{c.label}</span>
-                  {c.soon && <span className="text-[10px] font-normal opacity-80">暂未支持</span>}
                 </button>
               ))}
             </div>
             {/* P1：品类不可选的原因说清楚，不只写"暂未支持"四个字 */}
 
+            {catalogError && <ErrorState message={catalogError} onRetry={loadCategories} />}
             {prodErr ? (
               <ErrorState message={prodErr} onRetry={loadProducts} />
             ) : products === null ? (
@@ -448,7 +470,13 @@ export default function AddMonitor() {
                   return (
                     <button
                       key={g.name}
-                      onClick={() => setSelectedModel(g.name)}
+                      onClick={() => {
+                        if (selectedModel !== g.name) {
+                          setSelectedCaps(new Set()); setSelectedColors(new Set()); setSelectedDetails({});
+                          setExpert(false); setExpertText('');
+                        }
+                        setSelectedModel(g.name);
+                      }}
                       aria-pressed={on}
                       className={`w-full text-left p-4 rounded-card transition active:scale-[0.99] border-2 ${
                         on ? 'bg-white border-accent shadow-card' : 'bg-white border-transparent shadow-card'
@@ -456,16 +484,18 @@ export default function AddMonitor() {
                     >
                       <div className="flex items-center justify-between">
                         <span className="text-[17px] font-semibold product-name">{g.name}</span>
+                        {g.launch && <span className="ml-auto mr-2 text-xs text-accent">可提前预约</span>}
                         {on && <span className="text-accent text-lg">✓</span>}
                       </div>
                       <p className="mt-1 text-[13px] text-sub">
-                        {g.count} 种可监控 · {g.unavailable} 种暂未开放 · <span className="mono">¥{g.minPrice.toLocaleString('zh-CN')} 起</span>
+                        {g.count} 种{g.launch ? '预约' : '补货'}配置{g.unavailable > 0 && <> · {g.unavailable} 种待补齐</>} · <span className="mono">¥{g.minPrice.toLocaleString('zh-CN')} 起</span>
                       </p>
                     </button>
                   );
                 })}
               </div>
             )}
+            {needsPrelaunchLogin && <p className="mt-4 text-sm text-sub">预约监控需登录保存，开售前不会过期。登录后继续选择配置与门店。</p>}
           </section>
         )}
 
@@ -481,7 +511,13 @@ export default function AddMonitor() {
                 {expert ? '返回列表选择' : '高级：手动输入'}
               </button>
             </div>
-            <SectionHint>{selectedModel} · 请分别选择容量和颜色，可多选</SectionHint>
+            <SectionHint>{selectedModel} · 请选择具体配置，可多选</SectionHint>
+            {selectedLaunch ? <Card className="p-4 mb-4 text-sm">
+              <p className="font-semibold text-accent">可提前预约 · 等待开售</p>
+              <p className="mt-2">预计 {launchTimeLabel(selectedLaunch.preorder_at)} 开放预购</p>
+              <p className="mt-2 text-xs text-sub">先保存配置和门店，开售后自动检查所选门店，确认可购买才提醒。{selectedLaunch.note}</p>
+            </Card> : <p className="mb-3 text-xs text-sub">这些配置在近期核验的门店出现缺货；各城市供应不同，创建后会检查你选的门店。</p>}
+            {category === 'watch' && <p className="mb-3 text-xs text-sub">监控表壳库存；表带需在 Apple 购买时另外选择，表壳有货不代表整套组合有货。</p>}
             {expert ? (
               <Card className="p-4">
                 <textarea
@@ -504,11 +540,13 @@ export default function AddMonitor() {
                 <div className="flex gap-4 text-xs text-accent">
                   <button onClick={() => {
                     setSelectedCaps(new Set(modelProducts.filter((p) => p.part_number).map((p) => p.capacity)));
+                    setSelectedDetails(Object.fromEntries(detailDimensions.map((d) => [d.key, new Set(d.values)])));
                     setSelectedColors(new Set(modelProducts.filter((p) => p.part_number).map((p) => p.color)));
-                  }}>全选可监控配置</button>
+                  }}>全选可添加配置</button>
                   <button onClick={() => {
                     setSelectedCaps(new Set());
                     setSelectedColors(new Set());
+                    setSelectedDetails({});
                   }}>清空选择</button>
                 </div>
                 {capacities.length > 0 && (
@@ -517,7 +555,8 @@ export default function AddMonitor() {
                     <div className="flex flex-wrap gap-2">
                       {capacities.map((c) => {
                         const on = selectedCaps.has(c);
-                        const price = modelProducts.find((p) => p.capacity === c)?.price_cny;
+                        const prices = modelProducts.filter((p) => p.capacity === c).map((p) => p.price_cny);
+                        const price = prices.length ? Math.min(...prices) : null;
                         return (
                           <button
                             key={c}
@@ -530,7 +569,7 @@ export default function AddMonitor() {
                             <div className="text-[15px] font-semibold">{c}</div>
                             {price != null && (
                               <div className={`mono text-xs mt-0.5 ${on ? 'text-white/70' : 'text-sub'}`}>
-                                ¥{price.toLocaleString('zh-CN')}
+                                ¥{price.toLocaleString('zh-CN')}{prices.some((p) => p !== price) ? ' 起' : ''}
                               </div>
                             )}
                           </button>
@@ -561,16 +600,32 @@ export default function AddMonitor() {
                     </div>
                   </>
                 )}
+                {detailDimensions.map((dimension) => (
+                  <fieldset key={dimension.key} className="mt-4">
+                    <legend className="text-[13px] font-semibold text-sub mb-2">{dimension.key}</legend>
+                    <div className="flex flex-wrap gap-2">
+                      {dimension.values.map((value) => {
+                        const fixed = dimension.values.length === 1;
+                        const on = fixed || selectedDetails[dimension.key]?.has(value) === true;
+                        return <button key={value} type="button" aria-pressed={on} disabled={fixed}
+                          onClick={() => setSelectedDetails((current) => ({ ...current, [dimension.key]: toggle(current[dimension.key] ?? new Set(), value) }))}
+                          className={`px-3 py-2.5 rounded-card-sm text-sm border-2 ${on ? 'bg-island text-white border-island' : 'bg-white text-sub border-transparent shadow-card'}`}>
+                          {value}
+                        </button>;
+                      })}
+                    </div>
+                  </fieldset>
+                ))}
                 <details className="mt-4 text-xs text-sub">
                   <summary className="cursor-pointer">查看支持的配置</summary>
                   <ul className="mt-2 space-y-1 text-xs">
-                    {modelProducts.map((p) => <li key={`${p.capacity}-${p.color}`} className="flex justify-between gap-2">
-                      <span>{p.capacity} · {p.color}</span>
-                      <span className={p.part_number ? 'text-ink' : 'text-sub'}>{p.part_number ? '可监控' : '暂未开放'}</span>
+                    {modelProducts.map((p) => <li key={p.part_number} className="flex justify-between gap-2">
+                      <span>{configurationLabel(p)}<span className="block mono text-[10px] text-faint">{p.part_number}{p.model_number ? ` · 型号 ${p.model_number}` : ''}</span></span>
+                      <span className={p.part_number ? 'text-ink' : 'text-sub'}>{p.part_number ? '可添加' : '待补齐'}</span>
                     </li>)}
                   </ul>
                   {selectedCaps.size > 0 && selectedColors.size > 0 && <p className="mt-2 text-xs text-sub">
-                    所选 {selectedParts.length} 种可监控，{modelProducts.filter((p) => !p.part_number && selectedCaps.has(p.capacity) && selectedColors.has(p.color)).length} 种暂不支持。
+                    已选 {selectedParts.length} 种配置；未收录编号的配置暂不能添加。
                   </p>}
                 </details>
                 {selectedParts.length > 0 && (
@@ -584,23 +639,16 @@ export default function AddMonitor() {
                         .map((p) => (
                           <span key={p.part_number} className="text-[11px] px-2 py-1 rounded-pill bg-white shadow-card">
                             {/* P1：不裸显 part_number，已有容量·颜色足够识别 */}
-                            {p.capacity} · {p.color}
+                            {configurationLabel(p)}
                           </span>
                         ))}
                     </div>
                   </Card>
                 )}
-                {/* P1：选了容量+颜色但商品编号未验证时，明确引导手动输入 */}
-                {needsManualPn && (
-                  <p className="mt-3 text-xs text-bad">
-                    暂不支持此配置，请调整选择或手动填写商品编号。
-                  </p>
+                {selectedParts.length === 0 && (
+                  <p className="mt-3 text-xs text-sub">请完成各项配置选择；只有官网实际存在的 SKU 才能添加。</p>
                 )}
-                {selectedCaps.size > 0 && selectedColors.size > 0 && selectedParts.length === 0 && !needsManualPn && (
-                  <p className="mt-3 text-xs text-bad">
-                    所选容量与颜色没有对应配置，请调整选择
-                  </p>
-                )}
+
               </>
             )}
           </section>
@@ -701,13 +749,14 @@ export default function AddMonitor() {
           <section className="space-y-5">
             {/* 汇总 */}
             <Card className="p-4 bg-bg">
-              <p className="text-[13px] font-semibold mb-2">将创建 {combos} 个监控任务</p>
+              <p className="text-[13px] font-semibold mb-2">将{selectedLaunch ? '预约' : '创建'} {combos} 个监控任务</p>
               <p className="text-xs text-sub leading-relaxed">
                 {selectedParts.length} 种配置 × {pickedStores.size} 家门店
               </p>
               <p className="mt-1 text-xs text-sub">{selectedModel || '手动输入的商品'}</p>
+              {selectedLaunch && <p className="mt-2 text-xs text-accent">保存后等待开售，预计 {launchTimeLabel(selectedLaunch.preorder_at)} 起检查所选门店。确认可购买后按下方设置提醒。</p>}
               <details className="mt-2 text-xs text-sub"><summary className="cursor-pointer">核对配置与门店</summary>
-                <p className="mt-2">{selectedParts.map((pn) => { const product = modelProducts.find((item) => item.part_number === pn); return product ? [product.capacity, product.color].filter(Boolean).join(' · ') : pn; }).join('、')}</p>
+                <p className="mt-2">{selectedParts.map((pn) => { const product = modelProducts.find((item) => item.part_number === pn); return product ? configurationLabel(product) : pn; }).join('、')}</p>
                 <p className="mt-1">{(stores ?? []).filter((store) => pickedStores.has(store.number)).map((store) => store.name || store.number).join('、')}</p>
               </details>
               {(submitErr || overQuota || atQuota) && (
@@ -833,13 +882,13 @@ export default function AddMonitor() {
           )}
           {step < 3 ? (
             <button
-              onClick={() => canNext() && setStep(step + 1)}
+              onClick={() => { if (!canNext()) return; if (step === 0 && needsPrelaunchLogin) loginForLaunch(); else setStep(step + 1); }}
               disabled={!canNext()}
               className={`flex-1 py-3.5 rounded-card-sm text-[15px] font-semibold transition active:scale-[0.99] ${
                 canNext() ? 'bg-accent text-white' : 'bg-line text-faint'
               }`}
             >
-              {nextHint() ?? `下一步：${STEPS[step + 1]}`}
+              {step === 0 && needsPrelaunchLogin ? '登录后预约监控' : nextHint() ?? `下一步：${STEPS[step + 1]}`}
             </button>
           ) : (
             <PrimaryButton
@@ -853,7 +902,7 @@ export default function AddMonitor() {
                   ? `已达上限（${tasksLimit} 个）`
                   : overQuota
                     ? `超出上限（${tasksLimit} 个）`
-                    : `创建 ${combos} 个监控任务`}
+                    : `${selectedLaunch ? '预约' : '创建'} ${combos} 个监控任务`}
             </PrimaryButton>
           )}
         </div></div>

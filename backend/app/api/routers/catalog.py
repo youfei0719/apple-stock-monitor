@@ -13,6 +13,13 @@ from sqlalchemy.orm import Session
 from app.api.errors import APIError
 from app.core.db import SessionLocal, get_db
 from app.core.logging import get_logger
+from app.core.product_catalog import (
+    CATALOG,
+    CATALOG_VERSION,
+    OFFICIAL_PRODUCTS,
+    PRODUCT_CATEGORIES,
+    product_configuration,
+)
 from app.models.models import User
 from app.services.apple_client import AppleClient, AppleError, AppleRateLimitError
 from app.services.engine import get_config, set_config
@@ -76,211 +83,23 @@ SEED_CITY_ANCHORS = [
     "温州",
 ]
 
-# 种子产品（part number 为真实查询键；用户也可在专家模式直接输入任意 part number）
-# P1：完整 SKU 矩阵——每个机型的容量×颜色全组合，不留"选了没货"的坑
-# 种子产品（part_number 为真实查询键；用户也可在专家模式直接输入任意 part number）
-# 数据来源：Apple 中国官网 www.apple.com.cn（2026-10-10 抓取），元数据 100% 真实
-# iPhone 18 Pro Max：勃艮第酒红色、冰川蓝色、银色、黑色 × 256GB/512GB/1TB/2TB
-# iPhone Duo：星光白色、夜空色 × 256GB/512GB/1TB/2TB
-#   价格：256GB ¥15,999 / 512GB ¥17,999 / 1TB ¥21,499 / 2TB ¥26,499
-#   价格：256GB ¥10,999 / 512GB ¥12,999 / 1TB ¥16,499 / 2TB ¥21,499
-# part_number：iPhone Duo 8 个来自官网购买页嵌入 JSON（2026-10-10 实测）；
-# 18 Pro Max 仅 "MJY64CH/A" 和 "MJYC4CH/A" 为已验证可用，其他组合为空
-SEED_PRODUCTS = [
-    {
-        "part_number": "",
-        "name": "iPhone 18 Pro Max",
-        "color": "勃艮第酒红色",
-        "capacity": "256GB",
-        "price_cny": 10999,
-        "category": "iphone",
-    },
-    {
-        "part_number": "",
-        "name": "iPhone 18 Pro Max",
-        "color": "冰川蓝色",
-        "capacity": "256GB",
-        "price_cny": 10999,
-        "category": "iphone",
-    },
-    {
-        "part_number": "",
-        "name": "iPhone 18 Pro Max",
-        "color": "银色",
-        "capacity": "256GB",
-        "price_cny": 10999,
-        "category": "iphone",
-    },
-    {
-        "part_number": "MJY64CH/A",
-        "name": "iPhone 18 Pro Max",
-        "color": "黑色",
-        "capacity": "256GB",
-        "price_cny": 10999,
-        "category": "iphone",
-    },
-    {
-        "part_number": "",
-        "name": "iPhone 18 Pro Max",
-        "color": "勃艮第酒红色",
-        "capacity": "512GB",
-        "price_cny": 12999,
-        "category": "iphone",
-    },
-    {
-        "part_number": "",
-        "name": "iPhone 18 Pro Max",
-        "color": "冰川蓝色",
-        "capacity": "512GB",
-        "price_cny": 12999,
-        "category": "iphone",
-    },
-    {
-        "part_number": "MJYC4CH/A",
-        "name": "iPhone 18 Pro Max",
-        "color": "银色",
-        "capacity": "512GB",
-        "price_cny": 12999,
-        "category": "iphone",
-    },
-    {
-        "part_number": "",
-        "name": "iPhone 18 Pro Max",
-        "color": "黑色",
-        "capacity": "512GB",
-        "price_cny": 12999,
-        "category": "iphone",
-    },
-    {
-        "part_number": "",
-        "name": "iPhone 18 Pro Max",
-        "color": "勃艮第酒红色",
-        "capacity": "1TB",
-        "price_cny": 16499,
-        "category": "iphone",
-    },
-    {
-        "part_number": "",
-        "name": "iPhone 18 Pro Max",
-        "color": "冰川蓝色",
-        "capacity": "1TB",
-        "price_cny": 16499,
-        "category": "iphone",
-    },
-    {
-        "part_number": "",
-        "name": "iPhone 18 Pro Max",
-        "color": "银色",
-        "capacity": "1TB",
-        "price_cny": 16499,
-        "category": "iphone",
-    },
-    {
-        "part_number": "",
-        "name": "iPhone 18 Pro Max",
-        "color": "黑色",
-        "capacity": "1TB",
-        "price_cny": 16499,
-        "category": "iphone",
-    },
-    {
-        "part_number": "",
-        "name": "iPhone 18 Pro Max",
-        "color": "勃艮第酒红色",
-        "capacity": "2TB",
-        "price_cny": 21499,
-        "category": "iphone",
-    },
-    {
-        "part_number": "",
-        "name": "iPhone 18 Pro Max",
-        "color": "冰川蓝色",
-        "capacity": "2TB",
-        "price_cny": 21499,
-        "category": "iphone",
-    },
-    {
-        "part_number": "",
-        "name": "iPhone 18 Pro Max",
-        "color": "银色",
-        "capacity": "2TB",
-        "price_cny": 21499,
-        "category": "iphone",
-    },
-    {
-        "part_number": "",
-        "name": "iPhone 18 Pro Max",
-        "color": "黑色",
-        "capacity": "2TB",
-        "price_cny": 21499,
-        "category": "iphone",
-    },
-    {
-        # P1：part_number 来自 Apple 中国官网 iPhone Duo 购买页嵌入 JSON（2026-10-10 实测）
-        "part_number": "MK2M4CH/A",
-        "name": "iPhone Duo",
-        "color": "星光白色",
-        "capacity": "256GB",
-        "price_cny": 15999,
-        "category": "iphone",
-    },
-    {
-        "part_number": "MK2N4CH/A",
-        "name": "iPhone Duo",
-        "color": "夜空色",
-        "capacity": "256GB",
-        "price_cny": 15999,
-        "category": "iphone",
-    },
-    {
-        "part_number": "MK2P4CH/A",
-        "name": "iPhone Duo",
-        "color": "星光白色",
-        "capacity": "512GB",
-        "price_cny": 17999,
-        "category": "iphone",
-    },
-    {
-        "part_number": "MK2Q4CH/A",
-        "name": "iPhone Duo",
-        "color": "夜空色",
-        "capacity": "512GB",
-        "price_cny": 17999,
-        "category": "iphone",
-    },
-    {
-        "part_number": "MK2T4CH/A",
-        "name": "iPhone Duo",
-        "color": "星光白色",
-        "capacity": "1TB",
-        "price_cny": 21499,
-        "category": "iphone",
-    },
-    {
-        "part_number": "MK2U4CH/A",
-        "name": "iPhone Duo",
-        "color": "夜空色",
-        "capacity": "1TB",
-        "price_cny": 21499,
-        "category": "iphone",
-    },
-    {
-        "part_number": "MK2V4CH/A",
-        "name": "iPhone Duo",
-        "color": "星光白色",
-        "capacity": "2TB",
-        "price_cny": 26499,
-        "category": "iphone",
-    },
-    {
-        "part_number": "MK2W4CH/A",
-        "name": "iPhone Duo",
-        "color": "夜空色",
-        "capacity": "2TB",
-        "price_cny": 26499,
-        "category": "iphone",
-    },
-]
+# Versioned official catalog, with independent inventory-query evidence per part.
+SEED_PRODUCTS = OFFICIAL_PRODUCTS
+LEGACY_SEED_PARTS = {
+    "MJY64CH/A", "MJYC4CH/A", "MK2M4CH/A", "MK2N4CH/A", "MK2P4CH/A",
+    "MK2Q4CH/A", "MK2R4CH/A", "MK2T4CH/A", "MK2U4CH/A", "MK2W4CH/A",
+}
+
+
+def current_products(db: Session) -> list[dict]:
+    """Upgrade old seed catalogs; preserve explicitly configured custom additions."""
+    configured = get_config(db, PRODUCT_CATALOG_KEY, {}).get("products", [])
+    official_parts = {p["part_number"] for p in SEED_PRODUCTS}
+    custom = [p for p in configured
+              if p.get("part_number") and p["part_number"] not in official_parts
+              and p["part_number"] not in LEGACY_SEED_PARTS
+              and p.get("name") != "iPhone Duo" and not p.get("source_url")]
+    return [*SEED_PRODUCTS, *custom]
 
 
 def _seed_if_empty(db: Session) -> None:
@@ -413,28 +232,44 @@ def list_stores(
 
 @router.get("/products")
 def list_products(
-    category: str = Query(default="iphone", pattern="^(iphone|ipad|mac|watch)$"),
+    category: str = Query(default="iphone"),
     db: Session = Depends(get_db),
 ):
     _seed_if_empty(db)
-    products = get_config(db, PRODUCT_CATALOG_KEY, {}).get("products", [])
+    if category not in PRODUCT_CATEGORIES:
+        raise APIError(400, "不支持的产品品类", "bad_category")
+    products = current_products(db)
     # UX：按 part_number 去重并保持首次出现顺序——目录内容相同时渲染永远一致，
     # 不因数据源顺序抖动让用户觉得"刚才看到的那款去哪了"
-    # P1：空 part_number 的也返回（前端展示用），用户选后引导手动输入；
-    # 去重时空字符串不参与（避免 14 个空 pn 互相覆盖只剩 1 个）
+    # 推荐列表只收录有明确补货需求的真实 SKU；历史自定义配置不会自动进入推荐。
     seen: dict[str, dict] = {}
     result = []
     for p in products:
         if p.get("category") != category:
+            continue
+        # Public selection is a replenishment shortlist. Keep custom historical data
+        # for resolving old tasks, but never expose it as an automatic recommendation.
+        if not p.get("admission") and not p.get("restock_priority"):
             continue
         pn = str(p.get("part_number") or "")
         if pn:
             if pn not in seen:
                 seen[pn] = p
                 result.append(p)
-        else:
-            result.append(p)
     return result
+
+
+@router.get("/categories")
+def list_categories():
+    return {
+        "version": CATALOG_VERSION,
+        "region": "CN",
+        "categories": [
+            {**c, "sku_count": sum(p["category"] == c["id"] and p.get("monitorable", False)
+                                  for p in SEED_PRODUCTS)}
+            for c in CATALOG["categories"]
+        ],
+    }
 
 
 @router.get("/anchors")
@@ -454,10 +289,9 @@ def sku_name_for_part_number(part_number: str) -> str:
     for p in SEED_PRODUCTS:
         if p.get("part_number") == part_number:
             name = (p.get("name") or "").strip()
-            if p.get("capacity"):
-                name += f" {p['capacity']}"
-            if p.get("color"):
-                name += f" {p['color']}"
+            details = product_configuration(p)
+            if details:
+                name += f" {details}"
             return name.strip()
     return ""
 

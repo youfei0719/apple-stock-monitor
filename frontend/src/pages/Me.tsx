@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { api, fmtCny, type ChannelHealth, type Payment, type Plan, type Quota } from '../lib/api';
+import { api, fmtCny, membershipUpdateConfirmed, type ChannelHealth, type Payment, type Plan, type Quota } from '../lib/api';
 import { useApp } from '../components/App';
 import { NotificationHistory } from '../components/NotifyChannels';
-import { Card, EmptyState, ErrorState, LoadingState, PageHeader } from '../components/ui';
+import { Card, ConfirmDialog, EmptyState, ErrorState, LoadingState, PageHeader } from '../components/ui';
 
 const TIER_LABEL: Record<string, string> = {
   trial: '体验版',
@@ -56,7 +56,7 @@ function planFeatures(p: Plan): string[] {
     `通知方式：${channels}`,
     `监控任务 ${p.tasks_limit} 个`,
     `每 30 天 ${p.push_limit} 次提醒`,
-    `检查间隔 ${p.refresh_interval_sec} 秒`,
+    `每 ${p.refresh_interval_sec >= 60 ? `${p.refresh_interval_sec / 60} 分钟` : `${p.refresh_interval_sec} 秒`}检查`,
   ];
   if (p.history) feats.push('通知汇总');
   if (p.priority) feats.push('高峰期优先查询');
@@ -323,36 +323,90 @@ export default function Me() {
   // 避免后退回 /me 看到旧用户数据
   const { me, logout, refreshMe } = useApp();
   const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null);
-  const confirmRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!selectedPlan) return;
-    const previous = document.activeElement as HTMLElement | null;
-    const dialog = confirmRef.current;
-    const trap = (event: KeyboardEvent) => {
-      if (event.key !== 'Tab' || !dialog) return;
-      const items = dialog.querySelectorAll<HTMLElement>('button, a[href]');
-      const first = items[0], last = items[items.length - 1];
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
-      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
-    };
-    dialog?.querySelector<HTMLElement>('button')?.focus();
-    document.addEventListener('keydown', trap);
-    return () => { document.removeEventListener('keydown', trap); previous?.focus(); };
-  }, [selectedPlan]);
   const [checkingEntitlement, setCheckingEntitlement] = useState(false);
   const [purchaseMessage, setPurchaseMessage] = useState<string | null>(null);
+  const [paymentStatus, setPaymentStatus] = useState<'idle' | 'watching' | 'paid' | 'pending'>('idle');
+  const paymentWatchRef = useRef<{
+    beforeTier: string;
+    beforePaidOrders: Set<string>;
+    startedAt: number;
+    timer: number | null;
+  } | null>(null);
+  const entitlementCheckRef = useRef(false);
+  const [copyMessage, setCopyMessage] = useState<string | null>(null);
+  useEffect(() => {
+    if (copyMessage !== '已复制') return;
+    const timer = window.setTimeout(() => setCopyMessage(null), 3000);
+    return () => window.clearTimeout(timer);
+  }, [copyMessage]);
   const copyId = async () => {
-    try { await navigator.clipboard.writeText(String(me?.id ?? '')); setPurchaseMessage('用户 ID 已复制，赞助时请填写到备注'); }
-    catch { setPurchaseMessage(`无法自动复制，请手动复制用户 ID：${me?.id ?? ''}`); }
+    try { await navigator.clipboard.writeText(String(me?.id ?? '')); setCopyMessage('已复制'); }
+    catch { setCopyMessage(`未能复制，请手动复制 ID：${me?.id ?? ''}`); }
   };
-  const checkEntitlement = async () => {
-    setCheckingEntitlement(true); setPurchaseMessage(null);
+
+  const stopPaymentWatch = () => {
+    const watch = paymentWatchRef.current;
+    if (watch?.timer != null) window.clearInterval(watch.timer);
+    paymentWatchRef.current = null;
+  };
+
+  useEffect(() => () => stopPaymentWatch(), []);
+
+  const checkEntitlement = async (automatic = false) => {
+    if (entitlementCheckRef.current) return;
+    entitlementCheckRef.current = true;
+    setCheckingEntitlement(true);
     try {
       const [currentQuota, records] = await Promise.all([api.quota(), api.payments(), refreshMe()]);
       setQuota(currentQuota); setPayments(records);
-      setPurchaseMessage(`当前会员：${TIER_LABEL[currentQuota.tier] ?? currentQuota.tier}。未生效请稍后重试。`);
-    } catch (e) { setPurchaseMessage(e instanceof Error ? e.message : '检查失败，请重试'); }
-    finally { setCheckingEntitlement(false); }
+      const watch = paymentWatchRef.current;
+      const changed = watch && (
+        membershipUpdateConfirmed(currentQuota.tier, records, watch.beforeTier, watch.beforePaidOrders)
+      );
+      if (changed) {
+        stopPaymentWatch();
+        setPaymentStatus('paid');
+        setPurchaseMessage(`已开通${TIER_LABEL[currentQuota.tier] ?? currentQuota.tier}，页面权益已更新。`);
+      } else {
+        setPaymentStatus(automatic ? 'watching' : 'pending');
+        setPurchaseMessage(
+          automatic
+            ? '正在确认付款，回调到达后会自动更新权益。'
+            : `当前会员：${TIER_LABEL[currentQuota.tier] ?? currentQuota.tier}。`
+        );
+      }
+    } catch (e) {
+      setPaymentStatus('pending');
+      setPurchaseMessage(e instanceof Error ? e.message : '检查失败，请重试');
+    }
+    finally {
+      entitlementCheckRef.current = false;
+      setCheckingEntitlement(false);
+    }
+  };
+
+  const startPaymentWatch = () => {
+    stopPaymentWatch();
+    const startedAt = Date.now();
+    paymentWatchRef.current = {
+      beforeTier: quota?.tier ?? me?.tier ?? 'free',
+      beforePaidOrders: new Set((payments ?? []).filter((record) => record.status === 'paid').map((record) => record.order_id)),
+      startedAt,
+      timer: null,
+    };
+    setPaymentStatus('watching');
+    setPurchaseMessage('付款完成后回到这里，页面会自动确认并更新权益。');
+    paymentWatchRef.current.timer = window.setInterval(() => {
+      const watch = paymentWatchRef.current;
+      if (!watch) return;
+      if (Date.now() - watch.startedAt >= 120000) {
+        stopPaymentWatch();
+        setPaymentStatus('pending');
+        setPurchaseMessage('暂未确认付款；若已完成付款，平台回调可能需要几分钟，稍后点“刷新权益”即可。');
+        return;
+      }
+      if (document.visibilityState === 'visible') void checkEntitlement(true);
+    }, 5000);
   };
   const [plans, setPlans] = useState<Plan[] | null>(null);
   const [quota, setQuota] = useState<Quota | null>(null);
@@ -487,15 +541,16 @@ export default function Me() {
                 </p>
               )}
             </div>
-            <button onClick={copyId} aria-label="复制用户 ID" className={`mono text-xs underline ${cardMuted}`}>用户 ID #{String(me.id)} · 复制</button>
+            <button onClick={copyId} aria-label="复制用户 ID" className={`min-h-11 mono text-xs underline ${cardMuted}`}>用户 ID #{String(me.id)} · {copyMessage === '已复制' ? '已复制' : '复制'}</button>
           </div>
+          {copyMessage && <p role="status" className={`mt-1 text-xs ${cardMuted}`}>{copyMessage}</p>}
           {quota && (
             <div className="mt-4 space-y-3">
               <QuotaBar label="提醒额度" used={quota.push_used} limit={quota.push_limit} dark={isProCard} />
               <QuotaBar label="监控任务" used={quota.tasks_used} limit={quota.tasks_limit} dark={isProCard} />
               <div className="mt-1 space-y-1">
                 <p className={`text-xs ${cardMuted}`}>
-                  检查间隔 <span className={`mono ${cardStrong}`}>{quota.refresh_interval_sec} 秒</span>
+                  每 <span className={`mono ${cardStrong}`}>{quota.refresh_interval_sec >= 60 ? `${quota.refresh_interval_sec / 60} 分钟` : `${quota.refresh_interval_sec} 秒`}</span>检查
                 </p>
                 <p className={`text-xs ${cardMuted}`}>
                   {/* F-N2：quota_period_key 实际是下次重置日（购买日 +30 天锚点），不是"周期起始" */}
@@ -613,11 +668,6 @@ export default function Me() {
                     <div className="flex items-center justify-between">
                       <p className="font-semibold">
                         {p.name}
-                        {isProPlan && (
-                          <span className="ml-1.5 inline-block px-1.5 py-px text-[10px] font-bold tracking-wider text-amber-300 border border-amber-300/50 rounded-pill align-middle">
-                            PRO
-                          </span>
-                        )}
                       </p>
                       {current && (
                         <span className="text-[11px] px-2 py-0.5 rounded-pill bg-accent text-white">
@@ -625,7 +675,8 @@ export default function Me() {
                         </span>
                       )}
                     </div>
-                    <p className="mt-2 mono text-xl font-semibold">{planPeriodLabel(p)}</p>
+                    <p className="mt-2 mono text-xl font-semibold whitespace-nowrap">{fmtCny(p.price_cny)}</p>
+                    {p.price_cny > 0 && <p className={`mt-1 text-xs whitespace-nowrap ${isProPlan ? 'text-white/70' : 'text-sub'}`}>30 天</p>}
                     <ul className="mt-2 space-y-1">
                       {planFeatures(p)
                         .map((f) => (
@@ -636,7 +687,7 @@ export default function Me() {
                     </ul>
                     {isPaid && !current && (
                       <p className={`mt-2 text-[11px] font-medium ${isProPlan ? 'text-amber-300' : 'text-accent'}`}>
-                        点击前往开通 →
+                        开通 →
                       </p>
                     )}
                   </PlanCard>
@@ -644,32 +695,41 @@ export default function Me() {
               })}
             </div>
           )}
-          {/* 爱发电统一赞助页，需在那里选择对应档位并备注用户 ID。 */}
+          {/* 当前渠道仍由爱发电收款，本站只保留一次确认与自动核验。 */}
           <p className="mt-2 text-[11px] text-faint text-center">
             付款时需备注用户 ID #{me.id}
           </p>
         </section>
 
-        <Card className="p-4 mb-5">
-          <p className="text-sm font-semibold">已付款？</p>
-          <p className="mt-1 text-xs text-sub">返回后刷新权益，开通可能需要几分钟。</p>
-          <button onClick={checkEntitlement} disabled={checkingEntitlement} className="mt-3 text-sm text-accent disabled:opacity-40">{checkingEntitlement ? '检查中…' : '检查开通结果'}</button>
-          {purchaseMessage && <p role="status" className="mt-2 text-sm text-sub">{purchaseMessage}</p>}
-        </Card>
-        {selectedPlan && <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-5" onKeyDown={(e) => { if (e.key === 'Escape') setSelectedPlan(null); }}>
-          <Card className="p-5 w-full max-w-sm">
-            <div ref={confirmRef} role="dialog" aria-modal="true" aria-labelledby="plan-confirm-title">
-              <h2 id="plan-confirm-title" className="text-lg font-semibold">核对开通信息</h2>
-              <p className="mt-3 text-sm">{selectedPlan.name} · {planPeriodLabel(selectedPlan)}</p>
-              <p className="mt-2 text-sm">请在爱发电选择该档位，并在备注填写用户 ID：{me.id}。</p>
-              <button onClick={copyId} className="mt-3 text-accent text-sm">复制用户 ID</button>
-              <div className="flex gap-4 mt-5">
-                <button onClick={() => setSelectedPlan(null)} className="text-sm text-sub">取消</button>
-                <a href={afdianUrl} target="_blank" rel="noopener noreferrer" onClick={() => setSelectedPlan(null)} className="text-sm text-accent">前往爱发电</a>
+        {paymentStatus !== 'idle' && (
+          <Card className="p-4 mb-5">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold">
+                  {paymentStatus === 'paid' ? '会员已更新' : paymentStatus === 'watching' ? '正在确认付款' : '付款状态待确认'}
+                </p>
+                {purchaseMessage && <p role="status" className="mt-1 text-xs text-sub">{purchaseMessage}</p>}
               </div>
+              <button
+                onClick={() => void checkEntitlement()}
+                disabled={checkingEntitlement}
+                className="shrink-0 text-sm text-accent disabled:opacity-40"
+              >
+                {checkingEntitlement ? '刷新中…' : '刷新权益'}
+              </button>
             </div>
           </Card>
-        </div>}
+        )}
+        {selectedPlan && <ConfirmDialog title="核对开通信息" busy={false} onCancel={() => setSelectedPlan(null)}>
+          <p className="mt-3 text-sm">{selectedPlan.name} · {planPeriodLabel(selectedPlan)}</p>
+          <p className="mt-2 text-sm">打开爱发电后选择此档位，并在备注填写用户 ID：{me.id}。</p>
+          <button onClick={copyId} className="mt-2 min-h-11 text-accent text-sm">{copyMessage === '已复制' ? '已复制用户 ID' : '复制用户 ID'}</button>
+          {copyMessage && <p role="status" className="text-xs text-sub">{copyMessage}</p>}
+          <div className="flex gap-4 mt-3">
+            <button data-dialog-cancel onClick={() => setSelectedPlan(null)} className="min-h-11 text-sm text-sub">取消</button>
+            <a href={afdianUrl} target="_blank" rel="noopener noreferrer" onClick={() => { setSelectedPlan(null); startPaymentWatch(); }} className="min-h-11 flex items-center text-sm text-accent">打开付款页</a>
+          </div>
+        </ConfirmDialog>}
         {/* 付费记录 */}
         <section>
           <h2 className="text-[13px] font-semibold text-sub mb-2">付费记录</h2>

@@ -2,13 +2,14 @@ import type { StockState } from '../lib/api';
 
 /**
  * 库存状态徽章
- * 七种状态：available / unavailable / unknown / verifying / cooling / paused / expired
+ * 状态包含等待开售，以及已开售的库存检查结果
  * 设计要求：未知 ≠ 无货，必须有明确视觉区分
  *  - unknown：灰色「还没开始检测」（不是预警，不用琥珀色）
  *  - unavailable：灰色实心「确认无货」
  */
 
 const META: Record<StockState, { label: string; cls: string; dot: string }> = {
+  scheduled: { label: '等待开售', cls: 'bg-[#e8f1fd] text-accent border-[#bcd6fa]', dot: 'bg-accent' },
   available: {
     label: '有货',
     cls: 'bg-[#e8f7ec] text-[#1a7f37] border-[#b9e6c5]',
@@ -51,11 +52,13 @@ export default function StockStateBadge({
   state,
   size = 'md',
   historical = false,
+  unknownReason,
 }: {
   state: StockState;
   // R10-死代码1：withDot prop 零调用方，已删除
   size?: 'sm' | 'md';
   historical?: boolean;
+  unknownReason?: string;
 }) {
   const m = META[state] ?? META.unknown;
   // P1：cooling 状态给小白解释——查询太频繁被 Apple 暂时限制，稍后自动恢复，无需操作
@@ -69,7 +72,7 @@ export default function StockStateBadge({
     >
       <span className={`w-1.5 h-1.5 rounded-full ${m.dot}`} />
       <span className={state === 'available' || state === 'verifying' ? 'mono' : ''}>
-        {historical && (state === 'available' || state === 'unavailable') ? `上次${m.label}` : m.label}
+        {state === 'unknown' && unknownReason === 'pickup_not_offered' ? '自提未开放' : historical && (state === 'available' || state === 'unavailable') ? `上次${m.label}` : m.label}
       </span>
     </span>
   );

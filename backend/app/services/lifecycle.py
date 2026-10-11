@@ -536,10 +536,8 @@ def task_expiry_sweep(db: Session) -> dict:
             t.user_id,
             t.id,
             "task_expiring",
-            f"监控任务将于 {ms} 天后到期：{t.name}",
-            f"任务「{t.name}」（{t.part_number}）将于 "
-            f"{_beijing_date(t.expires_at)}（北京时间）到期，"
-            "到期后停止轮询、可在任务详情页一键续期（+30 天）。",
+            f"{t.name} · {ms} 天后到期",
+            f"{_beijing_date(t.expires_at)} 到期后停止检查。可到任务详情续期。",
             link=build_product_link(t.category, t.part_number),
             part_number=t.part_number,
         )
@@ -628,7 +626,18 @@ def zombie_sweep(db: Session) -> dict:
         # 已过期任务不轮询，僵尸计时冻结，跳过
         if t.expires_at is not None and t.expires_at < now:
             continue
-        days = _zombie_days(t.states, t.created_at, now)
+        from app.core.product_launch import launch_for_part, waiting_for_launch
+        from app.core.timeutil import as_naive_utc
+
+        if waiting_for_launch(t.part_number, now):
+            continue
+        launch = launch_for_part(t.part_number)
+        # Prelaunch waiting is not a period of confirmed stock shortage.
+        anchor = t.created_at
+        if launch:
+            opened_at = as_naive_utc(datetime.fromisoformat(launch["preorder_at"]))
+            anchor = max(anchor, opened_at) if anchor else opened_at
+        days = _zombie_days(t.states, anchor, now)
         if not days:
             continue
         done = notified.get(str(t.id), [])

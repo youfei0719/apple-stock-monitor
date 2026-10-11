@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 
 /** 大圆角白卡片（A·零售式明亮克制） */
 export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
@@ -145,10 +146,19 @@ export function ConfirmDialog({ title, children, busy, onCancel }: {
   cancel.current = onCancel;
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
-    dialog.current?.querySelector<HTMLButtonElement>('button')?.focus();
-    return () => { if (previous?.isConnected) previous.focus(); };
+    const previousOverflow = document.body.style.overflow;
+    const root = document.getElementById('root');
+    const previousInert = root?.inert ?? false;
+    if (root) root.inert = true;
+    document.body.style.overflow = 'hidden';
+    (dialog.current?.querySelector<HTMLButtonElement>('[data-dialog-cancel]') ?? dialog.current?.querySelector<HTMLButtonElement>('button'))?.focus();
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      if (root) root.inert = previousInert;
+      if (previous?.isConnected) previous.focus();
+    };
   }, []);
-  return <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 px-4 pb-10" onClick={() => !busy && cancel.current()}>
+  return createPortal(<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => !busy && cancel.current()}>
     <div ref={dialog} role="dialog" aria-modal="true" aria-labelledby={titleId} className="w-full max-w-lg bg-white rounded-card shadow-card-lg p-5 rise-in" tabIndex={-1} onClick={(event) => event.stopPropagation()} onKeyDown={(event) => {
       if (event.key === 'Escape') { event.preventDefault(); if (!busy) cancel.current(); }
       if (event.key !== 'Tab') return;
@@ -161,5 +171,5 @@ export function ConfirmDialog({ title, children, busy, onCancel }: {
       <h2 id={titleId} className="font-medium">{title}</h2>
       {children}
     </div>
-  </div>;
+  </div>, document.body);
 }

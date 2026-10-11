@@ -60,7 +60,8 @@ def test_batch_persists_complete_config_and_replays(db, tier, interval, expected
     assert len(first) == 2
     assert all(t.repeat_interval_sec == expected and t.group == "购买目标" for t in first)
     assert all(t.channels["email"] == user.email for t in first)
-    assert all(t.product_name == "iPhone 18 Pro Max" for t in first)
+    assert all(t.product_name.startswith("iPhone 18 Pro Max") for t in first)
+    assert all("512GB" in t.product_name and "银色" in t.product_name for t in first)
     assert all(t.capacity == "512GB" and t.color == "银色" for t in first)
     assert all(t.stores[0]["name"] and t.stores[0]["city"] for t in first)
     assert all(t.creation_status == "created" for t in first)

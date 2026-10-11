@@ -59,6 +59,13 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/* iOS 会放大字号小于 16px 的表单。保留用户缩放，不用 viewport 禁止缩放。 */
+@media (max-width: 767px) {
+  input:not([type='checkbox']):not([type='radio']), textarea, select {
+    font-size: 16px;
+  }
+}
+
 /* 数字 / 价格 / 库存状态 / 倒计时 —— 统一用 Paper Mono */
 .mono {
   font-family: var(--font-mono);
@@ -66,9 +73,9 @@ body {
   letter-spacing: 0.01em;
 }
 
-/* 产品名不断行 */
+/* 长产品名允许换行，避免窄屏溢出。 */
 .product-name {
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 /* 标题居中时视觉校正（避免孤行） */
@@ -94,7 +101,7 @@ body {
 }
 
 .rise-in {
-  animation: rise-in 0.35s ease both;
+  animation: rise-in 0.35s ease backwards;
 }
 
 /* 骨架屏 shimmer */

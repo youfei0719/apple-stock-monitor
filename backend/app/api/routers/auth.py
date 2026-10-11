@@ -204,6 +204,10 @@ def _claim_device_tasks(db: Session, request: Request, user: User) -> dict:
     resumed = 0
     for t in rows:
         t.user_id = user.id
+        # 体验任务转入账号后采用账号的监控期限，保留用户暂停选择。
+        account_expiry = utcnow() + timedelta(days=30)
+        if t.expires_at is not None and t.expires_at < account_expiry:
+            t.expires_at = account_expiry
         # N10：迁移后清空 device_id，避免同 device_id 重复认领/脏数据残留
         t.device_id = None
         t.channels, had = _strip_channel_secrets(t.channels)
@@ -240,7 +244,7 @@ def _claim_notice(info: dict) -> str | None:
     """把认领结果拼成给用户的提示文案（R6-I4/I9；R10-P2-6 补超限暂停提示）。"""
     parts = []
     if info["claimed"]:
-        parts.append(f"已认领 {info['claimed']} 个匿名任务")
+        parts.append(f"已转入 {info['claimed']} 个体验任务，有效期至少 30 天")
     if info["secrets_stripped"]:
         parts.append("认领任务的通知渠道密钥已清空，请重新配置通知渠道")
     if info["resumed"]:

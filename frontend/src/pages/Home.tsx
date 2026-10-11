@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { api, isResultStale, summarizeTask, type Quota, type Task, type TaskStatusFilter } from '../lib/api';
+import { api, isRenewalDue, isResultStale, remainingTimeLabel, summarizeTask, type Quota, type Task, type TaskStatusFilter } from '../lib/api';
 import { useApp } from '../components/App';
+import { taskProductTitle } from '../lib/catalog';
 import CheckHealth from '../components/CheckHealth';
 import StockStateBadge from '../components/StockStateBadge';
 import { Card, ConfirmDialog, EmptyState, ErrorState, LoadingState, PageHeader } from '../components/ui';
@@ -10,11 +11,6 @@ import { Card, ConfirmDialog, EmptyState, ErrorState, LoadingState, PageHeader }
 function fmtTime(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-}
-
-function daysLeft(iso: string | null): number | null {
-  if (!iso) return null;
-  return Math.ceil((new Date(iso).getTime() - Date.now()) / 86400000);
 }
 
 function TaskCard({
@@ -42,10 +38,12 @@ function TaskCard({
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   // R8-U-8：删除确认用应用内弹窗（A·零售式明亮克制风格），不再用 window.confirm
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const { state, availableCount, total, updatedAt, partialUnknown } = summarizeTask(task);
-  const remaining = daysLeft(task.expires_at);
-  const expired = state === 'expired' || (remaining !== null && remaining <= 0);
-  const expiringSoon = !expired && remaining !== null && remaining <= 3;
+  const { state, availableCount, total, updatedAt, partialUnknown, unknownReason } = summarizeTask(task);
+  const remaining = remainingTimeLabel(task);
+  const expired = state === 'expired' || remaining === '已到期';
+  const expiringSoon = !expired && isRenewalDue(task);
+  const defaultName = [task.product_name, task.capacity, task.color].filter(Boolean).join(' ');
+  const autoNamed = task.name === `${defaultName} × ${task.stores[0]?.name?.replace('Apple ', '') || task.stores[0]?.number}`;
 
   const togglePause = async () => {
     setBusy(true);
@@ -82,11 +80,7 @@ function TaskCard({
       // R9-I14：后端续费/升级路径自动恢复 tier_limit 暂停任务，notices 在响应里返回，前端一并展示
       const t = await api.renewTask(task.id);
       const notices = t.notices ?? [];
-      if (notices.length > 0) {
-        // R10-P2-3：续期后任务从"已过期" tab 消失、卡片卸载，行内 renewMsg 会丢失；
-        // 走首页横幅（location.state.notice）展示一次，与 AddMonitor 的 PATCH 失败模式一致
-        onRenewNotice(notices.join('；'));
-      }
+      onRenewNotice(['已续期', ...notices].join('；'));
       await onChanged();
     } catch (e) {
       setRenewMsg(e instanceof Error ? e.message : '续期失败');
@@ -101,8 +95,8 @@ function TaskCard({
       <Link to={`/tasks/${task.id}`} className="block">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <p className="font-medium truncate">
-              {task.name}
+            <p className="font-medium break-words">
+              {autoNamed ? taskProductTitle(task) : task.name}
               {/* P2：确认后提醒模式加标识，用户能区分两种任务 */}
               {task.mode === 'confirmed' && (
                 <span className="ml-2 text-[11px] px-1.5 py-0.5 rounded-pill bg-accent/10 text-accent font-medium align-middle">
@@ -111,23 +105,21 @@ function TaskCard({
               )}
             </p>
             <p className="mt-1 text-xs text-sub">
-              <span className="product-name">{task.product_name}</span>
-              {task.capacity && <> · {task.capacity}</>}
-              {task.color && <> · {task.color}</>}
+              {!autoNamed && <span className="product-name">{taskProductTitle(task)}</span>}
             </p>
             <p className="mt-0.5 text-xs text-faint">
               {/* P1：不裸显 part_number，上一行已有完整 SKU 名 */}
-              {task.stores.length} 家门店
+              {task.stores.length === 1 ? task.stores[0].name || task.stores[0].number : `${task.stores.length} 家门店`}
               {remaining !== null && !expired && (
-                <span className={expiringSoon ? ' text-bad font-medium' : ''}>
-                  {' · '}剩余 <span className="mono">{remaining}</span> 天
+                <span>
+                  {' · '}剩余 <span className="mono">{remaining}</span>
                 </span>
               )}
             </p>
           </div>
           <div className="flex flex-col items-end gap-1.5 shrink-0">
             {task.paused && expired && <StockStateBadge state="expired" size="sm" />}
-            <StockStateBadge state={state} historical={task.last_poll_ok === false || isResultStale(task, updatedAt)} />
+            <StockStateBadge state={state} unknownReason={unknownReason} historical={task.last_poll_ok === false || isResultStale(task, updatedAt)} />
             {partialUnknown && (
               <span className="inline-flex items-center gap-1.5 rounded-pill border border-dashed border-[#f0c36d] bg-[#fff7e8] px-2 py-0.5 text-[11px] font-medium text-[#b25e09]">
                 <span className="w-1.5 h-1.5 rounded-full bg-warn" />
@@ -136,10 +128,10 @@ function TaskCard({
             )}
           </div>
         </div>
-        {(total > 0 || updatedAt) && (
+        {!task.paused && !expired && state !== 'unknown' && state !== 'scheduled' && (total > 0 || updatedAt) && (
           <div className="mt-3 flex items-center justify-between text-xs text-sub">
             <span>
-              {state === 'paused' || state === 'expired' ? '已停止检查' : state === 'unknown' ? '库存尚未确认' : <>
+              {state === 'unavailable' ? `已查 ${total} 家门店` : state === 'verifying' ? '正在确认库存' : state === 'cooling' ? '稍后恢复检查' : <>
                 {task.last_poll_ok === false || isResultStale(task, updatedAt) ? '上次有货' : '有货'} <span className="mono text-ink">{availableCount}</span>{' / '}
                 <span className="mono">{total}</span> 家门店
               </>}
@@ -168,15 +160,14 @@ function TaskCard({
         </p>
       )}
       <div className="mt-3 pt-3 border-t border-line">
-        {/* R8-I-12：3 天内到期也渲染续期按钮，与详情页规则（expired || days<=3）一致；
-            暂停按钮保留在下方第二排，不挤占 */}
+        {/* 提前续期按任务周期提示，暂停入口始终保留。 */}
         {expiringSoon && (
           <button
             onClick={renew}
             disabled={busy}
-            className="w-full mb-2 py-2 rounded-card-sm bg-accent text-white text-[13px] font-medium active:scale-[0.98] transition disabled:opacity-40"
+            className="w-full mb-2 py-2 rounded-card-sm bg-bg text-accent text-[13px] font-medium active:scale-[0.98] transition disabled:opacity-40"
           >
-            {busy ? '续期中…' : `续期（${anonymous ? '+24 小时' : '+30 天'}）· 剩余 ${remaining} 天`}
+            {busy ? '续期中…' : `续期（${anonymous ? '+24 小时' : '+30 天'}）· 剩余 ${remaining}`}
           </button>
         )}
         <div className="flex gap-2">

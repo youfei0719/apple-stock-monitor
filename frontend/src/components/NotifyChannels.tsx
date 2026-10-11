@@ -1,7 +1,8 @@
 import { useEffect, useId, useState } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import { api, ApiError, type NotificationRecord, type TaskChannels } from '../lib/api';
 import { useApp } from './App';
-import { Card, EmptyState, LoadingState } from './ui';
+import { Card, EmptyState, ErrorState, LoadingState } from './ui';
 
 /**
  * R18-P3-5：通知渠道配置——仅邮件可用，其余通道暂未开放。任务详情 / 添加监控共用
@@ -101,27 +102,33 @@ function TestResult({ r }: { r?: { ok: boolean; msg: string } }) {
 }
 
 export function NotificationHistory({ taskId }: { taskId?: string | number }) {
+  const { me } = useApp();
+  const location = useLocation();
   const [items, setItems] = useState<NotificationRecord[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [retry, setRetry] = useState(0);
 
   useEffect(() => {
     setItems(null);
     setError(null);
+    if (!me) return;
+    let active = true;
     api
       .notifications(taskId)
-      .then(setItems)
+      .then((records) => { if (active) setItems(records); })
       .catch((e) => {
-        setItems([]);
-        setError(e instanceof Error ? e.message : '加载失败');
+        if (active) setError(e instanceof Error ? e.message : '加载失败');
       });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [taskId]);
+    return () => { active = false; };
+  }, [taskId, me?.id, retry]);
+
+  if (!me) return <p className="mt-4 text-sm text-sub"><Link className="text-accent" to="/login" state={{ returnTo: location.pathname + location.search }}>登录</Link>后可查看通知记录。</p>;
 
   return (
     <div className="mt-4">
       <h3 className="text-[13px] font-semibold text-sub mb-2">通知历史</h3>
-      {error && <p className="text-xs text-bad mb-2">{error}</p>}
-      {items === null && <LoadingState rows={2} />}
+      {error && <ErrorState message={error} onRetry={() => setRetry((value) => value + 1)} />}
+      {!error && items === null && <LoadingState rows={2} />}
       {items !== null && items.length === 0 && (
         <EmptyState title="暂无通知记录" hint="到货触发的通知会显示在这里" action={null} />
       )}
@@ -218,6 +225,7 @@ export default function NotifyChannels({
 }) {
   const { busy, results, run } = useTest();
   const { me } = useApp();
+  const location = useLocation();
   // UI-2：匿名未登录时"发送测试"按钮置灰（登录后可测试），别等 401 才生硬报错
   const anonymous = me === null;
 
@@ -240,6 +248,11 @@ export default function NotifyChannels({
   const emailId = useId();
   const effectiveEmail = (value.email ?? '').trim() || (me?.email_verified ? me.email : '');
   const customEmail = !!me && effectiveEmail.toLowerCase() !== me.email.toLowerCase();
+
+  if (anonymous) return <div>
+    <h3 className="text-[13px] font-semibold text-sub mb-2">接收通知</h3>
+    <Card className="p-4 text-sm text-sub">到货提醒在本站查看。<Link to="/login" state={{ returnTo: location.pathname + location.search }} className="ml-2 text-accent">登录接收邮件</Link></Card>
+  </div>;
 
   return (
     <div>

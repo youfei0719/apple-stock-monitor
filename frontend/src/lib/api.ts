@@ -194,7 +194,8 @@ export type StockState =
   | 'verifying'
   | 'cooling'
   | 'paused'
-  | 'expired';
+  | 'expired'
+  | 'scheduled';
 
 export type TaskStatusFilter = 'active' | 'expired' | 'all';
 
@@ -240,6 +241,7 @@ export interface TaskLatestRow {
   store_pick_eligible?: boolean | null;
   pickup_search_quote?: string | null;
   updated_at?: string | null;
+  unknown_reason?: string | null;
 }
 
 /** 后端 TaskOut.latest：{stores:{门店号:{part_number:行}}, available_count, total} */
@@ -249,7 +251,27 @@ export interface TaskLatest {
   total: number;
 }
 
+export interface LaunchInfo {
+  preorder_at: string;
+  release_date?: string;
+  note?: string;
+  source_url?: string;
+}
+
+export function launchTimeLabel(at: string): string {
+  return new Date(at).toLocaleString('zh-CN', {
+    timeZone: 'Asia/Shanghai', month: 'long', day: 'numeric',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  }) + '（北京时间）';
+}
+
+export function isWaitingForLaunch(task: { launch?: LaunchInfo | null; waiting_for_launch?: boolean }, now = Date.now()): boolean {
+  return task.launch?.preorder_at ? now < Date.parse(task.launch.preorder_at) : task.waiting_for_launch === true;
+}
+
 export interface Task {
+  launch?: LaunchInfo | null;
+  waiting_for_launch?: boolean;
   config_revision?: string;
   creation_status?: 'created' | 'existing' | null;
   id: number;
@@ -258,6 +280,7 @@ export interface Task {
   category: 'iphone' | 'ipad' | 'mac' | 'watch' | string;
   part_number: string;
   product_name: string;
+  product_url?: string;
   color?: string;
   capacity?: string;
   stores: StoreRef[];
@@ -281,6 +304,40 @@ export function isResultStale(task: Task, at?: string | null, now = Date.now()):
   return !Number.isFinite(age) || age > (task.refresh_interval_sec ?? 300) * 2000;
 }
 
+/** 24 小时体验仅在最后 3 小时提示；账号任务在最后 3 天提示。 */
+export function isRenewalDue(task: Task, now = Date.now()): boolean {
+  if (!task.expires_at) return false;
+  const expiry = Date.parse(task.expires_at);
+  const lifetime = expiry - Date.parse(task.created_at);
+  const threshold = Math.min(3 * 86400000, Math.max(3600000, lifetime / 8));
+  return expiry - now <= threshold;
+}
+
+/** 短期任务按小时显示，避免 24 小时体验被向上取整为两天。 */
+export function remainingTimeLabel(task: Task, now = Date.now()): string | null {
+  if (!task.expires_at) return null;
+  const remaining = Date.parse(task.expires_at) - now;
+  if (!Number.isFinite(remaining) || remaining <= 0) return '已到期';
+  const lifetime = Date.parse(task.expires_at) - Date.parse(task.created_at);
+  if (lifetime <= 2 * 86400000 || remaining < 86400000) {
+    return remaining < 3600000 ? '不足 1 小时' : `${Math.floor(remaining / 3600000)} 小时`;
+  }
+  return `${Math.floor(remaining / 86400000)} 天`;
+}
+
+export function stockUnknownReason(row?: TaskLatestRow): string {
+  if (row?.unknown_reason) return row.unknown_reason;
+  if (row?.pickup_display === 'ineligible' || (row?.pickup_display === 'available' && row.store_pick_eligible === false)) return 'pickup_not_offered';
+  return row?.pickup_display ? 'unrecognized_result' : 'missing_result';
+}
+
+export function stockUnknownMessage(reason: string): string {
+  return reason === 'pickup_not_offered' ? 'Apple 暂未开放此配置的门店自提'
+    : reason === 'unrecognized_result' ? 'Apple 返回的库存暂无法判断'
+    : reason === 'mixed_result' ? '库存暂无法判断，请查看各门店结果'
+    : 'Apple 未返回完整库存，稍后重试';
+}
+
 /** 任务是否已过期（expires_at 在过去）——expired 展示态的判定依据。
  * 注意：与后端 _display_state / _is_expired 保持一致——paused 优先于 expired，
  * 手动暂停的任务不视为过期（后端 _is_expired 在 paused 时返回 False）。 */
@@ -302,10 +359,15 @@ export function summarizeTask(task: Task): {
   total: number;
   updatedAt?: string;
   partialUnknown: boolean;
+  unknownReason?: string;
 } {
+  if (!task.paused && !isTaskExpired(task) && isWaitingForLaunch(task)) {
+    return { state: 'scheduled', availableCount: 0, total: task.stores.length, partialUnknown: false };
+  }
   // 只统计当前配置的门店与商品，缺失结果必须保持未知。
   const rows = task.stores.map((store) => task.latest?.stores?.[store.number]?.[task.part_number]);
   const states = rows.map((row) => row?.state ?? 'unknown');
+  const unknownReasons = new Set(rows.filter((row) => !row || row.state === 'unknown').map(stockUnknownReason));
   const timestamps = rows.flatMap((row) => row?.updated_at ? [row.updated_at] : []).sort();
   let state: StockState = 'unknown';
   if (task.paused) state = 'paused';
@@ -320,10 +382,23 @@ export function summarizeTask(task: Task): {
     total: task.stores.length,
     updatedAt: timestamps[0],
     partialUnknown: !task.paused && !isTaskExpired(task) && states.includes('unknown') && states.some((value) => value !== 'unknown'),
+    unknownReason: unknownReasons.size === 1 ? [...unknownReasons][0] : unknownReasons.size > 1 ? 'mixed_result' : undefined,
   };
 }
 
 export interface Product {
+  launch?: LaunchInfo | null;
+  category?: string;
+  family?: string;
+  attributes?: Record<string, string>;
+  model_number?: string;
+  sku?: string;
+  source_url?: string;
+  product_url?: string;
+  monitorable?: boolean;
+  monitor_scope?: 'case' | 'product';
+  related_band_styles?: string[];
+  admission?: { reason: string; shortage_stores?: string[]; checked_at?: string; scope: string };
   part_number: string;
   name: string;
   color: string;
@@ -341,6 +416,7 @@ export interface StateRow {
   confirmed_count?: number;
   last_event_at?: string | null;
   updated_at?: string | null;
+  unknown_reason?: string | null;
 }
 
 export interface Me {
@@ -449,6 +525,18 @@ export interface Payment {
   tier_to: string;
   status: string;
   created_at: string;
+}
+
+/** Only confirmed payment records or an actual upgrade prove membership changed. */
+export function membershipUpdateConfirmed(
+  currentTier: string,
+  records: Payment[],
+  beforeTier: string,
+  beforePaidOrders: ReadonlySet<string>,
+): boolean {
+  const rank: Record<string, number> = { trial: 0, free: 0, standard: 1, pro: 2 };
+  return (rank[currentTier] ?? 0) > (rank[beforeTier] ?? 0)
+    || records.some((record) => record.status === 'paid' && !beforePaidOrders.has(record.order_id));
 }
 
 /**
@@ -582,7 +670,8 @@ export const api = {
     if (Array.isArray(data)) return data;
     return data?.stores ?? [];
   },
-  products: (category: string) => req<Product[]>(`/catalog/products?category=${category}`),
+  products: (category: string) => req<Product[]>(`/catalog/products?category=${encodeURIComponent(category)}`),
+  catalogCategories: () => req<{ version: string; region: string; categories: { id: string; label: string; sku_count: number }[] }>('/catalog/categories'),
 
   // R6-U4：后端测试失败时可能返回 {ok:false, error:'原因'}，error 优先展示
   notifyTest: (channel: string, target: string) =>

@@ -1,0 +1,833 @@
+{
+  "schema_version": 1,
+  "version": "2026-10-11T17:15:08.504056+00:00",
+  "verification_complete": true,
+  "region": "CN",
+  "currency": "CNY",
+  "scope": "Curated replenishment targets with sampled store shortages and officially scheduled prelaunch targets; not a full Apple product catalog",
+  "categories": [
+    {
+      "id": "iphone",
+      "label": "iPhone"
+    },
+    {
+      "id": "ipad",
+      "label": "iPad"
+    },
+    {
+      "id": "mac",
+      "label": "Mac"
+    },
+    {
+      "id": "watch",
+      "label": "Apple Watch"
+    },
+    {
+      "id": "airpods",
+      "label": "AirPods"
+    },
+    {
+      "id": "homepod",
+      "label": "HomePod"
+    },
+    {
+      "id": "airtag",
+      "label": "AirTag"
+    },
+    {
+      "id": "display",
+      "label": "显示器"
+    },
+    {
+      "id": "vision",
+      "label": "Apple Vision Pro"
+    }
+  ],
+  "sources": [
+    {
+      "url": "https://www.apple.com.cn/shop/buy-iphone/iphone-18-pro",
+      "sha256": "c2506efdd923fb33d0c3a272716f9cc5a47fbb28de6b8df56a9e8fc1cc50d192",
+      "variant_count": 32
+    },
+    {
+      "url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo",
+      "sha256": "45cee898656ced9db3842ad7a1c81e5bda0f79cfde451d63deb802615b09d8b4",
+      "variant_count": 8
+    }
+  ],
+  "products": [
+    {
+      "part_number": "MJYH4CH/A",
+      "sku": "MJYH4CH",
+      "name": "iPhone 18 Pro Max",
+      "family": "iPhone 18 Pro",
+      "category": "iphone",
+      "color": "勃艮第酒红色",
+      "capacity": "1TB",
+      "price_cny": 16499.0,
+      "attributes": {
+        "存储容量": "1TB",
+        "颜色": "勃艮第酒红色",
+        "屏幕尺寸": "6.9 英寸"
+      },
+      "model_number": "A3717",
+      "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-18-pro",
+      "product_url": "https://www.apple.com.cn/shop/product/MJYH4CH/A",
+      "monitor_scope": "product",
+      "monitorable": true,
+      "verification": {
+        "endpoint": "https://www.apple.com.cn/shop/retail/pickup-message",
+        "checked_at": "2026-10-11T16:57:16.212026+00:00",
+        "stores": [
+          "R359"
+        ],
+        "product_title": "iPhone 18 Pro Max 1TB 勃艮第酒红色"
+      },
+      "admission": {
+        "reason": "launch_restock",
+        "selected_family": "iPhone 18 Pro",
+        "shortage_stores": [
+          "R359"
+        ],
+        "checked_at": "2026-10-11T16:57:16.212026+00:00",
+        "scope": "sampled stores only; not a nationwide or continuous-stock claim"
+      }
+    },
+    {
+      "part_number": "MJYJ4CH/A",
+      "sku": "MJYJ4CH",
+      "name": "iPhone 18 Pro Max",
+      "family": "iPhone 18 Pro",
+      "category": "iphone",
+      "color": "冰川蓝色",
+      "capacity": "1TB",
+      "price_cny": 16499.0,
+      "attributes": {
+        "存储容量": "1TB",
+        "颜色": "冰川蓝色",
+        "屏幕尺寸": "6.9 英寸"
+      },
+      "model_number": "A3717",
+      "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-18-pro",
+      "product_url": "https://www.apple.com.cn/shop/product/MJYJ4CH/A",
+      "monitor_scope": "product",
+      "monitorable": true,
+      "verification": {
+        "endpoint": "https://www.apple.com.cn/shop/retail/pickup-message",
+        "checked_at": "2026-10-11T16:58:44.915891+00:00",
+        "stores": [
+          "R359"
+        ],
+        "product_title": "iPhone 18 Pro Max 1TB 冰川蓝色"
+      },
+      "admission": {
+        "reason": "launch_restock",
+        "selected_family": "iPhone 18 Pro",
+        "shortage_stores": [
+          "R359"
+        ],
+        "checked_at": "2026-10-11T16:58:44.915891+00:00",
+        "scope": "sampled stores only; not a nationwide or continuous-stock claim"
+      }
+    },
+    {
+      "part_number": "MJY94CH/A",
+      "sku": "MJY94CH",
+      "name": "iPhone 18 Pro Max",
+      "family": "iPhone 18 Pro",
+      "category": "iphone",
+      "color": "冰川蓝色",
+      "capacity": "256GB",
+      "price_cny": 10999.0,
+      "attributes": {
+        "存储容量": "256GB",
+        "颜色": "冰川蓝色",
+        "屏幕尺寸": "6.9 英寸"
+      },
+      "model_number": "A3717",
+      "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-18-pro",
+      "product_url": "https://www.apple.com.cn/shop/product/MJY94CH/A",
+      "monitor_scope": "product",
+      "monitorable": true,
+      "verification": {
+        "endpoint": "https://www.apple.com.cn/shop/retail/pickup-message",
+        "checked_at": "2026-10-11T16:58:49.691988+00:00",
+        "stores": [
+          "R359"
+        ],
+        "product_title": "iPhone 18 Pro Max 256GB 冰川蓝色"
+      },
+      "admission": {
+        "reason": "launch_restock",
+        "selected_family": "iPhone 18 Pro",
+        "shortage_stores": [
+          "R359"
+        ],
+        "checked_at": "2026-10-11T16:58:49.691988+00:00",
+        "scope": "sampled stores only; not a nationwide or continuous-stock claim"
+      }
+    },
+    {
+      "part_number": "MJY64CH/A",
+      "sku": "MJY64CH",
+      "name": "iPhone 18 Pro Max",
+      "family": "iPhone 18 Pro",
+      "category": "iphone",
+      "color": "黑色",
+      "capacity": "256GB",
+      "price_cny": 10999.0,
+      "attributes": {
+        "存储容量": "256GB",
+        "颜色": "黑色",
+        "屏幕尺寸": "6.9 英寸"
+      },
+      "model_number": "A3717",
+      "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-18-pro",
+      "product_url": "https://www.apple.com.cn/shop/product/MJY64CH/A",
+      "monitor_scope": "product",
+      "monitorable": true,
+      "verification": {
+        "endpoint": "https://www.apple.com.cn/shop/retail/pickup-message",
+        "checked_at": "2026-10-11T16:58:57.374535+00:00",
+        "stores": [
+          "R359"
+        ],
+        "product_title": "iPhone 18 Pro Max 256GB 黑色"
+      },
+      "admission": {
+        "reason": "launch_restock",
+        "selected_family": "iPhone 18 Pro",
+        "shortage_stores": [
+          "R359"
+        ],
+        "checked_at": "2026-10-11T16:58:57.374535+00:00",
+        "scope": "sampled stores only; not a nationwide or continuous-stock claim"
+      }
+    },
+    {
+      "part_number": "MJYA4CH/A",
+      "sku": "MJYA4CH",
+      "name": "iPhone 18 Pro Max",
+      "family": "iPhone 18 Pro",
+      "category": "iphone",
+      "color": "黑色",
+      "capacity": "512GB",
+      "price_cny": 12999.0,
+      "attributes": {
+        "存储容量": "512GB",
+        "颜色": "黑色",
+        "屏幕尺寸": "6.9 英寸"
+      },
+      "model_number": "A3717",
+      "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-18-pro",
+      "product_url": "https://www.apple.com.cn/shop/product/MJYA4CH/A",
+      "monitor_scope": "product",
+      "monitorable": true,
+      "verification": {
+        "endpoint": "https://www.apple.com.cn/shop/retail/pickup-message",
+        "checked_at": "2026-10-11T16:58:59.734626+00:00",
+        "stores": [
+          "R359"
+        ],
+        "product_title": "iPhone 18 Pro Max 512GB 黑色"
+      },
+      "admission": {
+        "reason": "launch_restock",
+        "selected_family": "iPhone 18 Pro",
+        "shortage_stores": [
+          "R359"
+        ],
+        "checked_at": "2026-10-11T16:58:59.734626+00:00",
+        "scope": "sampled stores only; not a nationwide or continuous-stock claim"
+      }
+    },
+    {
+      "part_number": "MJYE4CH/A",
+      "sku": "MJYE4CH",
+      "name": "iPhone 18 Pro Max",
+      "family": "iPhone 18 Pro",
+      "category": "iphone",
+      "color": "冰川蓝色",
+      "capacity": "512GB",
+      "price_cny": 12999.0,
+      "attributes": {
+        "存储容量": "512GB",
+        "颜色": "冰川蓝色",
+        "屏幕尺寸": "6.9 英寸"
+      },
+      "model_number": "A3717",
+      "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-18-pro",
+      "product_url": "https://www.apple.com.cn/shop/product/MJYE4CH/A",
+      "monitor_scope": "product",
+      "monitorable": true,
+      "verification": {
+        "endpoint": "https://www.apple.com.cn/shop/retail/pickup-message",
+        "checked_at": "2026-10-11T16:59:02.079748+00:00",
+        "stores": [
+          "R359"
+        ],
+        "product_title": "iPhone 18 Pro Max 512GB 冰川蓝色"
+      },
+      "admission": {
+        "reason": "launch_restock",
+        "selected_family": "iPhone 18 Pro",
+        "shortage_stores": [
+          "R359"
+        ],
+        "checked_at": "2026-10-11T16:59:02.079748+00:00",
+        "scope": "sampled stores only; not a nationwide or continuous-stock claim"
+      }
+    },
+    {
+      "part_number": "MJYD4CH/A",
+      "sku": "MJYD4CH",
+      "name": "iPhone 18 Pro Max",
+      "family": "iPhone 18 Pro",
+      "category": "iphone",
+      "color": "勃艮第酒红色",
+      "capacity": "512GB",
+      "price_cny": 12999.0,
+      "attributes": {
+        "存储容量": "512GB",
+        "颜色": "勃艮第酒红色",
+        "屏幕尺寸": "6.9 英寸"
+      },
+      "model_number": "A3717",
+      "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-18-pro",
+      "product_url": "https://www.apple.com.cn/shop/product/MJYD4CH/A",
+      "monitor_scope": "product",
+      "monitorable": true,
+      "verification": {
+        "endpoint": "https://www.apple.com.cn/shop/retail/pickup-message",
+        "checked_at": "2026-10-11T16:59:04.957194+00:00",
+        "stores": [
+          "R359"
+        ],
+        "product_title": "iPhone 18 Pro Max 512GB 勃艮第酒红色"
+      },
+      "admission": {
+        "reason": "launch_restock",
+        "selected_family": "iPhone 18 Pro",
+        "shortage_stores": [
+          "R359"
+        ],
+        "checked_at": "2026-10-11T16:59:04.957194+00:00",
+        "scope": "sampled stores only; not a nationwide or continuous-stock claim"
+      }
+    },
+    {
+      "part_number": "MJYC4CH/A",
+      "sku": "MJYC4CH",
+      "name": "iPhone 18 Pro Max",
+      "family": "iPhone 18 Pro",
+      "category": "iphone",
+      "color": "银色",
+      "capacity": "512GB",
+      "price_cny": 12999.0,
+      "attributes": {
+        "存储容量": "512GB",
+        "颜色": "银色",
+        "屏幕尺寸": "6.9 英寸"
+      },
+      "model_number": "A3717",
+      "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-18-pro",
+      "product_url": "https://www.apple.com.cn/shop/product/MJYC4CH/A",
+      "monitor_scope": "product",
+      "monitorable": true,
+      "verification": {
+        "endpoint": "https://www.apple.com.cn/shop/retail/pickup-message",
+        "checked_at": "2026-10-11T16:59:07.324185+00:00",
+        "stores": [
+          "R359"
+        ],
+        "product_title": "iPhone 18 Pro Max 512GB 银色"
+      },
+      "admission": {
+        "reason": "launch_restock",
+        "selected_family": "iPhone 18 Pro",
+        "shortage_stores": [
+          "R359"
+        ],
+        "checked_at": "2026-10-11T16:59:07.324185+00:00",
+        "scope": "sampled stores only; not a nationwide or continuous-stock claim"
+      }
+    },
+    {
+      "part_number": "MJTF4CH/A",
+      "sku": "MJTF4CH",
+      "name": "iPhone 18 Pro",
+      "family": "iPhone 18 Pro",
+      "category": "iphone",
+      "color": "冰川蓝色",
+      "capacity": "512GB",
+      "price_cny": 11999.0,
+      "attributes": {
+        "存储容量": "512GB",
+        "颜色": "冰川蓝色",
+        "屏幕尺寸": "6.3 英寸"
+      },
+      "model_number": "A3714",
+      "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-18-pro",
+      "product_url": "https://www.apple.com.cn/shop/product/MJTF4CH/A",
+      "monitor_scope": "product",
+      "monitorable": true,
+      "verification": {
+        "endpoint": "https://www.apple.com.cn/shop/retail/pickup-message",
+        "checked_at": "2026-10-11T16:59:14.414815+00:00",
+        "stores": [
+          "R359"
+        ],
+        "product_title": "iPhone 18 Pro 512GB 冰川蓝色"
+      },
+      "admission": {
+        "reason": "launch_restock",
+        "selected_family": "iPhone 18 Pro",
+        "shortage_stores": [
+          "R359"
+        ],
+        "checked_at": "2026-10-11T16:59:14.414815+00:00",
+        "scope": "sampled stores only; not a nationwide or continuous-stock claim"
+      }
+    },
+    {
+      "part_number": "MJTE4CH/A",
+      "sku": "MJTE4CH",
+      "name": "iPhone 18 Pro",
+      "family": "iPhone 18 Pro",
+      "category": "iphone",
+      "color": "勃艮第酒红色",
+      "capacity": "512GB",
+      "price_cny": 11999.0,
+      "attributes": {
+        "存储容量": "512GB",
+        "颜色": "勃艮第酒红色",
+        "屏幕尺寸": "6.3 英寸"
+      },
+      "model_number": "A3714",
+      "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-18-pro",
+      "product_url": "https://www.apple.com.cn/shop/product/MJTE4CH/A",
+      "monitor_scope": "product",
+      "monitorable": true,
+      "verification": {
+        "endpoint": "https://www.apple.com.cn/shop/retail/pickup-message",
+        "checked_at": "2026-10-11T16:59:21.613998+00:00",
+        "stores": [
+          "R359"
+        ],
+        "product_title": "iPhone 18 Pro 512GB 勃艮第酒红色"
+      },
+      "admission": {
+        "reason": "launch_restock",
+        "selected_family": "iPhone 18 Pro",
+        "shortage_stores": [
+          "R359"
+        ],
+        "checked_at": "2026-10-11T16:59:21.613998+00:00",
+        "scope": "sampled stores only; not a nationwide or continuous-stock claim"
+      }
+    },
+    {
+      "part_number": "MJTK4CH/A",
+      "sku": "MJTK4CH",
+      "name": "iPhone 18 Pro",
+      "family": "iPhone 18 Pro",
+      "category": "iphone",
+      "color": "冰川蓝色",
+      "capacity": "1TB",
+      "price_cny": 15499.0,
+      "attributes": {
+        "存储容量": "1TB",
+        "颜色": "冰川蓝色",
+        "屏幕尺寸": "6.3 英寸"
+      },
+      "model_number": "A3714",
+      "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-18-pro",
+      "product_url": "https://www.apple.com.cn/shop/product/MJTK4CH/A",
+      "monitor_scope": "product",
+      "monitorable": true,
+      "verification": {
+        "endpoint": "https://www.apple.com.cn/shop/retail/pickup-message",
+        "checked_at": "2026-10-11T16:59:29.188565+00:00",
+        "stores": [
+          "R359"
+        ],
+        "product_title": "iPhone 18 Pro 1TB 冰川蓝色"
+      },
+      "admission": {
+        "reason": "launch_restock",
+        "selected_family": "iPhone 18 Pro",
+        "shortage_stores": [
+          "R359"
+        ],
+        "checked_at": "2026-10-11T16:59:29.188565+00:00",
+        "scope": "sampled stores only; not a nationwide or continuous-stock claim"
+      }
+    },
+    {
+      "part_number": "MK2Q4CH/A",
+      "sku": "MK2Q4CH",
+      "name": "iPhone Duo",
+      "family": "iPhone Duo",
+      "category": "iphone",
+      "color": "夜空色",
+      "capacity": "512GB",
+      "price_cny": 17999.0,
+      "attributes": {
+        "存储容量": "512GB",
+        "颜色": "夜空色"
+      },
+      "model_number": "A3721",
+      "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo",
+      "product_url": "https://www.apple.com.cn/shop/product/MK2Q4CH/A",
+      "monitor_scope": "product",
+      "monitorable": true,
+      "launch": {
+        "preorder_at": "2026-10-16T20:00:00+08:00",
+        "release_date": "2026-10-23",
+        "note": "机型将在获得批准后发售，具体以 Apple 实际开放购买为准",
+        "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo"
+      },
+      "admission": {
+        "reason": "prelaunch_watch",
+        "selected_family": "iPhone Duo",
+        "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo",
+        "scope": "advance setup; availability must be confirmed after preorder opens"
+      },
+      "verification": {
+        "status": "scheduled",
+        "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo"
+      }
+    },
+    {
+      "part_number": "MK2W4CH/A",
+      "sku": "MK2W4CH",
+      "name": "iPhone Duo",
+      "family": "iPhone Duo",
+      "category": "iphone",
+      "color": "夜空色",
+      "capacity": "2TB",
+      "price_cny": 26499.0,
+      "attributes": {
+        "存储容量": "2TB",
+        "颜色": "夜空色"
+      },
+      "model_number": "A3721",
+      "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo",
+      "product_url": "https://www.apple.com.cn/shop/product/MK2W4CH/A",
+      "monitor_scope": "product",
+      "monitorable": true,
+      "launch": {
+        "preorder_at": "2026-10-16T20:00:00+08:00",
+        "release_date": "2026-10-23",
+        "note": "机型将在获得批准后发售，具体以 Apple 实际开放购买为准",
+        "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo"
+      },
+      "admission": {
+        "reason": "prelaunch_watch",
+        "selected_family": "iPhone Duo",
+        "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo",
+        "scope": "advance setup; availability must be confirmed after preorder opens"
+      },
+      "verification": {
+        "status": "scheduled",
+        "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo"
+      }
+    },
+    {
+      "part_number": "MK2P4CH/A",
+      "sku": "MK2P4CH",
+      "name": "iPhone Duo",
+      "family": "iPhone Duo",
+      "category": "iphone",
+      "color": "星光白色",
+      "capacity": "512GB",
+      "price_cny": 17999.0,
+      "attributes": {
+        "存储容量": "512GB",
+        "颜色": "星光白色"
+      },
+      "model_number": "A3721",
+      "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo",
+      "product_url": "https://www.apple.com.cn/shop/product/MK2P4CH/A",
+      "monitor_scope": "product",
+      "monitorable": true,
+      "launch": {
+        "preorder_at": "2026-10-16T20:00:00+08:00",
+        "release_date": "2026-10-23",
+        "note": "机型将在获得批准后发售，具体以 Apple 实际开放购买为准",
+        "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo"
+      },
+      "admission": {
+        "reason": "prelaunch_watch",
+        "selected_family": "iPhone Duo",
+        "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo",
+        "scope": "advance setup; availability must be confirmed after preorder opens"
+      },
+      "verification": {
+        "status": "scheduled",
+        "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo"
+      }
+    },
+    {
+      "part_number": "MK2M4CH/A",
+      "sku": "MK2M4CH",
+      "name": "iPhone Duo",
+      "family": "iPhone Duo",
+      "category": "iphone",
+      "color": "星光白色",
+      "capacity": "256GB",
+      "price_cny": 15999.0,
+      "attributes": {
+        "存储容量": "256GB",
+        "颜色": "星光白色"
+      },
+      "model_number": "A3721",
+      "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo",
+      "product_url": "https://www.apple.com.cn/shop/product/MK2M4CH/A",
+      "monitor_scope": "product",
+      "monitorable": true,
+      "launch": {
+        "preorder_at": "2026-10-16T20:00:00+08:00",
+        "release_date": "2026-10-23",
+        "note": "机型将在获得批准后发售，具体以 Apple 实际开放购买为准",
+        "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo"
+      },
+      "admission": {
+        "reason": "prelaunch_watch",
+        "selected_family": "iPhone Duo",
+        "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo",
+        "scope": "advance setup; availability must be confirmed after preorder opens"
+      },
+      "verification": {
+        "status": "scheduled",
+        "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo"
+      }
+    },
+    {
+      "part_number": "MK2U4CH/A",
+      "sku": "MK2U4CH",
+      "name": "iPhone Duo",
+      "family": "iPhone Duo",
+      "category": "iphone",
+      "color": "夜空色",
+      "capacity": "1TB",
+      "price_cny": 21499.0,
+      "attributes": {
+        "存储容量": "1TB",
+        "颜色": "夜空色"
+      },
+      "model_number": "A3721",
+      "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo",
+      "product_url": "https://www.apple.com.cn/shop/product/MK2U4CH/A",
+      "monitor_scope": "product",
+      "monitorable": true,
+      "launch": {
+        "preorder_at": "2026-10-16T20:00:00+08:00",
+        "release_date": "2026-10-23",
+        "note": "机型将在获得批准后发售，具体以 Apple 实际开放购买为准",
+        "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo"
+      },
+      "admission": {
+        "reason": "prelaunch_watch",
+        "selected_family": "iPhone Duo",
+        "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo",
+        "scope": "advance setup; availability must be confirmed after preorder opens"
+      },
+      "verification": {
+        "status": "scheduled",
+        "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo"
+      }
+    },
+    {
+      "part_number": "MK2N4CH/A",
+      "sku": "MK2N4CH",
+      "name": "iPhone Duo",
+      "family": "iPhone Duo",
+      "category": "iphone",
+      "color": "夜空色",
+      "capacity": "256GB",
+      "price_cny": 15999.0,
+      "attributes": {
+        "存储容量": "256GB",
+        "颜色": "夜空色"
+      },
+      "model_number": "A3721",
+      "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo",
+      "product_url": "https://www.apple.com.cn/shop/product/MK2N4CH/A",
+      "monitor_scope": "product",
+      "monitorable": true,
+      "launch": {
+        "preorder_at": "2026-10-16T20:00:00+08:00",
+        "release_date": "2026-10-23",
+        "note": "机型将在获得批准后发售，具体以 Apple 实际开放购买为准",
+        "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo"
+      },
+      "admission": {
+        "reason": "prelaunch_watch",
+        "selected_family": "iPhone Duo",
+        "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo",
+        "scope": "advance setup; availability must be confirmed after preorder opens"
+      },
+      "verification": {
+        "status": "scheduled",
+        "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo"
+      }
+    },
+    {
+      "part_number": "MK2V4CH/A",
+      "sku": "MK2V4CH",
+      "name": "iPhone Duo",
+      "family": "iPhone Duo",
+      "category": "iphone",
+      "color": "星光白色",
+      "capacity": "2TB",
+      "price_cny": 26499.0,
+      "attributes": {
+        "存储容量": "2TB",
+        "颜色": "星光白色"
+      },
+      "model_number": "A3721",
+      "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo",
+      "product_url": "https://www.apple.com.cn/shop/product/MK2V4CH/A",
+      "monitor_scope": "product",
+      "monitorable": true,
+      "launch": {
+        "preorder_at": "2026-10-16T20:00:00+08:00",
+        "release_date": "2026-10-23",
+        "note": "机型将在获得批准后发售，具体以 Apple 实际开放购买为准",
+        "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo"
+      },
+      "admission": {
+        "reason": "prelaunch_watch",
+        "selected_family": "iPhone Duo",
+        "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo",
+        "scope": "advance setup; availability must be confirmed after preorder opens"
+      },
+      "verification": {
+        "status": "scheduled",
+        "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo"
+      }
+    },
+    {
+      "part_number": "MK2T4CH/A",
+      "sku": "MK2T4CH",
+      "name": "iPhone Duo",
+      "family": "iPhone Duo",
+      "category": "iphone",
+      "color": "星光白色",
+      "capacity": "1TB",
+      "price_cny": 21499.0,
+      "attributes": {
+        "存储容量": "1TB",
+        "颜色": "星光白色"
+      },
+      "model_number": "A3721",
+      "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo",
+      "product_url": "https://www.apple.com.cn/shop/product/MK2T4CH/A",
+      "monitor_scope": "product",
+      "monitorable": true,
+      "launch": {
+        "preorder_at": "2026-10-16T20:00:00+08:00",
+        "release_date": "2026-10-23",
+        "note": "机型将在获得批准后发售，具体以 Apple 实际开放购买为准",
+        "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo"
+      },
+      "admission": {
+        "reason": "prelaunch_watch",
+        "selected_family": "iPhone Duo",
+        "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo",
+        "scope": "advance setup; availability must be confirmed after preorder opens"
+      },
+      "verification": {
+        "status": "scheduled",
+        "source_url": "https://www.apple.com.cn/shop/buy-iphone/iphone-duo"
+      }
+    }
+  ],
+  "excluded": [
+    {
+      "part_number": "MJYG4CH/A",
+      "reason": "no_shortage_signal_in_sample"
+    },
+    {
+      "part_number": "MJYF4CH/A",
+      "reason": "no_shortage_signal_in_sample"
+    },
+    {
+      "part_number": "MJYM4CH/A",
+      "reason": "no_shortage_signal_in_sample"
+    },
+    {
+      "part_number": "MJYL4CH/A",
+      "reason": "no_shortage_signal_in_sample"
+    },
+    {
+      "part_number": "MJYK4CH/A",
+      "reason": "no_shortage_signal_in_sample"
+    },
+    {
+      "part_number": "MJYN4CH/A",
+      "reason": "no_shortage_signal_in_sample"
+    },
+    {
+      "part_number": "MJY84CH/A",
+      "reason": "no_shortage_signal_in_sample"
+    },
+    {
+      "part_number": "MJY74CH/A",
+      "reason": "no_shortage_signal_in_sample"
+    },
+    {
+      "part_number": "MJTC4CH/A",
+      "reason": "no_shortage_signal_in_sample"
+    },
+    {
+      "part_number": "MJTA4CH/A",
+      "reason": "no_shortage_signal_in_sample"
+    },
+    {
+      "part_number": "MJTG4CH/A",
+      "reason": "no_shortage_signal_in_sample"
+    },
+    {
+      "part_number": "MJTD4CH/A",
+      "reason": "no_shortage_signal_in_sample"
+    },
+    {
+      "part_number": "MJTJ4CH/A",
+      "reason": "no_shortage_signal_in_sample"
+    },
+    {
+      "part_number": "MJTL4CH/A",
+      "reason": "no_shortage_signal_in_sample"
+    },
+    {
+      "part_number": "MJTH4CH/A",
+      "reason": "no_shortage_signal_in_sample"
+    },
+    {
+      "part_number": "MJTP4CH/A",
+      "reason": "no_shortage_signal_in_sample"
+    },
+    {
+      "part_number": "MJTM4CH/A",
+      "reason": "no_shortage_signal_in_sample"
+    },
+    {
+      "part_number": "MJTN4CH/A",
+      "reason": "no_shortage_signal_in_sample"
+    },
+    {
+      "part_number": "MJT74CH/A",
+      "reason": "no_shortage_signal_in_sample"
+    },
+    {
+      "part_number": "MJT84CH/A",
+      "reason": "no_shortage_signal_in_sample"
+    },
+    {
+      "part_number": "MJT94CH/A",
+      "reason": "verification_pending"
+    }
+  ]
+}

@@ -65,11 +65,22 @@ def classify(pickup_display: str | None, store_pick_eligible: bool | None) -> st
     R4-P2：缺字段判 unknown 而非 unavailable（此前 pickup_display="available"
     但 store_pick_eligible 缺失时会被判 unavailable，误导为"无货"）。
     """
-    if pickup_display == "available" and store_pick_eligible:
+    if pickup_display == "available" and store_pick_eligible is True:
         return "available"
     if pickup_display == "unavailable":
         return "unavailable"
     return "unknown"
+
+
+def unknown_reason(state: str, pickup_display: str | None, eligible: bool | None) -> str | None:
+    """只解释当前未知结果，不从接口成功或自提未开放推断有货/无货。"""
+    if state != "unknown":
+        return None
+    if pickup_display == "ineligible" or (pickup_display == "available" and eligible is False):
+        return "pickup_not_offered"
+    if pickup_display is None:
+        return "missing_result"
+    return "unrecognized_result"
 
 
 class BaseProvider:
@@ -115,21 +126,33 @@ class BaseProvider:
         try:
             return client.get(url, params=params, headers=self._headers())
         except httpx.RequestError as e:
-            raise AppleError(
-                f"{self.name} transport error ({type(e).__name__}): {e}"
-            ) from e
+            raise AppleError(f"{self.name} transport error ({type(e).__name__}): {e}") from e
 
     def _parse_stores(self, data: dict, want_parts: list[str]) -> list[StockResult]:
         results: list[StockResult] = []
-        body = data.get("body") or {}
-        for store in body.get("stores", []) or []:
+        if not isinstance(data, dict) or not isinstance(data.get("body"), dict):
+            raise AppleError(f"{self.name} invalid response body")
+        body = data["body"]
+        stores = body.get("stores")
+        if not isinstance(stores, list) or not stores:
+            raise AppleError(f"{self.name} missing store results")
+        for store in stores:
+            if not isinstance(store, dict) or not store.get("storeNumber"):
+                continue
             number = str(store.get("storeNumber", ""))
             name = str(store.get("storeName", ""))
-            avail = store.get("partsAvailability") or {}
+            avail = store.get("partsAvailability")
+            if not isinstance(avail, dict):
+                avail = {}
             for part in want_parts:
-                info = avail.get(part) or {}
+                info = avail.get(part)
+                if not isinstance(info, dict):
+                    info = {}
                 pd = info.get("pickupDisplay")
+                pd = pd if isinstance(pd, str) and pd.strip() else None
                 eligible = info.get("storePickEligible")
+                # 字符串 "false" 不能用 bool() 转为 True；异常形态保留未知。
+                eligible = eligible if isinstance(eligible, bool) else None
                 results.append(
                     StockResult(
                         store_number=number,
@@ -137,10 +160,14 @@ class BaseProvider:
                         part_number=part,
                         state=classify(pd, eligible),
                         pickup_display=pd,
-                        store_pick_eligible=bool(eligible) if eligible is not None else None,
-                        pickup_search_quote=info.get("pickupSearchQuote"),
+                        store_pick_eligible=eligible,
+                        pickup_search_quote=info.get("pickupSearchQuote")
+                        if isinstance(info.get("pickupSearchQuote"), str)
+                        else None,
                     )
                 )
+        if not results or all(r.pickup_display is None for r in results):
+            raise AppleError(f"{self.name} missing product results")
         return results
 
     def query(self, parts: list[str], store_numbers: list[str]) -> ProviderResult:
@@ -243,6 +270,9 @@ class AppleClient:
 
     def query(self, parts: list[str], store_numbers: list[str]) -> ProviderResult:
         last_err: Exception | None = None
+        rate_error: AppleRateLimitError | None = None
+        wanted = {(store, part) for store in store_numbers for part in parts}
+        collected: dict[tuple[str, str], StockResult] = {}
         for provider in self.providers:
             try:
                 log.info(
@@ -251,20 +281,40 @@ class AppleClient:
                     parts=len(parts),
                     stores=len(store_numbers),
                 )
-                return provider.query(parts, store_numbers)
+                result = provider.query(parts, store_numbers)
+                result.results = [
+                    r for r in result.results if (r.store_number, r.part_number) in wanted
+                ]
+                if not result.ok or not result.results:
+                    raise AppleError(f"{provider.name} missing requested results")
+                for row in result.results:
+                    key = (row.store_number, row.part_number)
+                    if row.pickup_display is not None:
+                        collected.setdefault(key, row)
+                if wanted.issubset(collected):
+                    return ProviderResult(results=list(collected.values()))
+                log.warning(
+                    "apple_partial_results",
+                    provider=provider.name,
+                    missing=len(wanted - collected.keys()),
+                )
             except AppleRateLimitError as e:
                 # 限流也试下一个 provider：不同接口可能走不同限流桶，
                 # 全部被限才抛给引擎做退避
                 log.warning("apple_rate_limited", provider=provider.name)
                 last_err = e
+                rate_error = e
                 continue
             except AppleError as e:
                 log.warning("apple_provider_failed", provider=provider.name, error=str(e))
                 last_err = e
                 continue
-        # 如果最后一个是限流错误，抛限流给引擎退避；否则抛普通错误
-        if isinstance(last_err, AppleRateLimitError):
-            raise last_err
+        # 任一出口触发限流且没有备用结果时，仍应进入退避。
+        if rate_error is not None:
+            raise rate_error
+        if collected:
+            # 保留实际查到的部分结果；引擎将缺失门店记为未知并标记本轮不完整。
+            return ProviderResult(results=list(collected.values()))
         raise AppleError(f"all providers failed: {last_err}")
 
     def discover_stores(self, location: str) -> list[dict]:

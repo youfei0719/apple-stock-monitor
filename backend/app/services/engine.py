@@ -274,7 +274,11 @@ class Engine:
         )
         tasks = list(db.execute(q).scalars().all())
         due = []
+        from app.core.product_launch import waiting_for_launch
+
         for t in tasks:
+            if waiting_for_launch(t.part_number, now):
+                continue
             tier = effective_tier(t.user)
             interval = tier_interval(tier, self.settings)
             if peak and tier in ("trial", "free"):
@@ -375,6 +379,11 @@ class Engine:
     ) -> bool:
         """轮询一组任务。返回 True 表示本组被 Apple 限流（已进入冷却），
         调用方应停止本轮其余分组，不再打 Apple（R6-D1）。"""
+        from app.core.product_launch import waiting_for_launch
+
+        tasks = [t for t in tasks if not waiting_for_launch(t.part_number)]
+        if not tasks:
+            return False
         store_numbers: list[str] = []
         for t in tasks:
             for s in t.store_numbers or []:
@@ -384,20 +393,32 @@ class Engine:
         chunks = [
             store_numbers[i : i + max_per] for i in range(0, len(store_numbers), max_per)
         ] or [[]]
+        poll_ok = {t.id: True for t in tasks}
 
         for chunk in chunks:
             started = time.time()
             try:
                 self._note_apple_request(time.time(), {self._user_key(t) for t in tasks})
                 result = self.client.query(list(parts), chunk)
+                if not result.ok:
+                    raise AppleError(result.error or "Apple query failed")
                 self.rounds_total += 1
                 self.rounds_ok += 1
                 self._clear_cooldown(db)
                 lookup = {(r.store_number, r.part_number): r for r in result.results}
                 for t in tasks:
+                    relevant = [store for store in chunk if store in (t.store_numbers or [])]
+                    if not relevant:
+                        continue
                     self._process_task(db, t, parts, chunk, lookup)
                     t.last_polled_at = utcnow()
-                    t.last_poll_ok = True
+                    complete = all(
+                        (store, part) in lookup
+                        and lookup[(store, part)].pickup_display is not None
+                        for store in relevant for part in parts
+                    )
+                    poll_ok[t.id] = poll_ok[t.id] and complete
+                    t.last_poll_ok = poll_ok[t.id]
                     t.last_poll_ms = (time.time() - started) * 1000
                 db.commit()
             except AppleRateLimitError as e:
@@ -413,16 +434,25 @@ class Engine:
                 self.last_error = str(e)
                 log.warning("engine_apple_error", error=str(e))
                 for t in tasks:
+                    if not any(store in (t.store_numbers or []) for store in chunk):
+                        continue
                     self._mark_unknown(db, t, parts, chunk)
+                    poll_ok[t.id] = False
                     t.last_polled_at = utcnow()
                     t.last_poll_ok = False
                 db.commit()
         return False
 
     def _process_task(self, db, task: MonitorTask, parts, chunk, lookup) -> None:
+        from app.core.product_launch import waiting_for_launch
+
+        if waiting_for_launch(task.part_number):
+            return
         now = utcnow()
         for part in parts:
             for store in chunk:
+                if store not in (task.store_numbers or []):
+                    continue
                 r = lookup.get((store, part))
                 new_state = r.state if r else "unknown"
                 row = self._get_state(db, task.id, store, part)
@@ -452,6 +482,10 @@ class Engine:
                     row.pickup_display = r.pickup_display
                     row.store_pick_eligible = r.store_pick_eligible
                     row.pickup_search_quote = r.pickup_search_quote
+                else:
+                    row.pickup_display = None
+                    row.store_pick_eligible = None
+                    row.pickup_search_quote = None
                 if notify:
                     # 配额口径：按实际发送成功的通知条数扣减（断裂-5）
                     if self._check_quota(db, task):
@@ -511,11 +545,16 @@ class Engine:
     def _mark_unknown(self, db, task: MonitorTask, parts, chunk) -> None:
         for part in parts:
             for store in chunk:
+                if store not in (task.store_numbers or []):
+                    continue
                 row = self._get_state(db, task.id, store, part)
                 # 失败只标 unknown，不改 prev_known（evaluate_transition 同理）
                 row.state = "unknown"
                 row.updated_at = utcnow()
                 row.confirmed_count = 0
+                row.pickup_display = None
+                row.store_pick_eligible = None
+                row.pickup_search_quote = None
                 db.add(row)
 
     # ---- 配额（购买日+30天滚动；按实际发送成功条数扣减） ----
@@ -865,6 +904,8 @@ class Engine:
         for t in tasks:
             for part in {t.part_number}:
                 for store in chunk:
+                    if store not in (t.store_numbers or []):
+                        continue
                     row = self._get_state(db, t.id, store, part)
                     row.state = "cooling"
                     db.add(row)

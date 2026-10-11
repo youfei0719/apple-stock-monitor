@@ -252,13 +252,10 @@ export default function App() {
     <div className="min-h-screen bg-bg text-ink font-sans">
       {/* 品牌 header：左上角透明底 logo，桌面/移动端自适应 */}
       {!isAuthRoute && (
-        <header className="mx-auto max-w-lg px-4 pt-4 pb-2 flex items-center">
+        <header className="mx-auto max-w-lg px-4 py-3 flex items-center justify-between gap-3">
           <Link to="/" aria-label="监控首页" className="text-ink hover:opacity-70 transition-opacity">
             <LogoMark className="w-7 h-7 sm:w-8 sm:h-8" />
           </Link>
-        </header>
-      )}
-      {!isAuthRoute && (
         <IslandStatus
           taskCount={hasPausedOnly ? activeTasks.filter((t) => !isTaskExpired(t)).length : activeCount}
           hasStock={!!hotTask}
@@ -268,6 +265,7 @@ export default function App() {
           onTap={() => navigate('/')}
           onStockTap={hotTask ? () => navigate(`/tasks/${hotTask.id}`) : undefined}
         />
+        </header>
       )}
       {/* F4：匿名体验横幅——trial 档仅限未登录匿名体验（后端 tiers.py），
           注册/登录后同 device 的匿名任务自动迁移到账号下（auth.py _claim_device_tasks）；
@@ -277,9 +275,8 @@ export default function App() {
       {me === null &&
         (tasksError === null || sessionExpired) &&
         !isAuthRoute && (
-          /* UX：pt-16 给顶部 fixed 灵动岛让位（岛高 40px + mt-12px），避免胶囊条
-             与"暂无监控任务" pill 重叠遮挡；阴影落在浅色背景上不再显脏 */
-          <div className="mx-auto max-w-lg px-4 pt-16">
+          /* 状态与 Logo 同排，匿名提示无需额外为固定顶栏留空。 */
+          <div className="mx-auto max-w-lg px-4 pb-3">
             {sessionExpired ? (
               <div className="rounded-card-sm bg-island text-white px-4 py-2.5 text-[13px] flex items-center justify-between gap-3 rise-in">
                 <span>登录已过期，请重新登录</span>

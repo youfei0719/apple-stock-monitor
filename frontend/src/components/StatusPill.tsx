@@ -32,7 +32,7 @@ export default function StatusPill({
   const idle = taskCount === 0 && !hasStock;
 
   return (
-    <div className="flex justify-center pt-3 pb-1">
+    <div className="flex justify-center">
       <button
         onClick={handleClick}
         aria-live="polite"

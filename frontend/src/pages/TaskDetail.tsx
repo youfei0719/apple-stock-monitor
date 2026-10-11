@@ -1,15 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { api, cleanChannels, isResultStale, isTaskExpired, summarizeTask, type StateRow, type StoreRef, type Task, type TaskChannels } from '../lib/api';
+import { api, cleanChannels, isRenewalDue, isResultStale, isTaskExpired, remainingTimeLabel, stockUnknownMessage, stockUnknownReason, summarizeTask, type StateRow, type StoreRef, type Task, type TaskChannels } from '../lib/api';
 import { useApp } from '../components/App';
+import { taskProductTitle } from '../lib/catalog';
 import CheckHealth from '../components/CheckHealth';
 import StockStateBadge from '../components/StockStateBadge';
 import NotifyChannels, { NotificationHistory } from '../components/NotifyChannels';
 import { Card, ErrorState, LoadingState, EmptyState, PageHeader } from '../components/ui';
 
 const MS_PER_DAY = 86400000;
-/** 续期展示阈值：已过期，或 3 天内到期（N15） */
-const RENEW_SOON_DAYS = 3;
 
 export default function TaskDetail() {
   const { id } = useParams<{ id: string }>();
@@ -48,17 +47,20 @@ export default function TaskDetail() {
     setRefreshing(true);
     setError(null);
     try {
-      const [s, cat, t] = await Promise.all([
-        api.taskStates(id),
+      const [cat, t] = await Promise.all([
         // 门店名/城市用 store_number 查 catalog 补
         api.stores().catch(() => [] as StoreRef[]),
         api.task(id),
       ]);
       if (sequence !== loadSequence.current) return;
-      setRows(t ? t.stores.map((store) => s.find((row) => row.store_number === store.number && row.part_number === t.part_number) ?? {
+      // 摘要与门店明细取自同一响应，避免两次请求跨越轮询造成状态矛盾。
+      const displayState = summarizeTask(t).state;
+      setRows(t.stores.map((store) => ({
         store_number: store.number, part_number: t.part_number,
-        state: t.paused ? 'paused' : isTaskExpired(t) ? 'expired' : 'unknown',
-      }) : s);
+        ...t.latest?.stores?.[store.number]?.[t.part_number],
+        state: ['paused', 'expired', 'scheduled'].includes(displayState)
+          ? displayState : t.latest?.stores?.[store.number]?.[t.part_number]?.state ?? 'unknown',
+      })));
       setStores(cat);
       if (t) {
         setTask(t);
@@ -199,15 +201,13 @@ export default function TaskDetail() {
         {task && (() => {
           // N19：任务展示态统一走 summarizeTask（与后端 _display_state 一致的聚合口径）
           const sum = summarizeTask(task);
-          const days = task.expires_at
-            ? Math.ceil((new Date(task.expires_at).getTime() - Date.now()) / MS_PER_DAY)
-            : null;
-          const expired = sum.state === 'expired' || (days !== null && days <= 0);
-          const showRenew = expired || (days !== null && days <= RENEW_SOON_DAYS);
+          const remaining = remainingTimeLabel(task);
+          const expired = sum.state === 'expired' || remaining === '已到期';
+          const showRenew = expired || isRenewalDue(task);
           return (
             <div className="mb-4">
               <div className="flex items-center justify-between gap-3">
-                <StockStateBadge state={sum.state} size="sm" historical={task.last_poll_ok === false || isResultStale(task, sum.updatedAt)} />
+                <StockStateBadge state={sum.state} unknownReason={sum.unknownReason} size="sm" historical={task.last_poll_ok === false || isResultStale(task, sum.updatedAt)} />
                 {task.mode === 'confirmed' && (
                   <span className="text-[11px] px-1.5 py-0.5 rounded-pill bg-accent/10 text-accent font-medium">
                     连续确认
@@ -217,9 +217,7 @@ export default function TaskDetail() {
               {/* P1：展示任务配置（机型/门店），用户能核对自己选了什么 */}
               <Card className="mt-3 p-3.5">
                 <p className="text-[13px] font-medium">
-                  {task.product_name}
-                  {task.capacity && <> · {task.capacity}</>}
-                  {task.color && <> · {task.color}</>}
+                  {taskProductTitle(task)}
                 </p>
                 <p className="mt-1 text-xs text-sub">任务创建于 {new Date(task.created_at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}（北京时间）</p>
                 <p className="mt-1 text-xs text-sub">
@@ -229,18 +227,19 @@ export default function TaskDetail() {
                 </p>
               </Card>
               <CheckHealth task={task} />
+              {task.product_url && <a href={task.product_url} target="_blank" rel="noopener noreferrer" className="mt-3 inline-block text-sm text-accent">到 Apple 核实库存与购买 →</a>}
               {showRenew && (
                 <div className="mt-3">
                   <button
                     onClick={renew}
                     disabled={renewing}
-                    className="w-full py-2.5 rounded-card-sm bg-accent text-white text-sm font-medium active:scale-[0.99] transition disabled:opacity-40"
+                    className={`w-full py-2.5 rounded-card-sm ${expired ? 'bg-accent text-white' : 'bg-bg text-accent'} text-sm font-medium active:scale-[0.99] transition disabled:opacity-40`}
                   >
                     {renewing
                       ? '续期中…'
                       : expired
                         ? `续期（${renewGainLabel}）`
-                        : `续期（${renewGainLabel}）· 剩余 ${days} 天`}
+                        : `续期（${renewGainLabel}）· 剩余 ${remaining}`}
                   </button>
                   {renewMsg && (
                     <p
@@ -279,7 +278,7 @@ export default function TaskDetail() {
         {!error && rows !== null && rows.length > 0 && (
           <>
             <p className="text-xs text-sub mb-2">门店检查结果</p>
-            <div className="flex flex-wrap gap-2 mb-4">
+            {rows.length > 1 && <div className="flex flex-wrap gap-2 mb-4">
               {(
                 [
                   'available',
@@ -289,16 +288,17 @@ export default function TaskDetail() {
                   'cooling',
                   'paused',
                   'expired',
+                  'scheduled',
                 ] as const
               )
                 .filter((s) => counts[s])
                 .map((s) => (
                   <span key={s} className="flex items-center gap-1.5">
-                    <StockStateBadge state={s} size="sm" historical={task !== null && (task.last_poll_ok === false || isResultStale(task, summarizeTask(task).updatedAt))} />
+                    <StockStateBadge state={s} unknownReason={s === 'unknown' && task ? summarizeTask(task).unknownReason : undefined} size="sm" historical={task !== null && (task.last_poll_ok === false || isResultStale(task, summarizeTask(task).updatedAt))} />
                     <span className="mono text-xs text-sub">{counts[s]}</span>
                   </span>
                 ))}
-            </div>
+            </div>}
             <div className="space-y-2.5">
               {rows.map((r, i) => {
                 const info = storeMap.get(r.store_number);
@@ -313,6 +313,7 @@ export default function TaskDetail() {
                         )}
                       </p>
                       <p className="mt-0.5 text-xs text-faint">
+                        {rows.length > 1 && r.state === 'unknown' && stockUnknownMessage(stockUnknownReason(r))}
                         {/* P1：不裸显 part_number（任务单 SKU，此处冗余） */}
                         {/* P1：pickup_display 是苹果 API 原始值（available/unavailable），
                             不直接裸显英文，映射为中文 */}
@@ -321,13 +322,13 @@ export default function TaskDetail() {
                       </p>
                     </div>
                     <div className="flex flex-col items-end gap-1 shrink-0">
-                      <StockStateBadge state={r.state} historical={task !== null && (task.last_poll_ok === false || isResultStale(task, r.updated_at))} />
+                      {rows.length > 1 && <StockStateBadge state={r.state} unknownReason={stockUnknownReason(r)} historical={task !== null && (task.last_poll_ok === false || isResultStale(task, r.updated_at))} />}
                       {r.state === 'cooling' && (
                         <span className="text-[10px] text-warn">数据可能过期</span>
                       )}
                       <span className="mono text-xs text-faint">
-                        查询于{' '}
-                        {r.updated_at
+                        {r.state === 'scheduled' ? '开售后开始检查' : r.updated_at ? '查询于 ' : '尚未检查'}
+                        {r.state !== 'scheduled' && r.updated_at
                           ? // R9-I7：全站显式北京时间（与页脚承诺一致）
                             // P2：格式与 /me、/history 统一为"MM/DD HH:mm"
                             new Date(r.updated_at).toLocaleString('zh-CN', {
@@ -341,7 +342,6 @@ export default function TaskDetail() {
                       </span>
                     </div>
                     </div>
-                    {task && task.stores.length > 1 && <CheckHealth task={task} updatedAt={r.updated_at ?? null} />}
                   </Card>
                 );
               })}

@@ -203,6 +203,9 @@ class TaskOut(BaseModel):
     category: str
     part_number: str
     product_name: str
+    product_url: str = ""
+    launch: dict | None = None
+    waiting_for_launch: bool = False
     color: str
     capacity: str
     stores: list[dict]

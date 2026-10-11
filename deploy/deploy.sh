@@ -312,13 +312,14 @@ echo "[deploy] bootstrap 完成"
 
 # ===== P0-21：后端同步到 systemd 指向的目录 =====
 # 关键排除项（缺一不可）：
-#   data/  —— sqlite 真库（DATABASE_URL 相对 backend）；--delete 会把生产库删掉
-#   logs/  —— 运行时日志，不随代码同步
+#   /data/ —— 仅后端根目录的 sqlite 真库（DATABASE_URL 相对 backend）；--delete 会把生产库删掉
+#   /logs/ —— 仅后端根目录的运行时日志，不随代码同步
+# app/data/ 是随版本发布的商品目录，必须同步；非根路径 data/ 会误排除它。
 #   .venv  —— 在 $APP_DIR 内重建，不从仓库拷（避免架构/路径污染）
 # rsync 缺失已在前置软件检查拦截（R5-D-4）
 rsync -a --delete \
   --exclude='.venv' --exclude='__pycache__' --exclude='.ruff_cache' \
-  --exclude='.pytest_cache' --exclude='data/' --exclude='logs/' \
+  --exclude='.pytest_cache' --exclude='/data/' --exclude='/logs/' \
   "$REPO/backend/" "$APP_DIR/"
 echo "[deploy] 后端已同步 $REPO/backend/ -> $APP_DIR/"
 

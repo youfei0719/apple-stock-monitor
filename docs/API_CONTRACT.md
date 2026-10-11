@@ -18,15 +18,20 @@ Base URL: `https://stock.glint.red/api`（开发环境 `http://localhost:8000/ap
 - `POST /api/auth/password-reset/confirm` `{email, code, password}` → `{ok:true}`；密码至少 8 位且含字母、数字；错误码持久化尝试锁定，验证码原子消费，一次有效；成功注销全部会话，保留 TOTP 配置，随后重新登录。不会创建登录会话。
 - `POST /api/auth/totp/setup` / `POST /api/auth/totp/verify`（管理员强制，普通用户可选）
 
+登录成功转入设备体验任务时，有限期任务延长到至少登录时刻起 30 天，不缩短已有更长有效期，也不改变手动暂停；已转入任务清除 device_id，重复登录不重复延长。
+
 ## 监控任务
-Task: `{id, config_revision, name, group, category, part_number, product_name, color, capacity, stores:[{number,name,city}], mode:"instant"|"confirmed", repeat_interval_sec|null, channels:{bark_key?, webhooks?[], email?}, paused, paused_reason|null, expires_at, created_at, last_polled_at|null, last_poll_ok|null, refresh_interval_sec, creation_status:null|"created"|"existing", latest}`
+Task: `{id, config_revision, name, group, category, part_number, product_name, product_url, color, capacity, stores:[{number,name,city}], mode:"instant"|"confirmed", repeat_interval_sec|null, channels:{bark_key?, webhooks?[], email?}, paused, paused_reason|null, expires_at, created_at, last_polled_at|null, last_poll_ok|null, refresh_interval_sec, creation_status:null|"created"|"existing", launch:null|{preorder_at,release_date?,note?,source_url?}, waiting_for_launch:boolean, latest}`
 
 其中 `latest` 为后端聚合的最新状态摘要（snake_case）：
-`{stores:{<store_number>:{<part_number>:{state, pickup_display, store_pick_eligible, pickup_search_quote, updated_at}}}, available_count, total}`
-- `last_polled_at` 为最近实际查询尝试，`last_poll_ok` 为该次是否成功，`refresh_interval_sec` 按有效档位配置返回目标周期，不承诺查询一定准时。库存记录 `updated_at` 在相同结果及失败检查时也推进；前端依据各门店记录年龄判断是否陈旧。
+`{stores:{<store_number>:{<part_number>:{state, pickup_display, store_pick_eligible, pickup_search_quote, unknown_reason, updated_at}}}, available_count, total}`
+- `last_polled_at` 为最近实际查询尝试，`last_poll_ok` 为本轮各批次请求与所需门店字段是否完整；后一个成功批次不能覆盖前一个失败批次，true 也不表示库存已知，`refresh_interval_sec` 按有效档位配置返回目标周期，不承诺查询一定准时。库存记录 `updated_at` 在相同结果及失败检查时也推进；前端依据各门店记录年龄判断是否陈旧。
 - `config_revision` 是用户可编辑设置的 SHA256 摘要，库存轮询和检查时间变化不改变它。前端编辑草稿保留读取时的摘要；刷新库存不会更新草稿摘要。
 - 创建响应的 `creation_status` 区分新建与幂等返回的现有任务；现有任务保留原设置，不会因重复提交覆盖配置。普通查询返回 null。
-- state ∈ 展示七态（后端已按 paused/verifying/cooling/expired 换算），不是 Apple 原始字段。
+- state ∈ 展示态（包括 scheduled 等待开售）（后端已按 paused/verifying/cooling/expired 换算），不是 Apple 原始字段。
+- `unknown_reason` 从原始结果派生：`pickup_not_offered`（自提未开放）、`missing_result`（缺字段）、`unrecognized_result`（无法识别），非未知库存返回 null。`ineligible` 保留 unknown，不能推断无货。缺失/异常响应会尝试备用接口，部分结果只补缺失门店；所有接口失败才进入失败/冷却路径。
+- `product_url` 为通知邮件同源的 Apple 商品入口；不会预填购物袋，需在 Apple 核对配置与门店。
+- 详情页的摘要及门店列表来自同一份 Task.latest 响应；`/states` 保留兼容。
 
 - `GET /api/tasks` → 列表（含每任务最新状态摘要）
 - `POST /api/tasks` → 201（按 tier 校验任务数上限）。支持 `Idempotency-Key` 请求头：重复 key 直接返回首次创建的任务（网络重试/重复提交不建重复任务）；同 key 首个请求仍在创建中时返回 409 `idempotency_in_progress`。R24 起同内容重复提交（不同 key，如双 Tab/网络重试）不再 409 `task_conflict`，而是幂等返回已建任务（服务端按归属+型号+门店组合派生内容键串行化并发创建；并发创建中返回 409 `idempotency_in_progress`）。
@@ -39,15 +44,24 @@ Task: `{id, config_revision, name, group, category, part_number, product_name, c
 - `PATCH /api/tasks/group-settings` `{group, expected:[{id,config_revision}], patch:{group?,mode?,repeat_interval_sec?,email?}}` → 更新后的 Task 数组。受影响成员必须与当前账号该组的成员完全一致，设置摘要也必须一致，否则 409 `config_conflict`；写锁后校验并一次提交。只修改勾选字段；repeat 显式 null 关闭，email 显式 null 使用已验证注册邮箱并保留其他渠道。重复间隔 ≥60；group 去空白后不能为空，不合并现有同名组（409 `group_exists`）；空 patch 返回 400。机型、门店、暂停、有效期保持原值。此接口只允许登录账号编辑本人任务，不能按匿名设备或外部任务 ID 批量更新。
 - `DELETE /api/tasks/{id}`
 
+### 新品预约监控
+
+- 商品 `launch.preorder_at` 为带时区的官方预计预购开始时间，`release_date` 只表示发售日期，不推断午夜开售。`launch` 从服务端目录取得，不由用户输入。
+- 单建与批量接口复用当前任务接口，按实际 SKU 保存配置和门店。未开售商品只允许登录账号创建；匿名返回 403 `prelaunch_login_required`。登录任务默认无到期时间，避免 24 小时体验先于新品开售结束。
+- 开售前 `waiting_for_launch=true`，展示 `scheduled`，暂停与到期状态优先；有货计数为 0，不展示旧有货结果，不发到货提醒、不请求库存，不将预约等待计入长期缺货天数。
+- 到 `preorder_at` 自动进入正常库存轮询；时间到达并不产生提醒。只在 Apple 所选门店实际可自提时，按 instant / confirmed 规则提醒。未开放自提、查询失败、未知和无货都不触发。批准或日期变动须维护官方目录并重启 API 与独立引擎。
+- 这条链路监控直营店自提库存；快递下单、自动购买不在当前库存接口范围内。
+
 ## 目录（公开）
 - `GET /api/catalog/stores?refresh=0` → `[{number, name, city, province}]`（全国直营店；**refresh=1 已 403** `{code:"use_admin_refresh"}`，在线刷新能力已移至管理后台 `POST /api/admin/catalog/refresh`（TOTP 二次验证，全局 1 次/小时））
-- `GET /api/catalog/products?category=iphone|ipad|mac|watch` → `[{part_number, name, color, capacity, price_cny}]`
+- `GET /api/catalog/categories` → `{version,region,categories:[{id,label,sku_count}]}`；只返回有入选配置的品类。
+- `GET /api/catalog/products?category=iphone|ipad|mac|watch` → `[{part_number,sku,name,family,category,color,capacity,attributes,model_number,price_cny,source_url,product_url,monitorable,monitor_scope,admission,verification,launch?}]`；只展示有补货需求证据的重点配置或有官方配置与预购时间的预约目标。
 - `GET /api/catalog/anchors` → `[城市名, ...]`（城市锚点列表，调试/管理用；空库时自动播种种子锚点）
 
-## 库存状态（七态，前端展示用，全部 snake_case）
-state ∈ `available | unavailable | unknown | verifying | cooling | paused | expired`
+## 库存状态（前端展示用，全部 snake_case）
+state ∈ `available | unavailable | unknown | verifying | cooling | paused | expired | scheduled`
 - `expired` 为任务级过期（`task.expires_at` 已过，与门店×型号维度的六态不同）：整任务过期后展示态直接为 `expired`，不再看各组合状态；`GET /api/tasks?status=expired` 可单独拉过期任务。R11-P1-6：契约此前写"六态"已修正为七态。
-- `GET /api/tasks/{id}/states` → `[{store_number, part_number, state, pickup_display, store_pick_eligible, pickup_search_quote, confirmed_count, last_event_at, updated_at}]`
+- `GET /api/tasks/{id}/states` → `[{store_number, part_number, state, pickup_display, store_pick_eligible, pickup_search_quote, unknown_reason, confirmed_count, last_event_at, updated_at}]`
 
 ## 通知
 - `POST /api/notify/test` `{channel, target}` → 发送测试通知，返回成功/失败（链路测试）

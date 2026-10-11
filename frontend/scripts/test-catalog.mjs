@@ -1,0 +1,21 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import ts from 'typescript';
+const source = fs.readFileSync(new URL('../src/lib/catalog.ts', import.meta.url), 'utf8');
+const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 } });
+const { selectCatalogParts, configurationLabel, taskProductTitle } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
+const wifi = {name:'iPad Pro',part_number:'WIFI',capacity:'1TB',color:'银色',attributes:{'网络':'无线局域网','玻璃面板':'标准玻璃'},monitorable:true};
+const cell = {...wifi,part_number:'CELL',attributes:{'网络':'蜂窝网络','玻璃面板':'纳米纹理'}};
+const rows=[wifi,cell];
+assert.deepEqual(selectCatalogParts(rows, {'存储容量':new Set(['1TB']),'颜色':new Set(['银色']),'网络':new Set()}), []);
+assert.deepEqual(selectCatalogParts(rows, {'网络':new Set(['蜂窝网络']),'玻璃面板':new Set(['纳米纹理'])}), ['CELL']);
+assert.deepEqual(selectCatalogParts(rows, {'网络':new Set(['无线局域网']),'玻璃面板':new Set(['纳米纹理'])}), []);
+assert.deepEqual(selectCatalogParts([{...wifi,monitorable:false}], {}), []);
+assert.deepEqual(selectCatalogParts([...rows,cell], {'网络':new Set(['蜂窝网络'])}), ['CELL']);
+assert.ok(configurationLabel(cell).includes('蜂窝网络'));
+assert.equal(configurationLabel({name:'AirPods Pro',capacity:'',color:''}), '标准配置');
+console.log('PASS 7 catalog selection and configuration checks');
+
+assert.equal(taskProductTitle({product_name:'iPhone Duo · 256GB · 夜空色',capacity:'256GB',color:'夜空色'}),'iPhone Duo · 256GB · 夜空色');
+assert.equal(taskProductTitle({product_name:'iPhone Duo',capacity:'256GB',color:'夜空色'}),'iPhone Duo · 256GB · 夜空色');
+console.log('PASS task titles retain legacy details without repeating official configurations');

@@ -47,10 +47,7 @@ export default function Guide() {
           </div>
         )}
         <div className="mt-4 p-4 rounded-card bg-neutral-900 text-white rise-in shadow-card">
-          <p className="text-[15px] font-medium">确认取货门店</p>
-          <p className="mt-2 text-sm text-neutral-300 leading-relaxed">
-            在 Apple 选择“店内取货”，核对门店后下单。库存随时变化，以 Apple 结账页为准。
-          </p>
+          <p className="text-sm text-neutral-300 leading-relaxed">库存随时变化，以 Apple 结账页为准。</p>
         </div>
       </div>
     </div>
